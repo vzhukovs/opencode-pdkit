@@ -50,7 +50,8 @@ const FULL = [
   'tool.hook execute.after',
   // subagent-stop's, on the point a session reaches before it goes idle.
   'session.hook experimental.idle',
-  // session-start's, on a session's first prompt and on a fork.
+  // session-start's and prompt-submit's, in one callback, on a prompt —
+  // a session's first, a pdkit command's; session-start's on a fork.
   'session.hook prompt',
   'session.hook fork',
   // pre-compact's, on a compaction, before the summary is asked for.
@@ -193,12 +194,10 @@ describe('on a supported Open Code', () => {
     assert.deepEqual(order, FULL);
   });
 
-  // Until the rest of the bridge and the registrars are filled in, loading the
-  // plugin must not change what a session does beyond the gate, pre-write,
-  // post-write, post-claim, post-bash, post-read, subagent-stop, session-start
-  // and pre-compact — which have nothing to say about this command, this
-  // read, this prompt or this compaction.
-  test('and none of the registrations but the gate, pre-write, post-write, post-claim, post-bash, post-read, subagent-stop, session-start and pre-compact changes anything yet', async (t) => {
+  // Until the registrars are filled in, loading the plugin must not change
+  // what a session does beyond the hooks — which have nothing to say about
+  // this command, this read, this prompt or this compaction.
+  test('and none of the registrations but the hooks changes anything yet', async (t) => {
     logOf(t);
     const { ctx, callbacks } = host();
 
@@ -223,7 +222,9 @@ describe('on a supported Open Code', () => {
     for (const after of callbacks('tool.hook execute.after')) await after(read);
     assert.deepEqual(read, paged());
     // session-start puts its summary beside the prompt, never in it: Open Code
-    // takes the prompt from the event after the hook (F75).
+    // takes the prompt from the event after the hook (F75). prompt-submit
+    // looks at a prompt a pdkit command labeled as its own (D6), and a `/pd:`
+    // line that arrives as text is not one: no command ran (F78).
     const asked = () => ({ sessionID: 'ses_1', messageID: 'msg_1', prompt: { text: '/pd:plan 18248' }, metadata: {}, delivery: 'steer' });
     const prompt = asked();
     for (const before of callbacks('session.hook prompt')) await before(prompt);

@@ -27,7 +27,21 @@ import assert from 'node:assert/strict';
 import { join, resolve, win32 } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { hostPath, postBash, postClaim, postRead, postWrite, preBash, preCompact, preWrite, sessionStart, startsSession, subagentStop } from '../opencode/bridge/payload.js';
+import {
+  LABEL_SOURCE,
+  hostPath,
+  postBash,
+  postClaim,
+  postRead,
+  postWrite,
+  preBash,
+  preCompact,
+  preWrite,
+  promptSubmit,
+  sessionStart,
+  startsSession,
+  subagentStop,
+} from '../opencode/bridge/payload.js';
 
 const DIRECTORY = join(tmpdir(), 'project');
 
@@ -922,6 +936,116 @@ describe('pre-compact', () => {
     for (const directory of [undefined, '', 7]) {
       assert.equal(preCompact(compacting(), directory)[0].cwd, undefined, String(directory));
     }
+  });
+});
+
+describe('prompt-submit', () => {
+  /**
+   * The prompt hook's event for the prompt a pdkit command sends (F75, F80):
+   * the text its execute built, and the label it put on it (D6).
+   */
+  const submitted = (label, fields = {}) => ({
+    sessionID: 'ses_person',
+    messageID: 'msg_test',
+    prompt: { text: 'Implement the plan of issue 18915, one task per worker.', files: [], agents: [] },
+    metadata: label,
+    delivery: 'steer',
+    ...fields,
+  });
+  const label = (command, args) => ({ source: 'opencode-pdkit', command, ...(args === undefined ? {} : { arguments: args }) });
+  const at = { directory: DIRECTORY };
+
+  test("is Claude Code's UserPromptSubmit: the command as the person typed it, the session, and its directory", () => {
+    assert.deepEqual(promptSubmit(submitted(label('pd:preflight', '18915')), at), [
+      { hook_event_name: 'UserPromptSubmit', prompt: '/pd:preflight 18915', session_id: 'ses_person', cwd: DIRECTORY },
+    ]);
+  });
+
+  // prompt-submit.js reads the line as typed (TYPED): the arguments as they
+  // were given — a number with `#`, a slice after it, lines after that.
+  test('the arguments go after the command as they were given', () => {
+    for (const [args, prompt] of [
+      ['#19750', '/pd:pr-sync #19750'],
+      ['18915 2', '/pd:pr 18915 2'],
+      ['18915 --label kind/bug\nmore context', '/pd:triage 18915 --label kind/bug\nmore context'],
+    ]) {
+      const command = prompt.slice(1, prompt.indexOf(' '));
+      assert.equal(promptSubmit(submitted(label(command, args)), at)[0].prompt, prompt, args);
+    }
+  });
+
+  // The model question asks only for the skill (until T7.4); the tree
+  // question finds no number, and is quiet.
+  test('a command without arguments is the command alone', () => {
+    for (const args of [undefined, '', '   ', 7, null]) {
+      assert.equal(promptSubmit(submitted(label('pd:pr-status', args)), at)[0].prompt, '/pd:pr-status', String(args));
+    }
+  });
+
+  // Everything else returns before anything is read (D6): what a person
+  // types, a subagent's first task, another plugin's prompt, a markdown
+  // command (which sets no metadata, F80) — and a `/pd:` line that arrives
+  // as text, which is a command that did not run (F76, F78).
+  test('a prompt without the label is no payload, whatever its text', () => {
+    for (const event of [
+      submitted(null),
+      submitted(undefined),
+      submitted(null, { prompt: { text: '/pd:preflight 18915' } }),
+      submitted({ source: 'goal', goalID: 'goal_1' }),
+      submitted({ source: 'pdkit-sandbox', command: 'pd:preflight', arguments: '18915' }),
+      submitted('opencode-pdkit'),
+      submitted({ command: 'pd:preflight', arguments: '18915' }),
+    ]) {
+      assert.deepEqual(promptSubmit(event, at), [], JSON.stringify(event.metadata));
+    }
+  });
+
+  test("a label that names no pdkit command is no payload", () => {
+    for (const command of [undefined, 7, '', 'pd:', 'preflight', '/pd:preflight', 'pd:Preflight', 'pd:pre flight', 'pd:preflight 18915', 'sbx:preflight', 'pd:-x']) {
+      assert.deepEqual(promptSubmit(submitted(label(command, '18915')), at), [], String(command));
+    }
+  });
+
+  test('the label is the one this plugin puts on, by its ID', () => {
+    assert.equal(LABEL_SOURCE, 'opencode-pdkit');
+  });
+
+  test('an event with no session is no payload', () => {
+    for (const fields of [{ sessionID: undefined }, { sessionID: '' }, { sessionID: 7 }]) {
+      assert.deepEqual(promptSubmit(submitted(label('pd:exec', '18915'), fields), at), [], JSON.stringify(fields));
+    }
+    assert.deepEqual(promptSubmit(undefined, at), []);
+    assert.deepEqual(promptSubmit(null, at), []);
+  });
+
+  // The location is read for a labeled prompt alone: a prompt the hook does
+  // not look at costs it nothing.
+  test('the directory is read only for a labeled prompt', () => {
+    let reads = 0;
+    const host = {
+      get directory() {
+        reads += 1;
+        return DIRECTORY;
+      },
+    };
+    promptSubmit(submitted(null), host);
+    promptSubmit(submitted(label('sbx:x', '1')), host);
+    assert.equal(reads, 0);
+    promptSubmit(submitted(label('pd:exec', '18915')), host);
+    assert.equal(reads, 1);
+  });
+
+  // The runner refuses to guess at a directory it is not given.
+  test('an instance with no directory gives no cwd', () => {
+    for (const directory of [undefined, '', 7]) {
+      assert.equal(promptSubmit(submitted(label('pd:exec', '18915')), { directory })[0].cwd, undefined, String(directory));
+    }
+  });
+
+  // Open Code keeps no transcript file; the handler reads the model from
+  // none (D12).
+  test('says no transcript it does not have', () => {
+    assert.equal(Object.hasOwn(promptSubmit(submitted(label('pd:exec', '18915')), at)[0], 'transcript_path'), false);
   });
 });
 

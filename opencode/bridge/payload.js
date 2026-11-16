@@ -680,3 +680,60 @@ export function preCompact(event, directory) {
     },
   ];
 }
+
+/**
+ * Who labeled a prompt as a pdkit command's: the plugin, by its ID. The
+ * registrar puts the label on the prompt each command sends (D6); this is
+ * where it is read.
+ */
+export const LABEL_SOURCE = 'opencode-pdkit';
+
+/** A pdkit command's name as its label carries it: `pd:<skill>`, as the person typed it after the slash. */
+const COMMAND = /^pd:[a-z][a-z-]*$/;
+
+/**
+ * The payload for `pdkit hook prompt-submit`: Claude Code's UserPromptSubmit,
+ * for the prompt a pdkit command sends, with the command as the person typed
+ * it — `/pd:<skill> <arguments>`. At most one.
+ *
+ * Open Code's prompt hook never sees what the person typed (F76, F77): the TUI
+ * runs the command, whose execute builds the prompt itself, and the hook gets
+ * that. So a pdkit command labels the prompt it sends —
+ * `metadata: { source: "opencode-pdkit", command: "pd:<skill>", arguments }`
+ * (D6, F80) — and the line is put back together from the label: the shape
+ * prompt-submit.js reads as typed.
+ *
+ * Any other prompt has no label and gets no payload: what a person types, a
+ * subagent's first task, another plugin's prompt, a command that is not
+ * pdkit's. prompt-submit looks at nothing but a `/pd:` command and runs on
+ * every prompt, so everything else returns before anything is read (D6). That
+ * includes a `/pd:` line that arrives as text, which is a command that did not
+ * run: Open Code sends one as it is where no command is run — `opencode run`,
+ * a name the TUI does not have (F76, F78).
+ *
+ * `cwd` is the session's directory: the hook's event names none, and Open Code
+ * calls it in the plugin instance of the directory the session is in — after
+ * a move, the one it moved to (F75, F275). Read only for a labeled prompt:
+ * `host.directory` may be a getter. `transcript_path` is not set: Open Code
+ * keeps no transcript file, and the handler finds no model through it (D12).
+ *
+ * @param {{sessionID?: string, metadata?: unknown}} event  the prompt hook's event
+ * @param {{directory: string|undefined}} host  ctx.location.directory
+ * @returns {Array<{hook_event_name: 'UserPromptSubmit', prompt: string, session_id: string, cwd?: string}>}
+ */
+export function promptSubmit(event, host) {
+  if (typeof event?.sessionID !== 'string' || event.sessionID === '') return [];
+  const label = event.metadata;
+  if (label === null || typeof label !== 'object' || label.source !== LABEL_SOURCE) return [];
+  if (typeof label.command !== 'string' || !COMMAND.test(label.command)) return [];
+  const given = typeof label.arguments === 'string' ? label.arguments : '';
+  const directory = host.directory;
+  return [
+    {
+      hook_event_name: 'UserPromptSubmit',
+      prompt: given.trim() === '' ? `/${label.command}` : `/${label.command} ${given}`,
+      session_id: event.sessionID,
+      cwd: typeof directory === 'string' && directory !== '' ? directory : undefined,
+    },
+  ];
+}

@@ -36,6 +36,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
+import plugin from '../opencode/server.js';
 import { PLUGIN_ROOT, issueDir } from '../lib/config.js';
 import { FAIL_CLOSED, HOOK_HANDLERS } from '../lib/hooks/events.js';
 import { argumentKind, handle, parseCommand } from '../lib/hooks/prompt-submit.js';
@@ -323,6 +324,166 @@ describe('everything else is quiet', () => {
   test('the other name for the prompt is read the same way', async () => {
     const decision = await handle({ user_prompt: `/pd:preflight ${AWAY}`, cwd: MAIN }, context());
     assert.match(decision.message, /EnterWorktree/);
+  });
+});
+
+// Part (1) on Open Code's form. Open Code's prompt hook never sees what the
+// person typed (F76): a pdkit command labels the prompt it sends with its name
+// and arguments (D6), and the hook bridge puts `/pd:<skill> <arguments>` back
+// together from the label and runs this handler on it, through bin/pdkit, in
+// the directory of the plugin instance the hook is called in — the session's
+// (F75). What the handler says reaches the model as a text file attached to
+// the prompt (F79; the person sees its name, §13 DV11). So each case above is
+// asserted again this way: the attached text is the message handle() gives
+// for the command as typed, and nothing is attached where it is quiet.
+describe('in Open Code: the prompt a pdkit command sends, through the hook bridge', () => {
+  const REVIEWED = 4242;
+  const STALE = 4343;
+  const SESSION = 'ses_person';
+
+  /** A session that has run: session-start, on the same hook, leaves its prompts alone (F270). */
+  const ran = (directory) => ({
+    id: SESSION,
+    projectID: 'global',
+    outcome: 'succeeded',
+    time: { created: 1794850025467, updated: 1794850025924, busy: 1794850025888, idle: 1794850025921 },
+    location: { directory },
+  });
+
+  /** A stand-in for setup()'s context in `directory`: just enough for the entry point to load in full. */
+  const host = (directory) => {
+    const hooks = new Map();
+    const registered = { dispose: async () => {} };
+    const transforms = { transform: async () => registered };
+    const ctx = {
+      app: { name: 'cli', version: '2.3.0', channel: 'latest' },
+      location: { directory, project: { id: 'global', directory, canonical: directory } },
+      tool: { hook: async () => registered },
+      session: {
+        hook: async (name, callback) => {
+          hooks.set(name, callback);
+          return registered;
+        },
+        get: async () => ran(directory),
+        instructions: { entry: { put: async () => {}, remove: async () => {}, list: async () => [] } },
+      },
+      shell: { hook: async () => registered },
+      permission: { hook: async () => registered },
+      agent: transforms,
+      command: transforms,
+      skill: transforms,
+      event: { subscribe: () => ({ [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }) }) },
+    };
+    return { ctx, hooks };
+  };
+
+  /** The prompt hook's event for what a pdkit command sends: the text its execute built, and its label. */
+  const sent = (command, args) => ({
+    sessionID: SESSION,
+    messageID: 'msg_test',
+    prompt: { text: `The ${command} template, as its execute expanded it.`, files: [], agents: [] },
+    metadata: { source: 'opencode-pdkit', command, arguments: args },
+    delivery: 'steer',
+  });
+
+  /** The texts the bridge attached to a prompt. */
+  const attached = (event) =>
+    (event.prompt.files ?? [])
+      .filter((file) => file.name === 'pdkit-context')
+      .map((file) => Buffer.from(file.uri.replace(/^data:text\/plain;base64,/, ''), 'base64').toString('utf8'));
+
+  /**
+   * The command through the plugin loaded in `cwd`, and through handle() as
+   * typed, at the same moment; what the server's log got besides.
+   */
+  const both = async (t, command, args, cwd) => {
+    const error = t.mock.method(console, 'error', () => {});
+    const { ctx, hooks } = host(cwd);
+    const cleanup = await plugin.setup(ctx);
+    t.after(() => cleanup?.());
+
+    const event = sent(command, args);
+    assert.equal(await hooks.get('prompt')(event), undefined);
+    const typed = await handle({ prompt: `/${command} ${args}`.trimEnd(), cwd }, context());
+    return { event, texts: attached(event), message: typed.message, log: error.mock.calls.map((entry) => entry.arguments.join(' ')) };
+  };
+
+  const withPullRequest = async () => {
+    await writeFile(join(issueDir(home, AWAY), 'prs.json'), JSON.stringify({ prs: [{ number: 19750, slice: 1 }] }));
+    return () => rm(join(issueDir(home, AWAY), 'prs.json'), { force: true });
+  };
+
+  const SAYS = [
+    ["a command for one issue, typed in another issue's tree (HK-24)", 'pd:preflight', `${AWAY}`, () => MAIN],
+    ['a branch checked out nowhere (HK-24)', 'pd:slice', `${PARKED}`, () => MAIN],
+    ['a pull request of ours, followed to its issue (HK-24)', 'pd:pr-sync', '19750', () => MAIN, withPullRequest],
+    ["the tree to make is on the pull request's branch (HK-40)", 'pd:resume', `${REVIEWED}`, () => MAIN],
+    ["the issue's tree on another branch than its pull request, from the main checkout (HK-40)", 'pd:resume', `${STALE}`, () => MAIN],
+    ["the issue's tree on another branch than its pull request, from inside it (HK-40)", 'pd:resume', `${STALE}`, () => join(base, 'pd-worktrees', `DESKTOP-${STALE}`)],
+    ["the main checkout on the issue's own branch (HK-24)", 'pd:audit', `${HERE}`, () => MAIN],
+    ['/pd:exec for an issue with no tree yet, from the main checkout (HK-39)', 'pd:exec', '19818', () => join(base, 'fresh-clone')],
+    ["/pd:exec for an issue with no tree yet, from another issue's tree (HK-39)", 'pd:exec', '19818', () => MAIN],
+  ];
+
+  for (const [label, command, args, cwd, arrange] of SAYS) {
+    test(`${label}: the context goes with the prompt`, async (t) => {
+      const undo = await arrange?.();
+      try {
+        const { event, texts, message, log } = await both(t, command, args, cwd());
+
+        assert.ok(message, 'handle() has something to say here');
+        assert.deepEqual(texts, [message]);
+        assert.deepEqual(log, []);
+        // What the person typed is theirs: the prompt's text, and the label.
+        assert.equal(event.prompt.text, sent(command, args).prompt.text);
+        assert.deepEqual(event.metadata, sent(command, args).metadata);
+      } finally {
+        await undo?.();
+      }
+    });
+  }
+
+  const QUIET = [
+    ["the issue's own tree", 'pd:preflight', `${AWAY}`, () => AWAY_TREE],
+    ['an issue nothing names yet', 'pd:triage', '11111', () => MAIN],
+    ["somebody else's pull request", 'pd:review-pr', '19001', () => MAIN],
+    ['a skill whose argument is not a number of ours', 'pd:knowledge', `${AWAY}`, () => MAIN],
+    ['a skill that does not write code, for an issue with no tree', 'pd:plan', '19818', () => join(base, 'fresh-clone')],
+    ['a command that takes no number', 'pd:pr-status', '', () => MAIN],
+  ];
+
+  for (const [label, command, args, cwd] of QUIET) {
+    test(`${label}: nothing is attached`, async (t) => {
+      const { event, texts, message, log } = await both(t, command, args, cwd());
+
+      assert.equal(message, undefined);
+      assert.deepEqual(texts, []);
+      assert.deepEqual(event.prompt.files, []);
+      assert.deepEqual(log, []);
+    });
+  }
+
+  // The meaning, once, in Open Code's words for the person's input: the tree,
+  // the issue's, and where to go.
+  test('the attached text names both trees and where the session goes', async (t) => {
+    const { texts } = await both(t, 'pd:preflight', `${AWAY}`, MAIN);
+    assert.match(texts[0], /\/pd:preflight is about issue 18915 — triaged, and this tree is not its/);
+    assert.match(texts[0], new RegExp(`EnterWorktree tool with path: ${esc(AWAY_TREE)}$`, 'm'));
+  });
+
+  // A `/pd:` line that arrives as text was not run as a command — what
+  // `opencode run` sends (F78) — and the hook looks at nothing unlabeled (D6).
+  test('the same line as text, without the label, gets nothing', async (t) => {
+    const error = t.mock.method(console, 'error', () => {});
+    const { ctx, hooks } = host(MAIN);
+    const cleanup = await plugin.setup(ctx);
+    t.after(() => cleanup?.());
+
+    const event = { sessionID: SESSION, messageID: 'msg_test', prompt: { text: `/pd:preflight ${AWAY}` }, metadata: null, delivery: 'steer' };
+    await hooks.get('prompt')(event);
+
+    assert.deepEqual(event.prompt, { text: `/pd:preflight ${AWAY}` });
+    assert.deepEqual(error.mock.calls, []);
   });
 });
 

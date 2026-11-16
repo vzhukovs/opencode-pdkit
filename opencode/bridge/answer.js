@@ -22,8 +22,8 @@
 // handle() returned. This turns that object into one action of the host's —
 // refuse the call, add text to its result, let it through — and lists what
 // has no way to anyone here. A row per pdkit event the bridge carries,
-// combine() for a call that took more than one run to decide, and withText()
-// for the result the text goes into; pure.
+// combine() for a call that took more than one run to decide, withText() for
+// the result the text goes into, and withAttachment() for the prompt; pure.
 //
 // What has no way: before a tool runs, Open Code gives a plugin a throw and
 // nothing else — no text that reaches the model beside a call it lets through,
@@ -61,11 +61,20 @@
 // (setting its `result` would replace the summary), and a throw would fail
 // the compaction and, when it was automatic, the person's turn (F73) — so
 // whatever it says is `dropped`.
+//
+// When a pdkit command is submitted, what the handler has for the model is
+// the context Claude Code added beside the prompt. Open Code's way to add it
+// without changing what the person typed is a text file attached to the
+// prompt (F79): the model reads it in the same message, after the prompt, and
+// the person sees a tag with its name under the message, not its text (§13
+// DV11). The handler never refuses — a refusal on this event discarded the
+// prompt, and here a throw would lose it (F81) — so one that does lets the
+// prompt through, and its reason is `dropped`.
 
 /** @typedef {import('../../lib/hooks/runner.js').Decision} Decision */
 
 /**
- * @typedef {{kind: 'refuse', text: string} | {kind: 'append', text: string} | {kind: 'hold', text: string} | {kind: 'instruct', text: string} | {kind: 'withdraw'} | {kind: 'pass'}} Action
+ * @typedef {{kind: 'refuse', text: string} | {kind: 'append', text: string} | {kind: 'hold', text: string} | {kind: 'instruct', text: string} | {kind: 'attach', text: string} | {kind: 'withdraw'} | {kind: 'pass'}} Action
  * @typedef {{field: 'message'|'notice'|'reason', text: string}} Dropped
  * @typedef {{action: Action, dropped: Dropped[]}} Answer
  */
@@ -166,6 +175,25 @@ const whenCompacting = (decision) => ({
   dropped: unheard(decision, ['reason', 'message', 'notice']),
 });
 
+/**
+ * When a pdkit command is submitted: what the handler has for the model goes
+ * with the prompt, attached to it (withAttachment). Nothing is refused: the
+ * handler never refuses, and a run that does anyway lets the prompt through
+ * with its reason `dropped` — Claude Code would have discarded what the person
+ * typed, and only a throw could here, losing it (F81). A notice is `dropped`:
+ * the plugin has no line for the person (D12). What a run that gave no answer
+ * means, runner.decide has already said: a pass — prompt-submit fails open.
+ *
+ * @param {Decision} decision
+ * @returns {Answer}
+ */
+const whenSubmitting = (decision) => {
+  const dropped = unheard(decision, decision.block ? ['reason', 'notice'] : ['notice']);
+  const text = decision.message;
+  if (decision.block || typeof text !== 'string' || text.trim() === '') return { action: PASS, dropped };
+  return { action: { kind: 'attach', text }, dropped };
+};
+
 /** @type {Record<string, (decision: Decision) => Answer>} */
 const ANSWERS = {
   'pre-bash': beforeTool,
@@ -204,6 +232,11 @@ const ANSWERS = {
   // The active task written in the journal before a compaction (HK-23): the
   // work is the entry, and the compaction goes on.
   'pre-compact': whenCompacting,
+  // A pdkit command for an issue, in a tree that is not the issue's (HK-24),
+  // for code to write with no tree yet (HK-39), or in the issue's tree on
+  // another branch than its pull request's (HK-40): where to go, and how,
+  // attached to the prompt for the model. Never refuses.
+  'prompt-submit': whenSubmitting,
 };
 
 /**
@@ -287,4 +320,31 @@ function partsOf(result) {
 export function withText(result, text) {
   const parts = partsOf(result);
   return { ...result, content: [...parts, { type: 'text', text: parts.length > 0 ? `\n${text}` : text }] };
+}
+
+/**
+ * The name the context attached to a prompt goes by: what the person sees of
+ * it, on a tag under their message, and the model above its text (F79).
+ */
+export const ATTACHMENT_NAME = 'pdkit-context';
+
+/**
+ * What the model reads beside the name: where the text came from. Claude Code
+ * headed the same text with the name of the hook that added it.
+ */
+const ATTACHMENT_DESCRIPTION = 'Added by pdkit, not by the person: where the issue this command names is worked on';
+
+/**
+ * The files of a prompt with text attached as the last one: a plain-text file
+ * inline, which Open Code hands the model in the same message as
+ * `Attached file: <name>`, its description and its text (F79). A new list;
+ * the one given is not changed, and a prompt that had none gets one.
+ *
+ * @param {unknown} files  the prompt's files
+ * @param {string} text
+ * @returns {unknown[]}
+ */
+export function withAttachment(files, text) {
+  const attached = { uri: `data:text/plain;base64,${Buffer.from(text, 'utf8').toString('base64')}`, name: ATTACHMENT_NAME, description: ATTACHMENT_DESCRIPTION };
+  return [...(Array.isArray(files) ? files : []), attached];
 }

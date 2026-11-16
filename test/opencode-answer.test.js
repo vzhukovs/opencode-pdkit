@@ -24,7 +24,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { answer, combine, withText } from '../opencode/bridge/answer.js';
+import { ATTACHMENT_NAME, answer, combine, withAttachment, withText } from '../opencode/bridge/answer.js';
 import { decide } from '../lib/hooks/runner.js';
 
 describe('pre-bash', () => {
@@ -327,6 +327,80 @@ describe('pre-compact', () => {
         { field: 'notice', text: 'for the person' },
       ],
     });
+  });
+});
+
+describe('prompt-submit', () => {
+  const MESSAGE = "pdkit: /pd:preflight is about issue 18915 — triaged, and this tree is not its.";
+
+  // HK-24, HK-39, HK-40: the context goes with the prompt.
+  test('a message is attached to the prompt for the model', () => {
+    assert.deepEqual(answer('prompt-submit', { block: false, message: MESSAGE }), { action: { kind: 'attach', text: MESSAGE }, dropped: [] });
+  });
+
+  test('nothing to say attaches nothing', () => {
+    for (const decision of [{ block: false }, { block: false, message: '' }, { block: false, message: ' \n' }]) {
+      assert.deepEqual(answer('prompt-submit', decision), { action: { kind: 'pass' }, dropped: [] }, JSON.stringify(decision));
+    }
+  });
+
+  // prompt-submit fails open: a run that gave no answer must not lose what
+  // the person typed (F81).
+  test('a run that gave no answer arrives as a pass, and is one', () => {
+    const decision = decide('prompt-submit', { code: null, stdout: '', stderr: '', failure: { kind: 'deadline', detail: 'gave no answer within 10s and was stopped' } });
+    assert.equal(decision.block, false);
+    assert.match(decision.diagnostic, /^pdkit: hook "prompt-submit" gave no answer within 10s and was stopped; allowing$/);
+    assert.deepEqual(answer('prompt-submit', decision), { action: { kind: 'pass' }, dropped: [] });
+  });
+
+  // The handler never refuses. A refusal here discarded the prompt under
+  // Claude Code; only a throw could here, and it would lose it.
+  test('a refusal lets the prompt through, and its reason is listed as dropped', () => {
+    assert.deepEqual(answer('prompt-submit', { block: true, reason: 'pdkit: not now' }), { action: { kind: 'pass' }, dropped: [{ field: 'reason', text: 'pdkit: not now' }] });
+  });
+
+  // The plugin has no line for the person (D12); the model's text beside it
+  // is attached as ever.
+  test('a notice is listed as dropped, and the message beside it attached', () => {
+    assert.deepEqual(answer('prompt-submit', { block: false, message: MESSAGE, notice: 'pdkit: for the person' }), {
+      action: { kind: 'attach', text: MESSAGE },
+      dropped: [{ field: 'notice', text: 'pdkit: for the person' }],
+    });
+  });
+});
+
+describe('withAttachment', () => {
+  const decoded = (file) => Buffer.from(file.uri.slice('data:text/plain;base64,'.length), 'base64').toString('utf8');
+
+  // The shape Open Code reads into a text file the model gets in the same
+  // message (F79): a data URI, a name, a description.
+  test('attaches the text as an inline plain-text file, after the files the prompt has', () => {
+    const own = { uri: 'file:///tmp/notes.md', name: 'notes.md' };
+    const files = withAttachment([own], 'pdkit: here\n  there — ünïcode');
+
+    assert.equal(files.length, 2);
+    assert.equal(files[0], own);
+    assert.match(files[1].uri, /^data:text\/plain;base64,[A-Za-z0-9+/]+=*$/);
+    assert.equal(decoded(files[1]), 'pdkit: here\n  there — ünïcode');
+    assert.equal(files[1].name, ATTACHMENT_NAME);
+    assert.equal(ATTACHMENT_NAME, 'pdkit-context');
+    assert.match(files[1].description, /^Added by pdkit, not by the person/);
+    assert.deepEqual(Object.keys(files[1]).sort(), ['description', 'name', 'uri']);
+  });
+
+  test('does not change the list it is given', () => {
+    const files = [];
+    assert.notEqual(withAttachment(files, 'x'), files);
+    assert.deepEqual(files, []);
+  });
+
+  // `files` is optional on a prompt (F75).
+  test('a prompt with no files gets a list of one', () => {
+    for (const files of [undefined, null, 'x', {}]) {
+      const attached = withAttachment(files, 'pdkit: here');
+      assert.equal(attached.length, 1, String(files));
+      assert.equal(decoded(attached[0]), 'pdkit: here');
+    }
   });
 });
 

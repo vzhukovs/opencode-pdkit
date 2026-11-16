@@ -47,6 +47,7 @@ import { handle as handlePostBash } from '../lib/hooks/post-bash.js';
 import { handle as handlePostRead } from '../lib/hooks/post-read.js';
 import { handle as handleSubagentStop } from '../lib/hooks/task-completed.js';
 import { handle as handleSessionStart } from '../lib/hooks/session-start.js';
+import { handle as handlePromptSubmit } from '../lib/hooks/prompt-submit.js';
 import { record as recordAttempt, unblock as unblockTask } from '../lib/attempts.js';
 import { issueDir } from '../lib/config.js';
 import { writeReceipt } from '../lib/evidence.js';
@@ -988,6 +989,79 @@ describe('invoke agrees with handle, for pre-compact', () => {
       outcomes.add(written.length === 0 ? 'none' : written.map(({ detail }) => detail).join());
     }
     assert.deepEqual([...outcomes].sort(), ['T1 active, issue triaged', 'T1 active, issue triaged (standard)', 'none']);
+  });
+});
+
+// The same for prompt-submit, on the payload the bridge builds from a pdkit
+// command's label (opencode/bridge/payload.js): the command as typed, in the
+// session's directory. Its fixtures are the tree question's outcomes —
+// another issue's tree, no tree yet for the code, the issue's own tree, an
+// issue nothing names — and a prompt that is no command at all.
+describe('invoke agrees with handle, for prompt-submit', () => {
+  const HERE = 4201;
+  const AWAY = 4202;
+  let home;
+  let base;
+  let main;
+  let away;
+  let fresh;
+  let previousHome;
+  const git = (cwd, ...args) => execFileAsync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd });
+
+  before(async () => {
+    home = await realpath(await mkdtemp(join(tmpdir(), 'pdkit-runner-prompt-home-')));
+    previousHome = process.env.PDKIT_HOME;
+    process.env.PDKIT_HOME = home;
+    base = await realpath(await mkdtemp(join(tmpdir(), 'pdkit-runner-prompt-repo-')));
+    main = join(base, 'podman-desktop');
+    away = join(base, `DESKTOP-${AWAY}`);
+    fresh = join(base, 'fresh-clone');
+    for (const dir of [main, fresh]) {
+      await mkdir(dir);
+      await git(dir, 'init', '-q', '-b', 'main');
+      await git(dir, 'commit', '-q', '--allow-empty', '-m', 'init');
+    }
+    await git(main, 'switch', '-q', '-c', `DESKTOP-${HERE}/1-reconnect-the-event-stream`);
+    await git(main, 'worktree', 'add', '-q', '-b', `DESKTOP-${AWAY}/1-quit-and-install`, away, 'main');
+    await transition(AWAY, 'triaged', { home });
+  });
+
+  after(async () => {
+    if (previousHome === undefined) delete process.env.PDKIT_HOME;
+    else process.env.PDKIT_HOME = previousHome;
+    for (const dir of [home, base]) await rm(dir, { recursive: true, force: true });
+  });
+
+  /** The payload Open Code's bridge builds (opencode/bridge/payload.js), for a command sent in `cwd`. */
+  const submitted = (prompt, cwd) => ({ hook_event_name: 'UserPromptSubmit', prompt, session_id: 'ses_person', cwd });
+
+  /** What the decision says, as far as the process protocol carries it. */
+  const carried = (decision) => ({ block: decision.block, reason: decision.reason, message: decision.message, notice: decision.notice });
+
+  const FIXTURES = [
+    ["another issue's tree", () => submitted(`/pd:preflight ${AWAY}`, main)],
+    ['code to write, and no tree for it yet', () => submitted('/pd:exec 4203', fresh)],
+    ["the issue's own tree", () => submitted(`/pd:preflight ${AWAY}`, away)],
+    ['an issue nothing names yet', () => submitted('/pd:triage 4204', main)],
+    ['no pdkit command', () => submitted('what is left to do?', main)],
+  ];
+
+  for (const [label, payloadOf] of FIXTURES) {
+    test(label, async () => {
+      const expected = carried(await handlePromptSubmit(payloadOf(), { event: 'prompt-submit', pluginRoot: ROOT, env: {} }));
+      const actual = carried(await invoke('prompt-submit', payloadOf(), { root: ROOT }));
+
+      assert.deepEqual(actual, expected);
+    });
+  }
+
+  test('the fixtures cover every outcome: a message, and silence', async () => {
+    const outcomes = new Set();
+    for (const [, payloadOf] of FIXTURES) {
+      const decision = await handlePromptSubmit(payloadOf(), { event: 'prompt-submit', pluginRoot: ROOT, env: {} });
+      outcomes.add(decision.block ? 'refuse' : decision.notice ? 'notice' : decision.message ? 'message' : 'pass');
+    }
+    assert.deepEqual([...outcomes].sort(), ['message', 'pass']);
   });
 });
 

@@ -45,6 +45,15 @@
 // (F73). So the callback never throws, and waits on nothing but the run,
 // which the runner stops at its deadline.
 //
+// prompt-submit is on the prompt hook, beside session-start: one callback runs
+// both. The hook never sees what the person typed, so it looks only at a
+// prompt a pdkit command labeled as its own (D6) and puts the command back
+// together from the label; the handler's context goes with the prompt as an
+// attached text. Open Code waits on this hook before it takes the prompt in,
+// and a throw or a hang there loses what the person typed (F81) — where
+// Claude Code's hook never blocked — so the same holds: never a throw, and
+// nothing waited on but the run.
+//
 // It is the one module of the bridge the entry point loads, and it loads the
 // rest itself. The entry point registers the gate's callback before loading
 // anything, and hands it to preBash() once this module has loaded; if it fails
@@ -67,7 +76,7 @@ import { createReadStream } from 'node:fs';
 import { homedir } from 'node:os';
 
 import { invoke, refusal } from '../../lib/hooks/runner.js';
-import { answer, combine, withText } from './answer.js';
+import { answer, combine, withAttachment, withText } from './answer.js';
 import {
   postBash as postBashPayloads,
   postClaim as postClaimPayloads,
@@ -76,6 +85,7 @@ import {
   preBash as preBashPayload,
   preCompact as preCompactPayloads,
   preWrite as preWritePayloads,
+  promptSubmit as promptSubmitPayloads,
   sessionStart as sessionStartPayloads,
   startsSession,
   subagentStop as subagentStopPayloads,
@@ -90,6 +100,7 @@ const POST_READ = 'post-read';
 const SUBAGENT_STOP = 'subagent-stop';
 const SESSION_START = 'session-start';
 const PRE_COMPACT = 'pre-compact';
+const PROMPT_SUBMIT = 'prompt-submit';
 
 /** Who added a message to a session: the plugin, by its ID, as Open Code's own plugins sign theirs. */
 const SOURCE = 'opencode-pdkit';
@@ -209,6 +220,8 @@ async function linesOf(file) {
  *   startOnFork: (event: {sessionID?: string}) => Promise<void>,
  *   startOnCompaction: (event: {type?: string, data?: {sessionID?: string}}) => Promise<void>,
  *   preCompact: (event: {sessionID?: string, result?: unknown}) => Promise<void>,
+ *   promptSubmit: (event: {sessionID?: string, prompt?: {files?: unknown}, metadata?: unknown}) => Promise<void>,
+ *   onPrompt: (event: {sessionID?: string, prompt?: {files?: unknown}, metadata?: unknown}) => Promise<void>,
  *   register: () => Promise<void>,
  *   cleanup: () => Promise<void>,
  * }}
@@ -658,12 +671,58 @@ export function createBridge(ctx, plugin) {
     },
 
     /**
+     * prompt-submit, for a prompt a pdkit command sends: whether the session
+     * is in the tree where the issue the command names is worked on, and if
+     * not, where that is and how to get there. What the handler has for the
+     * model goes with the prompt as an attached text (answer.js); what the
+     * person typed is left as it was.
+     *
+     * A prompt with no pdkit label — what a person types, a subagent's first
+     * task — costs nothing: no read, not even of the location, and no process
+     * (payload.js promptSubmit).
+     *
+     * Nothing leaves this callback as an exception: one, or a hook that never
+     * returns, would lose the person's input (F81), where Claude Code's hook
+     * never blocked. Nor does it wait on the host: the one thing it waits on
+     * is the run, which the runner stops at its deadline. Whatever fails lets
+     * the prompt through without the context, and says why in the log.
+     */
+    async promptSubmit(event) {
+      try {
+        const host = {
+          get directory() {
+            return ctx.location?.directory;
+          },
+        };
+        const payloads = promptSubmitPayloads(event, host);
+        if (payloads.length === 0) return;
+        const decision = await invoke(PROMPT_SUBMIT, payloads[0], { root: plugin.root });
+        const answered = answer(PROMPT_SUBMIT, decision);
+        report(PROMPT_SUBMIT, [decision], answered.dropped);
+        if (answered.action.kind === 'attach') event.prompt.files = withAttachment(event.prompt.files, answered.action.text);
+      } catch (error) {
+        report(PROMPT_SUBMIT, [failedOpen(PROMPT_SUBMIT, error)], []);
+      }
+    },
+
+    /**
+     * The prompt hook: session-start on a session's first prompt, and
+     * prompt-submit on a pdkit command's — side by side, as neither needs the
+     * other. One callback for the point, so the order of two on one point is
+     * nothing the bridge relies on. Neither throws, so this does not.
+     */
+    async onPrompt(event) {
+      await Promise.all([bridge.startOnPrompt(event), bridge.promptSubmit(event)]);
+    },
+
+    /**
      * Register every hook but the gate, which the entry point owns and
      * registers first. pre-write is on the same point as the gate, after it;
      * the post hooks share one callback after a tool (afterTool);
      * subagent-stop is on the point a session reaches before it goes idle;
      * session-start on a prompt, on a fork, and on the stream of compactions;
-     * pre-compact on the compaction itself.
+     * pre-compact on the compaction itself; prompt-submit on a prompt, in the
+     * same callback as session-start (onPrompt).
      *
      * Each on its own: a point the host does not have — experimental.idle may
      * be renamed in a later Open Code (F57) — leaves the others registered.
@@ -684,11 +743,10 @@ export function createBridge(ctx, plugin) {
         await ctx.session.hook('experimental.idle', (event) => bridge.subagentStop(event));
         void watch();
       });
-      await attempt(() => ctx.session.hook('prompt', (event) => bridge.startOnPrompt(event)));
+      await attempt(() => ctx.session.hook('prompt', (event) => bridge.onPrompt(event)));
       await attempt(() => ctx.session.hook('fork', (event) => bridge.startOnFork(event)));
       void watchCompactions();
       await attempt(() => ctx.session.hook('compaction', (event) => bridge.preCompact(event)));
-      // TODO(T4.14): the rest of pdkit's hook events.
       if (failures.length > 0) throw new Error(failures.join('; '));
     },
 
