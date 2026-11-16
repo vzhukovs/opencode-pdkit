@@ -898,6 +898,10 @@ describe('the server part and lib/', () => {
     ['lib/opencode-version.js', []],
     ['lib/hooks/events.js', []],
     ['lib/hooks/runner.js', ['lib/hooks/events.js']],
+    // The agents' registrar: $PDKIT_HOME as the hooks resolve it, and the
+    // reader for the agents' frontmatter.
+    ['lib/config.js', ['lib/yaml.js']],
+    ['lib/yaml.js', []],
   ]);
 
   const serverModules = () => modules(join(ROOT, 'opencode'), 'opencode');

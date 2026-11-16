@@ -30,7 +30,7 @@ import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 /** The prefix every pdkit command carries, so `/pd:triage` reads as it always has. */
-const PREFIX = 'pd:';
+export const PREFIX = 'pd:';
 
 /**
  * The name of every skill the plugin ships: each directory under skills/ that

@@ -38,8 +38,9 @@
 //   3. compares the running Open Code with engines.opencode in package.json,
 //      the one place the minimum is written (Open Code ignores the field);
 //   4. registers hooks, the shell environment that puts `pdkit` on PATH,
-//      agents, commands and skills — or, below the minimum, only `/pd:*`
-//      commands that refuse and say which version to install.
+//      the answer that keeps the plugin's own files readable, agents,
+//      commands and skills — or, below the minimum, only `/pd:*` commands
+//      that refuse and say which version to install.
 //
 // Nothing after step 1 throws out of setup(). A registrar that fails is
 // reported and skipped; the gate does not depend on it.
@@ -108,6 +109,7 @@ async function load(ctx) {
   try {
     const { createBridge } = await import('./bridge/hooks.js');
     const { registerEnvironment } = await import('./environment.js');
+    const { registerAccess } = await import('./access.js');
     const { registerAgents } = await import('./agents.js');
     const { registerCommands, registerRefusals } = await import('./commands.js');
     const { readOptions } = await import('./options.js');
@@ -118,6 +120,7 @@ async function load(ctx) {
       plugin,
       bridge: createBridge(ctx, plugin),
       registerEnvironment,
+      registerAccess,
       registerAgents,
       registerCommands,
       registerRefusals,
@@ -222,6 +225,7 @@ export default {
 
     await register('hooks', () => loaded.bridge.register());
     await register('shell environment', () => loaded.registerEnvironment(ctx, loaded.plugin));
+    await register('access to its own files', () => loaded.registerAccess(ctx, loaded.plugin));
     await register('agents', () => loaded.registerAgents(ctx, loaded.plugin));
     await register('commands and skills', () => loaded.registerCommands(ctx, loaded.plugin));
     return cleanup;

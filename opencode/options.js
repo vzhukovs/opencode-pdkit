@@ -64,9 +64,9 @@ export function readOptions(raw) {
       dropped.push(`options.models: expected an object, got ${kind(value)}`);
       continue;
     }
-    // Which keys name an agent or a command, and which strings name a model,
-    // is the registrars' to judge: they know the IDs.
-    // TODO(T5.A): drop unknown IDs and strings that are not provider/model#variant.
+    // Which keys name an agent or a command is the registrars' to judge: they
+    // know the IDs. Each one reads its own keys with modelRef() below, and
+    // drops what does not read as a model.
     for (const [id, model] of Object.entries(value)) {
       if (typeof model === 'string') models[id] = model;
       else dropped.push(`options.models.${id}: expected "provider/model#variant", got ${kind(model)}`);
@@ -74,4 +74,34 @@ export function readOptions(raw) {
   }
 
   return settings();
+}
+
+/**
+ * The grammar Open Code itself reads a model by in its config (its
+ * `Config.ModelSelection`): a provider, a slash, a model that may hold slashes
+ * of its own, and an optional `#variant`. The same grammar here, so that a
+ * value pdkit accepts is one Open Code would accept in `agents.<id>.model`, and
+ * the other way round.
+ */
+const SELECTION = /^([^/#]+)\/([^#]+)(?:#([^#]+))?$/;
+
+/**
+ * A model as Open Code takes it on an agent: an object, never the string. An
+ * agent registered with the string breaks the agent list of the whole
+ * location, not only its own entry.
+ *
+ * @typedef {{providerID: string, id: string, variant?: string}} ModelRef
+ */
+
+/**
+ * Read `provider/model#variant`.
+ *
+ * @param {unknown} text
+ * @returns {ModelRef|undefined} undefined for anything that is not one
+ */
+export function modelRef(text) {
+  const match = typeof text === 'string' ? SELECTION.exec(text) : null;
+  if (!match) return undefined;
+  const [, providerID, id, variant] = match;
+  return variant === undefined ? { providerID, id } : { providerID, id, variant };
 }

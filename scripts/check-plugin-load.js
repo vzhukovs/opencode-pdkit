@@ -33,7 +33,9 @@
 //      that never shows up fails as surely as one marked "failed";
 //   4. requests the command and agent registries, then reads the record again:
 //      a plugin whose command.transform throws is disabled only on the first
-//      registry request;
+//      registry request. Every agent under agents/ must be in the agent
+//      registry, under its name and as a subagent: one that is missing, or a
+//      primary agent a subagent call refuses, fails here;
 //   5. runs `opencode plugin check`, which exits 1 for a package plugin that
 //      failed to load.
 //
@@ -62,6 +64,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { minimumVersion } from '../lib/opencode-version.js';
+import { readAgents } from '../opencode/agents.js';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 
@@ -104,6 +107,27 @@ export function verdict(entry, id) {
   }
   if (entry.id !== id) return { ok: false, detail: `active as ${name}, not as ${id}` };
   return { ok: true, detail: `${name} ${entry.source?.type} ${entry.source?.version ?? ''} active`.trim() };
+}
+
+/**
+ * Whether a GET /api/agent listing holds each of the plugin's agents as a
+ * subagent, and a line saying what it shows.
+ *
+ * @param {unknown} listing the `data` of the answer
+ * @param {readonly string[]} ids the plugin's agents
+ */
+export function agentsVerdict(listing, ids) {
+  if (!Array.isArray(listing)) return { ok: false, detail: 'no agent listing' };
+  const byId = new Map(listing.map((agent) => [agent?.id, agent]));
+  const missing = ids.filter((id) => !byId.has(id));
+  const primary = ids.filter((id) => byId.has(id) && byId.get(id).mode !== 'subagent');
+  const problems = [
+    ...(missing.length > 0 ? [`missing: ${missing.join(', ')}`] : []),
+    ...(primary.length > 0 ? [`not subagents: ${primary.join(', ')}`] : []),
+  ];
+  if (ids.length === 0) problems.push('the package has no agents to look for');
+  if (problems.length > 0) return { ok: false, detail: `${listing.length} registered; of the plugin's ${ids.length}, ${problems.join('; ')}` };
+  return { ok: true, detail: `${listing.length} registered, the plugin's ${ids.length} among them as subagents` };
 }
 
 function run(command, args, options) {
@@ -275,9 +299,15 @@ async function check({ root, keep, printLog }) {
     const loaded = verdict(listed.entry, id);
     report('plugin', loaded.ok, listed.seconds, loaded.detail);
 
-    for (const registry of ['command', 'agent']) {
-      const call = api('GET', `/api/${registry}?${location}`);
-      report(registry, call.code === 0, call.seconds, call.code === 0 ? `${call.json?.data?.length} registered` : call.stderr);
+    const commands = api('GET', `/api/command?${location}`);
+    report('command', commands.code === 0, commands.seconds, commands.code === 0 ? `${commands.json?.data?.length} registered` : commands.stderr);
+
+    const agents = api('GET', `/api/agent?${location}`);
+    if (agents.code === 0) {
+      const ours = agentsVerdict(agents.json?.data, (await readAgents(root)).agents.map((agent) => agent.id));
+      report('agent', ours.ok, agents.seconds, ours.detail);
+    } else {
+      report('agent', false, agents.seconds, agents.stderr);
     }
 
     const again = plugins();

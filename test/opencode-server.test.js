@@ -57,6 +57,8 @@ const FULL = [
   // pre-compact's, on a compaction, before the summary is asked for.
   'session.hook compaction',
   'shell.hook create.before',
+  // The answer that keeps the plugin's own files readable under a strict config.
+  'permission.hook evaluate',
   'agent.transform',
   'command.transform',
   'skill.transform',
@@ -143,7 +145,7 @@ function logOf(t) {
 async function copy(t, files) {
   const dir = await mkdtemp(join(tmpdir(), 'pdkit-entry-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
-  for (const entry of ['opencode', 'lib', 'bin', 'defaults', 'package.json']) {
+  for (const entry of ['opencode', 'lib', 'bin', 'defaults', 'agents', 'package.json']) {
     await cp(join(ROOT, entry), join(dir, entry), { recursive: true });
   }
   for (const [path, content] of Object.entries(files)) {
@@ -186,24 +188,43 @@ describe('the gate comes first', () => {
 
 describe('on a supported Open Code', () => {
   test('hooks, agents, commands and skills are registered after the gate', async (t) => {
-    logOf(t);
+    const log = logOf(t);
     const { ctx, order } = host();
 
     await plugin.setup(ctx);
 
     assert.deepEqual(order, FULL);
+    assert.deepEqual(log(), []);
   });
 
-  // Until the registrars are filled in, loading the plugin must not change
-  // what a session does beyond the hooks — which have nothing to say about
-  // this command, this read, this prompt or this compaction.
-  test('and none of the registrations but the hooks changes anything yet', async (t) => {
+  // The agents' own rules are test/opencode-agents.test.js's; this is that
+  // the transform the entry point registered adds one agent per file and
+  // touches nothing else.
+  test('the agents are the files under agents/', async (t) => {
     logOf(t);
     const { ctx, callbacks } = host();
 
     await plugin.setup(ctx);
 
-    for (const domain of ['agent', 'command', 'skill']) {
+    const files = (await readdir(join(ROOT, 'agents'))).filter((name) => name.endsWith('.md')).sort();
+    assert.equal(files.length, 14);
+    assert.deepEqual(
+      edits(callbacks('agent.transform')).map(({ method, args }) => `${String(method)} ${args[0]}`),
+      files.map((name) => `update ${name.slice(0, -'.md'.length)}`),
+    );
+  });
+
+  // Until the commands' registrar is filled in, loading the plugin must not
+  // change what a session does beyond the hooks and the agents — and the hooks
+  // have nothing to say about this command, this read, this prompt or this
+  // compaction.
+  test('and none of the registrations but the hooks and the agents changes anything yet', async (t) => {
+    logOf(t);
+    const { ctx, callbacks } = host();
+
+    await plugin.setup(ctx);
+
+    for (const domain of ['command', 'skill']) {
       assert.deepEqual(edits(callbacks(`${domain}.transform`)), [], `${domain}.transform edits something`);
     }
     const ran = () => ({ ...shell(), status: 'completed', result: { output: { output: 'ok {\n', exitCode: 0 }, content: [{ type: 'text', text: 'ok {\n' }] } });
@@ -589,6 +610,7 @@ describe('a plugin that cannot load refuses every command', () => {
 
 describe('a registration that fails', () => {
   for (const [what, failing] of [
+    ['access to its own files', 'permission.hook evaluate'],
     ['agents', 'agent.transform'],
     ['commands and skills', 'command.transform'],
     ['hooks', 'tool.hook execute.after'],

@@ -69,12 +69,14 @@ const HOST_EVENTS = {
 /**
  * What setup() registers that is not a point of a hook event: the shell
  * environment, which puts `pdkit` on PATH (opencode/environment.js); the
+ * answer that keeps the plugin's own files readable (opencode/access.js); the
  * registrars of agents, commands and skills; and the bridge's watch on runs
  * that fail or are interrupted, which keeps what subagent-stop remembers
  * right and runs no hook.
  */
 const NOT_A_HOOK = [
   'shell create.before',
+  'permission evaluate',
   'agent transform',
   'command transform',
   'skill transform',
@@ -291,7 +293,7 @@ describe('every event of the table is registered and has a module', () => {
   before(async () => {
     dir = await realpath(await mkdtemp(join(tmpdir(), 'pdkit-wiring-')));
     log = join(dir, 'ran.jsonl');
-    for (const entry of ['opencode', 'lib', 'bin', 'defaults', 'package.json']) {
+    for (const entry of ['opencode', 'lib', 'bin', 'defaults', 'agents', 'package.json']) {
       await cp(join(ROOT, entry), join(dir, 'plugin', entry), { recursive: true });
     }
     for (const module of new Set(Object.values(HOOK_HANDLERS))) {
@@ -386,7 +388,7 @@ describe('an event of the table the bridge cannot place', () => {
   async function loadedWith(t, file, edit) {
     const dir = await mkdtemp(join(tmpdir(), 'pdkit-wiring-'));
     t.after(() => rm(dir, { recursive: true, force: true }));
-    for (const entry of ['opencode', 'lib', 'bin', 'defaults', 'package.json']) {
+    for (const entry of ['opencode', 'lib', 'bin', 'defaults', 'agents', 'package.json']) {
       await cp(join(ROOT, entry), join(dir, entry), { recursive: true });
     }
     const source = await readFile(join(dir, file), 'utf8');

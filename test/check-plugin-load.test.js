@@ -27,7 +27,8 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { findPlugin, minimumOpenCode, verdict } from '../scripts/check-plugin-load.js';
+import { agentsVerdict, findPlugin, minimumOpenCode, verdict } from '../scripts/check-plugin-load.js';
+import { readAgents } from '../opencode/agents.js';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const ID = 'opencode-pdkit';
@@ -113,5 +114,51 @@ describe('the verdict', () => {
 
   test('fails a record without a state', () => {
     assert.equal(verdict({ id: ID, source: { type: 'package' } }, ID).ok, false);
+  });
+});
+
+// The agent registry, as GET /api/agent lists it: Open Code's own agents and
+// the plugin's, each with its ID and mode.
+describe("the plugin's agents", () => {
+  const BUILTIN = ['build', 'general', 'explore', 'compaction', 'title', 'summary', 'plan'].map((id) => ({ id, mode: id === 'build' || id === 'plan' ? 'primary' : 'subagent' }));
+  const listing = (ids, mode = 'subagent') => [...BUILTIN, ...ids.map((id) => ({ id, mode }))];
+
+  test('are the 14 files under agents/', async () => {
+    const { agents, problems } = await readAgents(ROOT);
+
+    assert.equal(agents.length, 14);
+    assert.deepEqual(problems, []);
+  });
+
+  test('pass when every one is listed as a subagent', async () => {
+    const ids = (await readAgents(ROOT)).agents.map((agent) => agent.id);
+
+    assert.deepEqual(agentsVerdict(listing(ids), ids), { ok: true, detail: "21 registered, the plugin's 14 among them as subagents" });
+  });
+
+  test('fail when one is missing, and name it', () => {
+    const result = agentsVerdict(listing(['pd-scout']), ['pd-scout', 'pd-implementer']);
+
+    assert.equal(result.ok, false);
+    assert.match(result.detail, /missing: pd-implementer$/);
+  });
+
+  // Registered without a mode, an agent is a primary one, which a subagent
+  // call refuses to run.
+  test('fail when one is a primary agent, and name it', () => {
+    const result = agentsVerdict([...listing(['pd-scout']), { id: 'pd-implementer', mode: 'primary' }], ['pd-scout', 'pd-implementer']);
+
+    assert.equal(result.ok, false);
+    assert.match(result.detail, /not subagents: pd-implementer$/);
+  });
+
+  // Seven agents is Open Code without the plugin's: the count alone passed that.
+  test('fail on the built-in agents alone', () => {
+    assert.equal(agentsVerdict(BUILTIN, ['pd-scout']).ok, false);
+  });
+
+  test('fail when there is no listing, or nothing to look for', () => {
+    assert.equal(agentsVerdict(undefined, ['pd-scout']).ok, false);
+    assert.equal(agentsVerdict(BUILTIN, []).ok, false);
   });
 });

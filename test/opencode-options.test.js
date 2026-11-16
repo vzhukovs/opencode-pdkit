@@ -24,7 +24,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { readOptions } from '../opencode/options.js';
+import { modelRef, readOptions } from '../opencode/options.js';
 
 describe('the models setting', () => {
   test('keeps every entry whose value is a string', () => {
@@ -86,4 +86,31 @@ describe('the options object', () => {
     assert.ok(Object.isFrozen(settings.models));
     assert.ok(Object.isFrozen(settings.dropped));
   });
+});
+
+// The grammar of Open Code's own config (Config.ModelSelection): a value pdkit
+// takes is one `agents.<id>.model` would take, and the other way round.
+describe('a model', () => {
+  for (const [text, model] of [
+    ['openai/gpt-6.1-terra#high', { providerID: 'openai', id: 'gpt-6.1-terra', variant: 'high' }],
+    ['claude-agent/claude-sonnet-5', { providerID: 'claude-agent', id: 'claude-sonnet-5' }],
+    // A model ID may hold slashes of its own; the provider may not.
+    ['openrouter/anthropic/claude-x#low', { providerID: 'openrouter', id: 'anthropic/claude-x', variant: 'low' }],
+  ]) {
+    test(`reads ${text}`, () => {
+      assert.deepEqual(modelRef(text), model);
+    });
+  }
+
+  test('has no variant key when it names none', () => {
+    assert.equal(Object.hasOwn(modelRef('a/b'), 'variant'), false);
+  });
+
+  // A Claude Code alias first of all: written as it was under Claude Code,
+  // it names no provider.
+  for (const text of ['sonnet', 'opus', '', 'openai', 'openai/', '/gpt-5', 'openai/gpt-5#', 'openai/gpt-5#high#low', 'a#b/c', '#x', 42, null, undefined, {}]) {
+    test(`is not ${JSON.stringify(text)}`, () => {
+      assert.equal(modelRef(text), undefined);
+    });
+  }
 });

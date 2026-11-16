@@ -483,7 +483,7 @@ describe('when it runs', () => {
 async function broken(t, files, options) {
   const dir = await mkdtemp(join(tmpdir(), 'pdkit-session-start-plugin-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
-  for (const entry of ['opencode', 'lib', 'bin', 'defaults', 'package.json']) {
+  for (const entry of ['opencode', 'lib', 'bin', 'defaults', 'agents', 'package.json']) {
     await cp(join(ROOT, entry), join(dir, entry), { recursive: true });
   }
   for (const [path, change] of Object.entries(files)) {
