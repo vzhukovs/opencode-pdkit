@@ -1,3 +1,5 @@
+Work in progress: Open Code port of podman-desktop-kit
+
 # Podman Desktop Kit
 
 A Claude Code plugin for working upstream issues in
