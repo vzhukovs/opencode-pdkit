@@ -1,13 +1,36 @@
 {
-  "name": "podman-desktop-kit",
+  "name": "opencode-pdkit",
   "version": "0.15.0",
-  "private": true,
   "type": "module",
-  "description": "Workflow kit for working upstream issues in podman-desktop.",
+  "description": "Podman Desktop Kit for OpenCode: a workflow kit for working upstream issues in podman-desktop.",
+  "keywords": [
+    "podman-desktop",
+    "opencode",
+    "workflow"
+  ],
   "license": "Apache-2.0",
   "author": "Vladyslav Zhukovskyi",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vzhukovs/opencode-pdkit.git"
+  },
+  "exports": {
+    ".": "./opencode/server.js"
+  },
+  "files": [
+    "opencode/",
+    "bin/",
+    "lib/",
+    "agents/",
+    "skills/",
+    "knowledge/",
+    "templates/",
+    "defaults/",
+    "hooks/"
+  ],
   "engines": {
-    "node": ">=22"
+    "node": ">=22",
+    "opencode": ">=2.3.0"
   },
   "scripts": {
     "test": "node --import ./test/helpers/isolate-home.js --test \"test/*.test.js\""

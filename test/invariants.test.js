@@ -892,6 +892,14 @@ describe('licensing', () => {
     assert.deepEqual(missing, []);
   });
 
+  test('and so does every module of the Open Code server part', async () => {
+    const missing = (await modules(join(ROOT, 'opencode'), 'opencode'))
+      .filter((module) => !module.source.startsWith(HEADER))
+      .map((module) => module.name);
+
+    assert.deepEqual(missing, []);
+  });
+
   test('the entry point carries it under the shebang', async () => {
     const source = await readFile(join(ROOT, 'bin', 'pdkit'), 'utf8');
 
