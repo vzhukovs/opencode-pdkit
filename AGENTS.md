@@ -1,12 +1,12 @@
-# podman-desktop-kit
+# opencode-pdkit
 
-A Claude Code plugin (`pd`) for working upstream issues in podman-desktop.
+An Open Code plugin (`opencode-pdkit`) for working upstream issues in podman-desktop.
 Zero-dependency ESM on Node >= 22, no build: `lib/` is what runs. The plugin
 works on **somebody else's** repository, and most rules below follow from that.
 
-Read before changing anything: [`CONTRIBUTING.md`](../CONTRIBUTING.md) (where code
+Read before changing anything: [`CONTRIBUTING.md`](CONTRIBUTING.md) (where code
 goes, how to add a command, check, state, skill or agent) and
-[section 2.2 of the specification](../docs/specification/02-plugin-structure.md#22-state-outside-the-repository)
+[section 2.2 of the specification](docs/specification/02-plugin-structure.md#22-state-outside-the-repository)
 (the invariants a change must not break). This file does not repeat them; it
 lists what has gone wrong more than once.
 
@@ -15,8 +15,10 @@ lists what has gone wrong more than once.
 ```bash
 npm test                                                                  # whole suite
 node --import ./test/helpers/isolate-home.js --test test/<module>.test.js # one file
-claude plugin validate . --strict                                         # manifest
+# TODO(T3.6): plugin load check; Open Code has no `claude plugin validate`
 pdkit doctor --gate-selftest --repo <podman-desktop fork>                 # after lib/hooks/, hooks/hooks.json, bin/pdkit
+# TODO(T7.7): the self-test still runs the hook that hooks/hooks.json registers;
+# it moves to the Open Code bridge, and hooks/hooks.json goes
 ```
 
 Never run a test without `--import ./test/helpers/isolate-home.js`: without it a
@@ -76,9 +78,17 @@ Do not reopen a split the round-2 review rejected without new facts.
 - **Collect facts, reach no verdict.** What must be *true* goes in `lib/` with a
   test; what needs *judgement* goes in `skills/` or `agents/`. No `score` or
   `recommendation` fields in `lib/`.
+- **Writes upstream go through the gate.** `git push` and `gh pr create` only
+  with a `push` token for the branch, review replies only with a `reply` token
+  for the PR, the issue tracker never. `pre-bash` fails closed — a handler that
+  cannot decide denies — and every other hook fails open. The rules are in
+  [section 6 of the specification](docs/specification/06-hooks.md).
 - **Plugin files from prompts go through `${CLAUDE_PLUGIN_ROOT}/`.** Skills and
   subagents run in the podman-desktop checkout, so a bare `knowledge/x.md`
-  resolves against the wrong repository.
+  resolves against the wrong repository. TODO(T6.A): Open Code has no such
+  variable; the plugin substitutes its root when it registers agents (T5.A),
+  commands and skills (T6.B). Whether the token keeps this name is open until
+  T6.A; `test/invariants.test.js` holds it until then.
 - **A skip is never a pass**, and a message is never wider than what was
   measured.
 - **Comments say why, and must stay true.** When code moves, update or remove
@@ -96,7 +106,19 @@ Do not reopen a split the round-2 review rejected without new facts.
 ## Commits and releases
 
 - Conventional commits, `type(scope): subject`; the body says why.
+- History starts at a snapshot of podman-desktop-kit 0.15.0: the why behind
+  code up to 0.15.0 is in the commit messages of `vzhukovs/podman-desktop-kit`.
+  To read it with `git log` and `git blame` here, graft it locally (never push
+  `refs/replace/`):
+
+  ```bash
+  git fetch --no-tags https://github.com/vzhukovs/podman-desktop-kit.git \
+    refs/heads/main:refs/remotes/cc/main
+  git replace --graft "$(git rev-list --max-parents=0 HEAD)" \
+    d9805347f7e61d06d0651644c0a6bfe5d5bf7972
+  ```
+
 - User-visible change → `CHANGELOG.md` under `## [Unreleased]`.
 - Squash with `git reset --soft <base> && git commit`, never `git rebase -i`.
-- Release only per [`RELEASING.md`](../RELEASING.md): push the release commit,
+- Release only per [`RELEASING.md`](RELEASING.md): push the release commit,
   wait for CI to be green on every OS, only then tag and publish.
