@@ -1,0 +1,69 @@
+---
+name: preflight
+description: "Run the deterministic gates and report pass or fail."
+argument-hint: "<issue-number>"
+disable-model-invocation: true
+model: sonnet
+effort: medium
+---
+
+Runs `pdkit preflight` and presents the report. The checks decide; this skill
+reports and, where a failure is unambiguous, offers to fix it.
+
+## Steps
+
+1. `pdkit preflight <issue>` — the full set. It runs the repository's real
+   test, lint and typecheck scripts, so it takes minutes on podman-desktop.
+2. Once a PR body exists: `pdkit preflight <issue> --body-only --body <file>`,
+   or `--body-from-pr <k>` when the pull request is already open and its body
+   on GitHub is the one to judge. Eight checks read the body, and re-running the whole suite to re-read a
+   paragraph is minutes of nothing.
+3. Present the report as it came. Show the `remedy` line for every failure —
+   it is where the check says what to do.
+
+## Discipline
+
+**Do not interpret a failure into a pass.** Not "this looks like a flake", not
+"this is pre-existing", not "unrelated to our change". If it is any of those,
+that is a finding to report, not a reason to move on.
+
+**Do not re-run a check until it happens to succeed.** A check that passes on
+the third run is a flake, and a flake found here is worth more than a green
+report — it is the one thing you can still cheaply investigate.
+
+**A skip is not a pass.** Read the reason. `steps-to-check` skipping because
+no body exists yet means that check has not run at all, and the second pass is
+what makes it real.
+
+**`working-tree` red stops everything.** While the tree is dirty the file
+checks read the commit and the command checks read the disk, so nothing else
+in the report means what it says.
+
+## What you may fix without asking
+
+Lint failures that `lint:fix` resolves, and a missing SPDX header — the check
+prints the exact block. Re-run afterwards.
+
+Everything else goes back to the user with the output attached.
+
+## The run is kept, and it is what the next state is made of
+
+Every run is written to `preflight.json` under the issue — green or red, both
+passes — and `pdkit state <n> --to preflight-green` reads it rather than taking
+your word. It asks three things: the checks ran on **this** commit, none that
+blocks is failing, and the four that read the pull request body have seen one.
+
+So the two passes are not ceremony. The first, without a body, leaves those four
+having judged nothing; `--body-only --body <file>` is what completes them. Until
+it does, the transition refuses and the gate cannot open.
+
+## Next
+
+`/pd:pr <issue> [slice]` — green preflight is what the push gate is issued from,
+and nothing else is.
+
+**In a new session.** What this run proved is in `preflight.json`, which is what
+`pdkit state --to preflight-green` reads; the test and lint output that scrolled
+past here is not, and does not need to be. Kept in context, it is re-read on
+every turn of `/pd:pr` — including step 6, where a person reads the push
+command. `pdkit next <issue>` prints the line.

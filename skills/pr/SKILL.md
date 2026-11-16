@@ -1,0 +1,282 @@
+---
+name: pr
+description: "Create branches and pull requests. The only command that writes to GitHub."
+argument-hint: "<issue-number> [slice]"
+disable-model-invocation: true
+model: sonnet
+effort: medium
+---
+
+The only command in this plugin that writes to someone else's repository.
+Order matters and is not negotiable.
+
+## Sliced or single
+
+`pdkit slice show --issue <n>` says which this is.
+
+**With a graph**, the whole of what follows runs once per slice, in merge
+order, and finishes each slice before starting the next — including the human
+confirmation. Collecting three bodies and asking once turns the gate into the
+reflex it exists to prevent. The token is per branch for the same reason.
+
+Step 1 becomes `pdkit slice materialize --issue <n> --slice <i> --subject
+"<type>(<scope>): <description>"`, which cuts the branch from the slice's base,
+applies the slice and makes the single commit — no squash needed, and the
+working branch is left where it was. Steps 3, 5 and 6 take `--slice <i>`, or infer
+it from the branch you are standing on.
+
+**A slice with `commits`** (`pdkit slice show` lists them) is materialized
+without `--subject`: it makes one commit per group, in order, under the
+subjects the graph holds. Skip step 2 — squashing would undo the one thing the
+commits are for, which is that a reviewer reads main, preload and renderer
+apart. The pull request's title takes every scope the commits have, in their
+order: `refactor(main,preload,renderer): <description>`. commitlint accepts the
+comma-separated scope.
+
+**A slice that `supersedes` pull requests** (made by `pdkit slice join`) opens a
+new one. Its body says in `What does this PR do?`, in one sentence, which pull
+requests it replaces and why: "Replaces #A, #B and #C, which only worked
+merged together." Closing those is `/pd:pr-sync`'s job, after this one is open.
+
+**Without one**, it runs once, as below.
+
+## Steps
+
+1. **Branch.** `pdkit branch create --issue <n> --slug <slug>`. Idempotent —
+   re-running after a preflight failure is the normal case.
+
+2. **Squash.** `git reset --soft <base> && git commit`. Never `rebase -i`: the
+   husky `commit-msg` hook appends `Signed-off-by` to a message that already
+   carries one from the commits being squashed, then rejects the duplicate it
+   just created. This surprises everybody exactly once.
+
+3. **Preflight, pass one.** `pdkit preflight <n>`. Runs the repository's real
+   test, lint and typecheck scripts — minutes, not seconds. Red stops
+   everything. Note what `ci-blind-spots` reports: it decides whether `Notes
+   for reviewers` is mandatory.
+
+   `maintainer-rules` fails on a rule from
+   `${CLAUDE_PLUGIN_ROOT}/knowledge/maintainer-rules.md` that has no
+   exception. The code changes; there is no way to wave a hit through. Its
+   warnings are rules with a condition of their own, and step 5 rules on each.
+
+   On a slice this also reads the stored verification, and fails if the branch
+   has drifted from what was verified. Re-verify rather than arguing with it:
+   that check is the only thing standing between "verified" and "was verified
+   once".
+
+4. **Body.** `pdkit render prBody --issue <n> --values <f> --strip-comments`.
+   Write it to a file. The four upstream headings are not ours to rearrange —
+   a podman-desktop reviewer scans for their own.
+
+   **The body is for the reviewer; the record is for us.** Anything needed only
+   to service this pull request — R-IDs, the requirement trace, the review
+   history, the reasoning that produced the change — lives in the plan and in
+   `$PDKIT_HOME/issues/<n>/prs/<k>.md`, and is not published. Reviewers have
+   asked for exactly this, and named the part to drop: the list of changes
+   per file.
+
+   Budgets, in characters, which `pr-body-size` measures and does not enforce:
+
+   | Section | Budget |
+   |---|---|
+   | `What does this PR do?` | 600 — two to four sentences |
+   | `Where to look` | 300 — and what to skip |
+   | `Not in this PR` | 120 — one line |
+   | `Screenshot / video of UI` | 200 |
+   | `What issues does this PR fix or reference?` | 200 |
+   | `Notes for reviewers` | 400 |
+   | `How to test this PR?` | **none — do not shorten this one** |
+
+   - `Closes #<n>` in the last slice to merge, `Part of #<n>` in the rest;
+     on the quickfix route, a single `Fixes #<n>`. **No requirement table** —
+     R-IDs say nothing to somebody who has the issue and the diff, and the
+     trace they carry is already in the record.
+   - `Not in this PR`: on a sliced issue, name the slices the rest went to, by
+     branch — that is what stops a reviewer looking for the other half. On a
+     single pull request, one clause saying there is no other half.
+   - **No merge order between slices the graph calls independent.** "Merge #A →
+     #B → #C" is a dependency the graph does not have, and main is broken
+     between those merges; `merge-order` fails the body that says it. If the
+     order is real, the cut is wrong: go back to `/pd:slice`. A stacked slice
+     names the slice it stands on, and that is the only order a body states.
+   - `Steps to check`: at least three numbered steps, each with an expected
+     result. Preflight enforces this, including on quickfix. **This is the
+     section to be generous with**: commands to paste, fixtures to create,
+     what should come back, and the cleanup afterwards.
+   - `Notes for reviewers`: mandatory when preflight flagged something CI
+     cannot judge, and then only that plus the platform you checked on. Not the
+     review history, not residual risks, not behavior nuance nobody can act on.
+
+5. **Self-review: upstream's review agent, run by us first.** Every pull
+   request upstream is read by a review agent built from the maintainer's
+   rules. It reads the title and the body first, then every changed file,
+   section by section. Run the same reading now, on exactly what is about to
+   be published:
+
+   ```
+   pdkit self-review target --issue <n> [--slice <i>]
+   ```
+
+   It prints the diff and the commit that preflight will check. Then:
+
+   - the four `pd-review-*` axes, in parallel. Each gets the diff command, the
+     changed files, the title, the body file and the issue's text, and is told
+     this is our own pull request before publishing, so there are no threads.
+     Together they cover all twelve sections of the rules;
+   - `pd-review-synth` on the four reports. It calibrates as the maintainer's
+     agent does and ends with the findings as JSON;
+   - `pdkit self-review record --issue <n> [--slice <i>] --findings <f.json>
+     --body <file>`.
+
+   Then act on what was found. **Arguing is not one of the options:**
+
+   - `issue:` and `nit:` on code this branch wrote: fix the code. On a single
+     pull request, fix it on the branch, squash again (step 2) and go back to
+     step 3. On a slice, fix it on the working branch the slices are cut from,
+     verify the slice again (`/pd:slice`), rebuild its branch with `pdkit slice
+     materialize --force`, and go back to step 3. Either way the commit has
+     changed, so pass one, the review and the record all run again;
+   - a finding about the title or the body: fix the text, then review and
+     record again. The body is part of what was reviewed;
+   - `question:`: answer it in `Notes for reviewers` or by changing the code,
+     and put the answer in the finding's `answer` field when recording;
+   - `nit:` marked pre-existing: leave it. Fixing it here is the drive-by
+     change that section 1 rejects;
+   - a finding that looks wrong goes back to the axis that raised it, as a
+     question with the code that answers it. If the axis keeps it, it is
+     fixed.
+
+   **Never edit the findings to make the record clean.** The record is what
+   the review said. The `self-review` check in pass two fails unless that
+   record is for this commit and this body, with nothing open. A green pass
+   two therefore means the review ran clean on what is about to be pushed.
+
+6. **Preflight, pass two.** `pdkit preflight <n> --body-only --body <file>`.
+   The body-dependent checks could only skip on pass one; the command says how
+   many there are. **Green here is what the gate is issued from** — pass one
+   alone is not enough.
+
+7. **Show the user, and stop.** The exact push command, the exact branch, and
+   the full body as it will appear. Not a summary of it: the gate exists so a
+   human reads the thing being published, and a summary defeats that as
+   thoroughly as no gate at all.
+
+8. **Wait for explicit confirmation in this same turn.** Not implied by an
+   earlier "go ahead", not carried from another slice. Confirmation for slice
+   #1 is not confirmation for #2 — the token is issued per branch.
+
+9. **Then, and only then:**
+
+   ```
+   pdkit publish --issue <n> --branch <b> --title <t> --body <file> [--slice <i>]
+   ```
+
+   It is these four, in this order, and stops at the first that refuses:
+
+   ```
+   pdkit state <n> --to preflight-green    # from quickfix or slices-approved
+   pdkit gate open --issue <n> --branch <b>
+   git push origin <b>
+   pdkit pr create --issue <n> --branch <b> --title <t> --body <file>
+   ```
+
+   `publish` asks nothing and is not consent: steps 7 and 8 are, and they come
+   first. It has no flag to skip preflight, force a push or stretch the token,
+   and none is coming — if one seems needed, say so rather than working around
+   it. The four commands still work alone; use them when `publish` stopped
+   partway and told you which one is left.
+
+   If it stops after the push — `IS PUSHED … NOT opened` — the branch is public
+   and the token is half spent. Do not push again; run the `pdkit pr create` it
+   prints. If the push itself failed, nothing was published: show the person
+   why, and after they confirm again run the same `publish`, which re-reads the
+   preflight record for the commit now checked out.
+
+   **One token covers those two writes**, once each: the push spends half, and
+   the pull request the push exists for spends the rest. That is one reading —
+   the body and the branch you just showed — rather than two confirmations, and
+   the second one would have arrived after the branch was already public.
+
+   The order is fixed and not symmetric. Opening the pull request spends the
+   token whole, so a push may come before it and never after: new commits on a
+   branch already under review are their own publication and need their own
+   token.
+
+   `pdkit state <n> --to preflight-green` is **earned, not asserted**. It reads
+   what `pdkit preflight` wrote — for this commit, with every check green and
+   the body-dependent checks having actually seen a body. If it refuses, the
+   answer is a preflight run, never a different way of setting the state.
+
+   `pdkit pr create` verifies and spends the token itself, and so does
+   `publish` for its push — the hook never sees a push that `publish` runs. If
+   you open the PR any other way, do it after `gate open` and expect the hook to
+   spend the token on the `gh` call.
+
+   On a stacked slice the pull request opens against **its base branch**, not
+   `main` — `publish` and `pdkit pr create` take it from the graph, so there is
+   nothing to pass. `publish` checks that base before it pushes. Against `main` the diff would carry the previous slice's work, and the
+   reviewer would be reading two changes believing they are one.
+
+   **From a fork, that base usually does not exist.** The base of a pull
+   request is a branch of the repository it opens against, and a slice branch
+   lives in your fork — so a stack is only expressible when the branches and
+   the pull requests share a repository. `pdkit pr create` checks upstream for
+   the base and refuses before the token is spent when it is not there. Two
+   honest ways past it, and neither is a different spelling of the command:
+
+   - **Wait.** Merge the slice below, then open this one. Cleanest, and free if
+     the review is not urgent.
+   - **`--base main` (on `publish` or `pr create`), and say so in the body.** The diff will carry the other
+     slice until it lands. Then "Not in this PR" has to state that in the first
+     line, name the pull request it depends on, and list the files this one
+     actually adds — otherwise the body describes a diff the reviewer is not
+     looking at.
+
+   `pdkit slice set` warns about this at the cut, which is the last point where
+   choosing independence is still cheap.
+
+   Then start the next slice at step 1. The issue returns to
+   `preflight-green` for each; an issue with three slices passes through that
+   state three times.
+
+## What the gate will refuse, and why arguing with it is wrong
+
+- No token → the push is blocked. Ask, do not rephrase the command.
+- A token for another branch → blocked. That is the point of one token per
+  branch.
+- An expired token → blocked. Ten minutes, so consent cannot be accumulated.
+- `--force` without `--force-with-lease` → blocked always, token or not.
+
+If a refusal looks wrong, `pdkit doctor --gate-selftest` answers whether the
+gate is working. A refusal that is genuinely wrong is a bug worth a report;
+working around it by spelling the command differently is not a fix, and the
+parser was written for exactly that attempt.
+
+## Step 7 does not compress
+
+The one failure mode this whole design cannot prevent is a human pressing yes
+without reading. It is mitigated by showing something worth reading — the
+actual body, the actual branch — and by a TTL short enough that consent cannot
+be banked. Printing "ready to push?" instead would hand that mitigation back.
+
+## When the phase runs long
+
+`budget.turns.pr` is the ceiling — approximate, because nothing counts turns
+and you cannot either. Steps 1 to 6 leave their results on disk: the branch,
+the squashed commit, the body file, `self-review.json`, `preflight.json`. Past
+the ceiling before step 7, stop there and ask for a restart; the new session
+picks up at the step that has no result yet. Step 7 is better shown at the start of a session than
+at the end of a long one.
+
+## Next
+
+`/pd:pr-status` — CI, review and idleness across every open pull request. When a
+reviewer answers, `/pd:pr-sync <pr>`.
+
+**Each in a new session**, and this is the boundary that matters most. On the
+issues measured, `pr` and `pr-sync` were a third to over half of what a whole
+cycle cost, because they ran at the end of the session that had done everything
+else and re-read all of it on every turn. A review answer arrives days later.
+Nothing from this session needs to be in context then: `prs.json` and
+`prs/<k>.md` are. `pdkit next <issue>` prints the line.

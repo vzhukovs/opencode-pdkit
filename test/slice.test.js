@@ -1,0 +1,1608 @@
+/**********************************************************************
+ * Copyright (C) 2026 Red Hat, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ ***********************************************************************/
+
+// Contract for lib/slice.js — the graph half.
+//
+// What is defended here is that the mechanical refusals actually refuse. Every
+// rule in build() exists because the shape it rejects produces a pull request
+// that cannot be reviewed, merged or reverted on its own, and every one of them
+// is the kind of set arithmetic a model can get subtly wrong while sounding
+// certain. If these tests pass, the slicer is free to spend its judgment on
+// the question no grep answers: whether the slice justifies itself at all.
+
+import { test, describe, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { basename, join } from 'node:path';
+
+import { approvablePlan } from './helpers/approvable-plan.js';
+import { cleanup, commitAll, git, initRepo, packageMap, seedWorkspace, writeFiles, writeTask } from './helpers/repo-fixture.js';
+import { issueDir } from '../lib/config.js';
+import { validateReceipt } from '../lib/evidence.js';
+import * as ids from '../lib/ids.js';
+import { fetchPullRequestHead } from '../lib/repo.js';
+import * as slice from '../lib/slice.js';
+import * as state from '../lib/state.js';
+
+const ISSUE = 4242;
+
+const CONFIG = {
+  // npm rather than pnpm: the fixture's scripts are plain node, and the
+  // verification has to actually run them.
+  repo: { base_branch: 'main', package_manager: 'npm' },
+  branches: { single: 'DESKTOP-{issue}/{slug}', sliced: 'DESKTOP-{issue}/{index}-{slug}' },
+  slicing: {
+    strategy: 'prefer-independent',
+    max_files_per_slice: 12,
+    layer_order: ['extension-api', 'main', 'ui', 'tests'],
+    // Installing is covered in the worktree suite; here it would be minutes of
+    // npm for a workspace with no dependencies.
+    verify: { worktree: 'reuse', install: 'never' },
+  },
+  worktrees: { root: null, copy_files: [] },
+};
+
+const API = 'packages/extension-api/src/api.ts';
+const EXEC = 'packages/main/src/exec.ts';
+const THEME = 'packages/ui/src/theme.ts';
+const SPEC = 'tests/playwright/theme.spec.ts';
+
+let repo;
+let home;
+let trees;
+let collected;
+
+/** @returns {object} CONFIG with the worktree root pointing beside the fixture */
+function config() {
+  return { ...CONFIG, worktrees: { ...CONFIG.worktrees, root: trees } };
+}
+
+/**
+ * @param {string} id
+ * @param {string[]} satisfies
+ * @param {string[]} owns
+ */
+function task(id, satisfies, owns) {
+  return writeTask({ home, issue: ISSUE, id, satisfies, owns });
+}
+
+before(async () => {
+  repo = await initRepo('pdkit-slice-');
+  home = await initRepo('pdkit-slice-home-');
+  trees = join(repo, '..', `${basename(repo)}-trees`);
+
+  await seedWorkspace(repo);
+  await commitAll(repo, 'chore: seed');
+
+  await git(['checkout', '-b', `DESKTOP-${ISSUE}/work`], repo);
+  await writeFiles(repo, {
+    [API]: '// SPDX-License-Identifier: Apache-2.0\nexport const version = 1;\nexport interface RunOptions { env?: string }\n',
+    [EXEC]: '// SPDX-License-Identifier: Apache-2.0\nimport type { RunOptions } from "@fixture/api";\nexport function exec(_options: RunOptions) {}\n',
+    [THEME]: '// SPDX-License-Identifier: Apache-2.0\nexport const theme = "high-contrast";\n',
+    [SPEC]: '// SPDX-License-Identifier: Apache-2.0\n// contrast smoke test\n',
+  });
+  await commitAll(repo, 'feat: the whole change set');
+
+  await state.transition(ISSUE, 'triaged', { home });
+  await state.transition(ISSUE, 'planned', { home });
+  for (let i = 0; i < 4; i += 1) await ids.allocateRequirement(ISSUE, { home });
+  await ids.freezeRequirements(ISSUE, { home });
+
+  await task('T1', ['R1'], [API]);
+  await task('T2', ['R2'], [EXEC]);
+  await task('T3', ['R3', 'R4'], ['packages/ui/**', 'tests/playwright/**']);
+
+  collected = await slice.facts({ issue: ISSUE, repoRoot: repo, home, config: CONFIG, packageMap: packageMap(repo) });
+});
+
+after(async () => {
+  await cleanup(repo, home, trees);
+});
+
+/**
+ * @param {Array<object>} slices
+ * @param {object} [extra]
+ */
+function proposal(slices, extra = {}) {
+  return { strategy: 'prefer-independent', slices, ...extra };
+}
+
+/**
+ * @param {object} input
+ */
+function build(input) {
+  return slice.build({ issue: ISSUE, facts: collected, config: CONFIG, ...input });
+}
+
+/** The graph the rest of the suite treats as correct. */
+const GOOD = [
+  { slug: 'extension-api-run-options', title: 'add RunOptions', files: [API], baseSlice: null },
+  { slug: 'main-exec-plumbing', title: 'thread RunOptions', files: [EXEC], baseSlice: 1 },
+  { slug: 'ui-contrast', title: 'high contrast', files: [THEME, SPEC], baseSlice: null },
+];
+
+describe('facts', () => {
+  test('maps every changed file to its package, layer, tasks and R-IDs', () => {
+    const byPath = new Map(collected.files.map((file) => [file.path, file]));
+
+    assert.deepEqual(byPath.get(API), { path: API, status: 'M', package: '@fixture/api', layer: 'extension-api', tasks: ['T1'], requirements: ['R1'], channels: [] });
+    assert.deepEqual(byPath.get(SPEC).requirements, ['R3', 'R4']);
+    assert.equal(byPath.get(SPEC).layer, 'tests');
+    assert.equal(byPath.get(SPEC).status, 'A');
+  });
+
+  test('carries the frozen requirement set and the route', () => {
+    assert.deepEqual(collected.requirements, ['R1', 'R2', 'R3', 'R4']);
+    assert.equal(collected.route, 'standard');
+  });
+});
+
+// The whole-suite gate, and the graph it refused. On 18835 T8 was a task that
+// writes nothing by design — a typecheck, the tests and the linters over the
+// whole tree — and it was the only task claiming R7, R8 and R15. Requirements
+// reach a slice through the files of the tasks that claim them, so those three
+// reached none, and `slice set` refused a one-slice graph in which nothing had
+// been forgotten. The workaround was to spread the three R-IDs over the seven
+// tasks that do write files, which is a sentence about the plan rather than
+// about the work.
+describe('a task that owns no files', () => {
+  const GATE = 4343;
+  let gated;
+
+  before(async () => {
+    await state.transition(GATE, 'triaged', { home });
+    await state.transition(GATE, 'planned', { home });
+    for (let i = 0; i < 5; i += 1) await ids.allocateRequirement(GATE, { home });
+    await ids.freezeRequirements(GATE, { home });
+
+    await writeTask({ home, issue: GATE, id: 'T1', satisfies: ['R1'], owns: [API] });
+    await writeTask({ home, issue: GATE, id: 'T2', satisfies: ['R2'], owns: [EXEC] });
+    await writeTask({ home, issue: GATE, id: 'T3', satisfies: ['R3', 'R4'], owns: ['packages/ui/**', 'tests/playwright/**'] });
+    await writeTask({ home, issue: GATE, id: 'T4', satisfies: ['R5'], owns: '(none — verification only, writes no files)' });
+
+    gated = await slice.facts({
+      issue: GATE,
+      repoRoot: repo,
+      base: 'main',
+      ref: `DESKTOP-${ISSUE}/work`,
+      home,
+      config: CONFIG,
+      packageMap: packageMap(repo),
+    });
+  });
+
+  test('its requirements belong to the whole tree, because they reach no file', () => {
+    assert.deepEqual(gated.wholeTree, ['R5']);
+    assert.equal(
+      gated.files.every((file) => !file.requirements.includes('R5')),
+      true,
+      'R5 has no file of its own — that is the reason it needs collecting',
+    );
+  });
+
+  test('every slice carries them, so a requirement only the gate claims still reaches a pull request', () => {
+    const result = slice.build({ issue: GATE, facts: gated, config: CONFIG, proposal: proposal(GOOD) });
+
+    assert.equal(result.ok, true, JSON.stringify(result.problems));
+    for (const entry of result.graph.slices) {
+      assert.ok(entry.requirements.includes('R5'), `slice #${entry.index} dropped the whole-tree requirement`);
+    }
+    // And the file-borne ones are still exactly the file-borne ones.
+    assert.deepEqual(result.graph.slices[0].requirements, ['R1', 'R5']);
+  });
+
+  // The ownership that produced all of this: prose where paths go. Split on its
+  // comma it became two entries, `owns` was not empty, and nothing downstream
+  // could tell the phrases from files.
+  test('the sentence in its Owns section is stored as no files at all', async () => {
+    const parsed = await readFile(join(home, 'issues', String(GATE), 'tasks', 'T4.md'), 'utf8');
+
+    assert.match(parsed, /\(none — verification only, writes no files\)/);
+    assert.deepEqual(gated.files.flatMap((file) => file.tasks).includes('T4'), false, 'a verification task claims no file');
+  });
+});
+
+describe('draft', () => {
+  test('groups by layer, in merge order', () => {
+    const drafted = slice.draft(collected);
+
+    assert.deepEqual(
+      drafted.slices.map((entry) => entry.files),
+      [[API], [EXEC], [THEME], [SPEC]],
+    );
+  });
+});
+
+// DESKTOP-19818: the plan said one slice, because a signature change across
+// main, preload and renderer has no subset that stands alone. The plan critic
+// agreed. The slicer never read the plan and cut three pull requests by layer,
+// and upstream rejected them for the reason the plan had given.
+describe('the plan slice hypothesis', () => {
+  const ONE = { count: 1, text: 'One slice, one PR: the signature change crosses main and ui, so no subset typechecks alone.' };
+  const facts = (hypothesis) => ({ ...collected, hypothesis });
+
+  test('facts read it from the plan, count and reasoning both', async () => {
+    const other = ISSUE + 7;
+    await state.transition(other, 'triaged', { home });
+    await mkdir(issueDir(home, other), { recursive: true });
+    await writeFile(
+      join(issueDir(home, other), 'plan.md'),
+      `# PLAN: DESKTOP-${other}\n\n- Requirements: R1 (frozen on approval)\n- Slice hypothesis: 1 slices\n\n## Slice hypothesis\n${ONE.text}\n`,
+    );
+
+    const read = await slice.facts({ issue: other, repoRoot: repo, home, config: CONFIG, packageMap: packageMap(repo) });
+    assert.deepEqual(read.hypothesis, ONE);
+  });
+
+  test('an issue with no plan has no hypothesis, and nothing is held to one', () => {
+    assert.equal(collected.hypothesis, null);
+    assert.equal(build({ proposal: proposal(GOOD) }).ok, true);
+  });
+
+  test('more slices than the plan said is refused without a reason, and the refusal quotes the plan', () => {
+    const result = slice.build({ issue: ISSUE, facts: facts(ONE), config: CONFIG, proposal: proposal(GOOD) });
+
+    assert.equal(result.ok, false);
+    const refusal = result.problems.find((problem) => problem.check === 'hypothesis');
+    assert.match(refusal.detail, /hypothesis is 1 slice and this proposal has 3/);
+    assert.match(refusal.detail, /no subset typechecks alone/);
+    assert.match(refusal.detail, /whyDeviates/);
+  });
+
+  test('with a reason it is stored, warned about, and reaches slices.md', () => {
+    const result = slice.build({
+      issue: ISSUE,
+      facts: facts(ONE),
+      config: CONFIG,
+      proposal: proposal(GOOD, { whyDeviates: 'the ui half turned out not to touch the API' }),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result.problems));
+    assert.match(result.warnings.find((warning) => warning.check === 'hypothesis').detail, /3 slices where the plan said 1 slice/);
+    assert.deepEqual(result.graph.hypothesis, { count: 1, deviation: 'the ui half turned out not to touch the API' });
+    assert.match(slice.renderValues(result.graph).hypothesis, /1 slice — the graph has 3, because: the ui half/);
+  });
+
+  test('fewer slices than planned is a warning, not a refusal', () => {
+    const result = slice.build({
+      issue: ISSUE,
+      facts: facts({ count: 4, text: '' }),
+      config: CONFIG,
+      proposal: proposal(GOOD),
+    });
+
+    assert.equal(result.ok, true);
+    assert.ok(result.warnings.some((warning) => warning.check === 'hypothesis'));
+  });
+
+  test('a graph that matches the plan says so', () => {
+    const result = slice.build({ issue: ISSUE, facts: facts({ count: 3, text: '' }), config: CONFIG, proposal: proposal(GOOD) });
+
+    assert.equal(result.ok, true, JSON.stringify(result.problems));
+    assert.equal(slice.hypothesisText(result.graph), '3 slices — the graph matches');
+  });
+});
+
+// The same issue, other half: "merge #19829 → #19830 → #19831" went into three
+// PR bodies about slices the graph called independent. The arrow came from
+// here, which printed index order as though it were a merge order.
+describe('mergeOrderText', () => {
+  test('independent slices have no order, and the text says so', () => {
+    const graph = build({ proposal: proposal(GOOD.map((entry) => ({ ...entry, baseSlice: null }))) }).graph;
+    assert.match(slice.mergeOrderText(graph), /^any order — no slice is based on another/);
+    assert.doesNotMatch(slice.mergeOrderText(graph), /→/);
+  });
+
+  test('a stack is an order, and is printed as one', () => {
+    const graph = build({ proposal: proposal(GOOD) }).graph;
+    assert.equal(slice.mergeOrderText(graph), '#1 → #2 → #3');
+  });
+});
+
+describe('build', () => {
+  test('accepts a graph that holds, and derives what it can derive', () => {
+    const result = build({ proposal: proposal(GOOD) });
+
+    assert.deepEqual(result.problems, []);
+    assert.equal(result.ok, true);
+
+    const [first, second, third] = result.graph.slices;
+    assert.equal(first.index, 1);
+    assert.equal(first.branch, `DESKTOP-${ISSUE}/1-extension-api-run-options`);
+    assert.deepEqual(first.requirements, ['R1']);
+    assert.equal(second.baseSlice, 1);
+    assert.deepEqual(third.layers, ['tests', 'ui']);
+    assert.deepEqual(third.requirements, ['R3', 'R4']);
+    assert.deepEqual(third.files, [THEME, SPEC].sort());
+  });
+
+  test('two slices claiming the same file is refused, by name', () => {
+    const result = build({
+      proposal: proposal([
+        { slug: 'a', files: [API, EXEC], baseSlice: null },
+        { slug: 'b', files: [EXEC, THEME, SPEC], baseSlice: null },
+      ]),
+    });
+
+    assert.equal(result.ok, false);
+    assert.ok(result.problems.some((problem) => problem.check === 'exclusive-files' && problem.detail.includes(EXEC)));
+  });
+
+  // DESKTOP-18833 read "nothing was stored" as an obstacle to route around.
+  // The refusal has to say where the work goes instead.
+  test('the refusal says where work that needs a file in two slices goes', () => {
+    const advice = slice.refusalAdvice([{ check: 'exclusive-files', detail: '' }, { check: 'requirements', detail: '' }]).join('\n');
+
+    assert.match(advice, /nothing was stored/);
+    assert.match(advice, /an issue of its own/);
+    assert.match(advice, /pdkit issue block/);
+    assert.match(advice, /pdkit amendment new/);
+  });
+
+  test('a refusal of another kind is told to fix what is marked', () => {
+    assert.match(slice.refusalAdvice([{ check: 'files', detail: '' }]).join('\n'), /Fix what is marked/);
+  });
+
+  // The other direction of the rule lib/audit.js applies to Owns. A file in no
+  // slice never reaches a pull request, and nothing downstream would notice.
+  test('a changed file in no slice is refused', () => {
+    const result = build({ proposal: proposal([{ slug: 'partial', files: [API], baseSlice: null }]) });
+
+    assert.equal(result.ok, false);
+    const coverage = result.problems.find((problem) => problem.check === 'coverage');
+    assert.ok(coverage);
+    assert.match(coverage.detail, /packages\/main\/src\/exec\.ts/);
+  });
+
+  test('a file that is not in the diff at all is refused', () => {
+    const result = build({
+      proposal: proposal([
+        { slug: 'a', files: [API, 'packages/main/src/imagined.ts'], baseSlice: null },
+        { slug: 'b', files: [EXEC, THEME, SPEC], baseSlice: null },
+      ]),
+    });
+
+    assert.ok(result.problems.some((problem) => problem.detail.includes('imagined.ts')));
+  });
+
+  test('a cycle between bases is refused', () => {
+    const result = build({
+      proposal: proposal([
+        { slug: 'a', files: [API], baseSlice: 2 },
+        { slug: 'b', files: [EXEC], baseSlice: 1 },
+        { slug: 'c', files: [THEME, SPEC], baseSlice: null },
+      ]),
+    });
+
+    assert.equal(result.ok, false);
+    assert.ok(result.problems.some((problem) => problem.check === 'base' && problem.detail.includes('cycle')));
+  });
+
+  test('a base that is not a slice is refused', () => {
+    const result = build({
+      proposal: proposal([
+        { slug: 'a', files: [API], baseSlice: null },
+        { slug: 'b', files: [EXEC, THEME, SPEC], baseSlice: 9 },
+      ]),
+    });
+
+    assert.ok(result.problems.some((problem) => problem.check === 'base' && problem.detail.includes('baseSlice 9')));
+  });
+
+  // A slug arrived here on the first multi-slice live run and was reported as
+  // "#fix-main-…, which is not a slice" — which reads as a slice that went
+  // missing rather than as a value of the wrong kind.
+  test('a base given as a slug says what a baseSlice is', () => {
+    const result = build({
+      proposal: proposal([
+        { slug: 'a', files: [API], baseSlice: null },
+        { slug: 'b', files: [EXEC, THEME, SPEC], baseSlice: 'a' },
+      ]),
+    });
+
+    const problem = result.problems.find((entry) => entry.check === 'base');
+    assert.ok(problem, 'the graph is refused');
+    assert.match(problem.detail, /baseSlice "a" — it is the index of another slice, 1 to 2, or null/);
+  });
+
+  // A stack is legal in the graph and unpublishable from a fork: the base of a
+  // pull request is a branch of the repository it opens against, and a slice
+  // branch is not one. Said at the cut, which is the last point where choosing
+  // independence is still cheap. A live run found it after publishing.
+  describe('a stack that cannot be published from a fork', () => {
+    const forked = { ...CONFIG, repo: { ...CONFIG.repo, fork: 'someone/podman-desktop', upstream: 'podman-desktop/podman-desktop' } };
+
+    test('warns, and does not refuse — the graph is still the merge order', () => {
+      const result = build({
+        config: forked,
+        proposal: proposal([
+          { slug: 'a', files: [API], baseSlice: null },
+          { slug: 'b', files: [EXEC, THEME, SPEC], baseSlice: 1 },
+        ]),
+      });
+
+      assert.equal(result.ok, true);
+      const warning = result.warnings.find((entry) => entry.check === 'base');
+      assert.ok(warning, 'the stack is flagged');
+      assert.match(warning.detail, /cannot open against another slice/);
+    });
+
+    test('says nothing when the branches and the pull requests share a repository', () => {
+      const result = build({
+        config: { ...CONFIG, repo: { ...CONFIG.repo, fork: 'podman-desktop/podman-desktop', upstream: 'podman-desktop/podman-desktop' } },
+        proposal: proposal([
+          { slug: 'a', files: [API], baseSlice: null },
+          { slug: 'b', files: [EXEC, THEME, SPEC], baseSlice: 1 },
+        ]),
+      });
+
+      assert.equal(
+        result.warnings.some((entry) => entry.check === 'base'),
+        false,
+      );
+    });
+  });
+
+  describe('the public API change goes alone and goes first (section 10, scenario 12)', () => {
+    test('mixed with another layer: refused', () => {
+      const result = build({
+        proposal: proposal([
+          { slug: 'a', files: [API, EXEC], baseSlice: null },
+          { slug: 'b', files: [THEME, SPEC], baseSlice: null },
+        ]),
+      });
+
+      assert.ok(result.problems.some((problem) => problem.check === 'extension-api' && problem.detail.includes(EXEC)));
+    });
+
+    test('merging after another slice: refused', () => {
+      const result = build({
+        proposal: proposal([
+          { slug: 'ui', files: [THEME, SPEC], baseSlice: null },
+          { slug: 'api', files: [API], baseSlice: null },
+          { slug: 'main', files: [EXEC], baseSlice: 2 },
+        ]),
+      });
+
+      assert.ok(result.problems.some((problem) => problem.check === 'extension-api' && problem.detail.includes('merges after')));
+    });
+  });
+
+  test('a requirement that reaches no slice is refused', () => {
+    // T3 owns the ui and tests files, so dropping them drops R3 and R4 —
+    // exactly the shape where a requirement is planned and never shipped.
+    const narrowed = { ...collected, files: collected.files.filter((file) => file.path === API || file.path === EXEC) };
+    const result = build({
+      facts: narrowed,
+      proposal: proposal([
+        { slug: 'a', files: [API], baseSlice: null },
+        { slug: 'b', files: [EXEC], baseSlice: 1 },
+      ]),
+    });
+
+    assert.ok(result.problems.some((problem) => problem.check === 'requirements' && problem.detail.includes('R3, R4')));
+  });
+
+  test('on quickfix there are no R-IDs to miss', () => {
+    const quickfix = {
+      ...collected,
+      route: 'quickfix',
+      files: collected.files.filter((file) => file.path === API || file.path === EXEC),
+    };
+    const result = build({
+      facts: quickfix,
+      proposal: proposal([
+        { slug: 'a', files: [API], baseSlice: null },
+        { slug: 'b', files: [EXEC], baseSlice: 1 },
+      ]),
+    });
+
+    assert.equal(result.problems.some((problem) => problem.check === 'requirements'), false);
+  });
+
+  test('spanning layers and going over the size threshold warn rather than refuse', () => {
+    const result = build({
+      proposal: proposal(GOOD),
+      config: { ...CONFIG, slicing: { ...CONFIG.slicing, max_files_per_slice: 1 } },
+    });
+
+    assert.equal(result.ok, true);
+    assert.ok(result.warnings.some((warning) => warning.check === 'layers'));
+    assert.ok(result.warnings.some((warning) => warning.check === 'size'));
+  });
+
+  test('an empty slice and a duplicate slug are refused', () => {
+    const result = build({
+      proposal: proposal([
+        { slug: 'same', files: [API], baseSlice: null },
+        { slug: 'same', files: [], baseSlice: null },
+        { slug: 'rest', files: [EXEC, THEME, SPEC], baseSlice: null },
+      ]),
+    });
+
+    assert.ok(result.problems.some((problem) => problem.check === 'files' && problem.detail.includes('no files')));
+    assert.ok(result.problems.some((problem) => problem.check === 'slug'));
+  });
+
+  // A verification is about a set of files. Carrying it onto a slice whose
+  // files changed would be a green tick for a build that never happened.
+  test('a stored verification survives only while the files are the same', () => {
+    const previous = {
+      issue: ISSUE,
+      strategy: 'prefer-independent',
+      updatedAt: new Date().toISOString(),
+      source: { base: 'main', ref: 'HEAD', repo: repo },
+      slices: [
+        { index: 1, files: [API], verification: { ok: true, standalone: true, diffDigest: 'sha256:x' } },
+        { index: 2, files: [EXEC], verification: { ok: true, standalone: false, diffDigest: 'sha256:y' } },
+      ],
+    };
+
+    const kept = build({ proposal: proposal(GOOD), previous });
+    assert.deepEqual(kept.graph.slices[0].verification, previous.slices[0].verification);
+
+    const moved = build({
+      previous,
+      proposal: proposal([
+        { slug: 'api', files: [API, EXEC], baseSlice: null },
+        { slug: 'ui', files: [THEME, SPEC], baseSlice: null },
+      ]),
+    });
+    assert.equal(moved.graph, null, 'the moved graph is refused for other reasons; the point is it is not stored');
+
+    const regrouped = build({
+      previous,
+      proposal: proposal([
+        { slug: 'api', files: [API], baseSlice: null },
+        { slug: 'main-and-ui', files: [EXEC, THEME, SPEC], baseSlice: 1 },
+      ]),
+    });
+    assert.equal(regrouped.graph.slices[1].verification, null);
+  });
+});
+
+describe('mergeOrder and chainTo', () => {
+  test('a base always comes before what is stacked on it', () => {
+    const { order, cycle } = slice.mergeOrder([
+      { index: 1, baseSlice: 2 },
+      { index: 2, baseSlice: null },
+      { index: 3, baseSlice: null },
+    ]);
+
+    assert.deepEqual(order, [2, 3, 1]);
+    assert.deepEqual(cycle, []);
+  });
+
+  test('a cycle is reported rather than ordered around', () => {
+    const { order, cycle } = slice.mergeOrder([
+      { index: 1, baseSlice: 2 },
+      { index: 2, baseSlice: 1 },
+    ]);
+
+    assert.deepEqual(order, []);
+    assert.deepEqual(cycle, [1, 2]);
+  });
+
+  test('chainTo lists what has to be applied first, base first', () => {
+    const graph = build({ proposal: proposal(GOOD) }).graph;
+
+    assert.deepEqual(slice.chainTo(graph, 2).map((entry) => entry.index), [1, 2]);
+    assert.deepEqual(slice.chainTo(graph, 3).map((entry) => entry.index), [3]);
+  });
+
+  test('baseRefOf names the base branch or the parent branch', () => {
+    const graph = build({ proposal: proposal(GOOD) }).graph;
+
+    assert.equal(slice.baseRefOf(graph, graph.slices[0], 'main'), 'main');
+    assert.equal(slice.baseRefOf(graph, graph.slices[1], 'main'), `DESKTOP-${ISSUE}/1-extension-api-run-options`);
+  });
+});
+
+describe('sliceDiff', () => {
+  test('contains the slice and nothing else', async () => {
+    const diff = await slice.sliceDiff({ repoRoot: repo, base: 'main', files: [API] });
+
+    assert.match(diff, /packages\/extension-api\/src\/api\.ts/);
+    assert.equal(diff.includes('exec.ts'), false);
+    assert.match(diff, /\+export interface RunOptions/);
+  });
+
+  test('is stable, so its digest means something', async () => {
+    const first = await slice.sliceDiff({ repoRoot: repo, base: 'main', files: [THEME, SPEC] });
+    const second = await slice.sliceDiff({ repoRoot: repo, base: 'main', files: [THEME, SPEC] });
+
+    assert.equal(slice.digestOf(first), slice.digestOf(second));
+    assert.notEqual(slice.digestOf(first), slice.digestOf(await slice.sliceDiff({ repoRoot: repo, base: 'main', files: [THEME] })));
+  });
+});
+
+describe('set and read', () => {
+  test('stores a valid graph and writes what it did to the journal', async () => {
+    const result = await slice.set({ issue: ISSUE, proposal: proposal(GOOD), facts: collected, config: CONFIG, home });
+    assert.equal(result.ok, true, JSON.stringify(result.problems));
+
+    const stored = await slice.read(ISSUE, { home });
+    assert.equal(stored.slices.length, 3);
+    assert.equal(stored.slices[1].baseSlice, 1);
+    assert.equal(stored.source.base, 'main');
+
+    const journal = await readFile(join(home, 'journal', `${new Date().toISOString().slice(0, 7)}.md`), 'utf8');
+    assert.match(journal, /event:slices-set\s+3 slice\(s\), merge order #1 → #2 → #3/);
+  });
+
+  test('a refused proposal is not stored', async () => {
+    const before = await slice.read(ISSUE, { home });
+    const result = await slice.set({
+      issue: ISSUE,
+      proposal: proposal([{ slug: 'everything', files: [API, EXEC, THEME, SPEC], baseSlice: null }]),
+      facts: collected,
+      config: CONFIG,
+      home,
+    });
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(await slice.read(ISSUE, { home }), before);
+  });
+
+  test('reading an issue with no graph is null, not an error', async () => {
+    assert.equal(await slice.read(999999, { home }), null);
+  });
+});
+
+describe('verify', () => {
+  before(async () => {
+    const result = await slice.set({ issue: ISSUE, proposal: proposal(GOOD), facts: collected, config: config(), home });
+    assert.equal(result.ok, true, JSON.stringify(result.problems));
+  });
+
+  test('a slice that stands on its own comes back green, with the run attached', async () => {
+    const result = await slice.verifySlice({
+      issue: ISSUE,
+      index: 1,
+      repoRoot: repo,
+      home,
+      config: config(),
+      packageMap: packageMap(repo),
+    });
+
+    assert.equal(result.ok, true, result.error ?? result.output);
+    assert.equal(result.verification.standalone, true);
+    assert.equal(result.verification.exitCode, 0);
+    assert.equal(result.verification.revertsCleanly, true);
+    // What it stood on, named and resolved. `standalone: true` on its own is a
+    // word; beside a commit it is a claim somebody can check with merge-base,
+    // which is what it took to find out that one of these had been recorded
+    // against a base the build never saw (18835).
+    assert.equal(result.verification.base, 'main');
+    assert.equal(result.verification.baseCommit, await git(['rev-parse', 'main'], repo));
+    assert.match(result.verification.command, /npm run typecheck && npm run lint:check && npm run test:unit/);
+
+    // The evidence is a receipt in the same format, and it validates — which
+    // is what stops the output block being edited into a green one afterwards.
+    const artefact = await readFile(join(issueDir(home, ISSUE), 'verify', 'S1.md'), 'utf8');
+    assert.equal(validateReceipt(artefact).ok, true, validateReceipt(artefact).reason);
+    assert.match(artefact, /typecheck ok/);
+  });
+
+  // Symbol dependence: nothing in the file lists says slice #2 needs #1, and
+  // this is the only thing that does.
+  test('a slice that needs another one is red standalone, and the redness is the evidence', async () => {
+    const result = await slice.verifySlice({
+      issue: ISSUE,
+      index: 2,
+      repoRoot: repo,
+      standalone: true,
+      home,
+      config: config(),
+      packageMap: packageMap(repo),
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.verification.standalone, true);
+    assert.equal(result.verification.exitCode, 2);
+
+    const artefact = await readFile(join(issueDir(home, ISSUE), 'verify', 'S2.md'), 'utf8');
+    assert.equal(validateReceipt(artefact).ok, true, 'a failed run still produces a valid capture');
+    assert.match(artefact, /cannot find name RunOptions/);
+  });
+
+  test('the same slice on top of what it is based on is green', async () => {
+    const result = await slice.verifySlice({
+      issue: ISSUE,
+      index: 2,
+      repoRoot: repo,
+      home,
+      config: config(),
+      packageMap: packageMap(repo),
+    });
+
+    assert.equal(result.ok, true, result.error ?? result.output);
+    assert.equal(result.verification.standalone, false);
+  });
+
+  test('the result is stored on the slice, not returned and forgotten', async () => {
+    const stored = await slice.read(ISSUE, { home });
+    const second = stored.slices.find((entry) => entry.index === 2);
+
+    assert.equal(second.verification.ok, true);
+    assert.equal(second.verification.evidence, 'verify/S2.md');
+    assert.match(second.verification.diffDigest, /^sha256:[0-9a-f]{64}$/);
+  });
+
+  test('verifyAll walks in merge order and reports what is left standing', async () => {
+    const result = await slice.verifyAll({ issue: ISSUE, repoRoot: repo, home, config: config(), packageMap: packageMap(repo) });
+
+    // A stack stays contiguous: #2 follows the slice it is based on rather
+    // than waiting for every independent slice to go first.
+    assert.deepEqual(result.results.map((entry) => entry.index), [1, 2, 3]);
+    assert.equal(result.ok, true, JSON.stringify(result.results));
+    assert.deepEqual(result.problems, []);
+  });
+
+  test('a slice that claims main and fails there is named by independenceProblems', async () => {
+    // #3 promoted to branch from main while it is really the ui work — flip its
+    // stored verification to red and ask the same question verifyAll asks.
+    const graph = await slice.read(ISSUE, { home });
+    graph.slices[2].verification.ok = false;
+
+    const problems = slice.independenceProblems(graph);
+    assert.equal(problems.length, 1);
+    assert.match(problems[0].detail, /#3 does not build from main/);
+  });
+});
+
+// Problem 2 of the 18835 report, and the reason `standalone` is measured now
+// rather than read off the graph.
+//
+// `pdkit worktree create --branch DESKTOP-18835/1-...` names the working branch
+// from the same template `branches.sliced` gives slice #1, so for an issue with
+// one slice the two names are the same by construction, not by accident. verify
+// found a branch under that name, took it for the materialized slice, built the
+// working tree — which sat on a commit ten files behind `main` — and wrote
+// `standalone: true` against `main`. slices.md said `Base: main | Standalone:
+// ✅`. No build on main had happened, and nothing in the output said so:
+// preflight then read that record as the proof it exists to demand.
+describe('a branch that is not on the base its slice declares', () => {
+  const branch = `DESKTOP-${ISSUE}/3-ui-contrast`;
+  let was;
+  let mainWas;
+  let moved;
+  let before_;
+
+  before(async () => {
+    was = await git(['rev-parse', '--abbrev-ref', 'HEAD'], repo);
+    mainWas = await git(['rev-parse', 'main'], repo);
+    before_ = (await slice.read(ISSUE, { home })).slices.find((entry) => entry.index === 3).verification;
+
+    // The name collision, made the way the flow makes it: a branch carrying the
+    // work, under the name the graph gives slice #3.
+    await git(['branch', branch, was], repo);
+
+    // And then the base moves, the way an upstream does between cutting a
+    // branch and verifying it.
+    await git(['checkout', 'main'], repo);
+    await writeFiles(repo, { 'docs/meanwhile.md': 'what upstream landed while the branch sat\n' });
+    moved = await commitAll(repo, 'docs: what upstream landed meanwhile');
+    await git(['checkout', was], repo);
+  });
+
+  after(async () => {
+    await git(['checkout', was], repo);
+    await git(['branch', '-D', branch], repo);
+    await git(['branch', '-f', 'main', mainWas], repo);
+  });
+
+  test('is refused, and the refusal names the commit it forked from and the one it claims', async () => {
+    const result = await slice.verifySlice({
+      issue: ISSUE,
+      index: 3,
+      repoRoot: repo,
+      home,
+      config: config(),
+      packageMap: packageMap(repo),
+    });
+
+    assert.equal(result.ok, false);
+    assert.match(result.error, new RegExp(`${branch} forked from ${mainWas.slice(0, 12)}`));
+    assert.match(result.error, new RegExp(`declares main, which is ${moved.slice(0, 12)}`));
+    // Both honest ways out, and neither of them is "verify it anyway".
+    assert.match(result.error, /Rebase it onto main/);
+  });
+
+  test('and nothing is recorded, least of all a standalone it did not build', async () => {
+    const after = (await slice.read(ISSUE, { home })).slices.find((entry) => entry.index === 3).verification;
+
+    assert.deepEqual(after, before_, 'a refused verification must not touch the graph');
+  });
+
+  test('rebased onto the base it declares, the same branch verifies', async () => {
+    await git(['checkout', branch], repo);
+    await git(['rebase', 'main'], repo);
+    await git(['checkout', was], repo);
+
+    const result = await slice.verifySlice({
+      issue: ISSUE,
+      index: 3,
+      repoRoot: repo,
+      home,
+      config: config(),
+      packageMap: packageMap(repo),
+    });
+
+    assert.equal(result.ok, true, result.error ?? result.output);
+    assert.equal(result.verification.standalone, true);
+    assert.equal(result.verification.baseCommit, moved, 'the base it was measured against is the base it now sits on');
+  });
+});
+
+describe('checkFreshness', () => {
+  test('a verification of the current diff is fresh', async () => {
+    const graph = await slice.read(ISSUE, { home });
+    const fresh = await slice.checkFreshness({ graph, index: 1, repoRoot: repo, base: 'main' });
+
+    assert.equal(fresh.fresh, true);
+  });
+
+  // The property the whole gate leans on: "verified" must not decay into
+  // "was verified once".
+  test('a diff that moved since the run is not fresh, and says why', async () => {
+    await writeFiles(repo, { [API]: '// SPDX-License-Identifier: Apache-2.0\nexport const version = 2;\nexport interface RunOptions { env?: string }\n' });
+    await commitAll(repo, 'fix(api): bump the version');
+
+    const graph = await slice.read(ISSUE, { home });
+    const checked = await slice.checkFreshness({ graph, index: 1, repoRoot: repo, base: 'main' });
+
+    assert.equal(checked.fresh, false);
+    assert.match(checked.reason, /changed since it was verified/);
+    assert.notEqual(checked.digest, checked.expected);
+
+    await git(['revert', '--no-edit', 'HEAD'], repo);
+  });
+
+  test('a slice that was never verified is not fresh either', async () => {
+    const graph = await slice.read(ISSUE, { home });
+    graph.slices[0].verification = null;
+
+    const checked = await slice.checkFreshness({ graph, index: 1, repoRoot: repo, base: 'main' });
+    assert.equal(checked.fresh, false);
+    assert.match(checked.reason, /never been verified/);
+  });
+});
+
+describe('renderValues', () => {
+  // `pdkit slice render` merged the agent's `--values` file ON TOP of these,
+  // so a file carrying `rows` or `verifiedAt` replaced the measured columns
+  // with whatever it said — in the one document whose columns mean something
+  // precisely because they cannot be typed in.
+  test('a values file adds prose and cannot replace a tick it did not earn', async () => {
+    const graph = await slice.read(ISSUE, { home });
+    const measured = slice.renderValues(graph);
+
+    const merged = slice.renderValues(graph, {
+      rows: '| 1 | mine | — | main | 0 | R1 | ✅ | ✅ |',
+      verifiedAt: 'yesterday, by hand',
+      mergeOrder: '#1',
+      issue: '9999',
+      rationale: '### #1 because the reviewer of the API is not the reviewer of the UI',
+      notes: 'a key of the caller’s own',
+    });
+
+    assert.equal(merged.rows, measured.rows);
+    assert.equal(merged.verifiedAt, measured.verifiedAt);
+    assert.equal(merged.mergeOrder, measured.mergeOrder);
+    assert.equal(merged.issue, measured.issue);
+
+    // The one value an agent writes rather than earns, and anything the
+    // template does not fill from the graph.
+    assert.match(merged.rationale, /because the reviewer/);
+    assert.equal(merged.notes, 'a key of the caller’s own');
+  });
+
+  test('the base each slice was verified against is in the table', async () => {
+    const graph = await slice.read(ISSUE, { home });
+    const verified = graph.slices.find((entry) => entry.verification?.baseCommit);
+
+    assert.ok(verified, 'the fixture has a verified slice');
+    assert.match(slice.renderValues(graph).rows, new RegExp(`from ${verified.verification.baseCommit.slice(0, 12)}`));
+  });
+});
+
+describe('independenceProblems', () => {
+  test('flags a slice that claims main but failed to build there', () => {
+    const graph = build({ proposal: proposal(GOOD) }).graph;
+    graph.slices[2].verification = { ok: false, standalone: true, diffDigest: 'sha256:x' };
+
+    const problems = slice.independenceProblems(graph);
+    assert.equal(problems.length, 1);
+    assert.match(problems[0].detail, /#3 does not build from main/);
+  });
+
+  test('says nothing about a stacked slice that failed standalone', () => {
+    const graph = build({ proposal: proposal(GOOD) }).graph;
+    graph.slices[1].verification = { ok: false, standalone: true, diffDigest: 'sha256:y' };
+
+    assert.deepEqual(slice.independenceProblems(graph), []);
+  });
+});
+
+describe('materialize', () => {
+  test('refuses before a human has approved the graph', async () => {
+    const result = await slice.materialize({
+      issue: ISSUE,
+      index: 1,
+      repoRoot: repo,
+      subject: 'feat(api): add RunOptions',
+      home,
+      config: config(),
+    });
+
+    assert.equal(result.ok, false);
+    assert.match(result.error, /is planned; branches are cut from slices-approved/);
+  });
+
+  test('refuses a commit subject upstream would reject', async () => {
+    await approvablePlan(ISSUE, { home });
+    await state.transition(ISSUE, 'plan-approved', { home });
+    await state.transition(ISSUE, 'implemented', { home });
+    await state.transition(ISSUE, 'validated', { home });
+    await state.transition(ISSUE, 'audited', { home });
+    await state.transition(ISSUE, 'sliced', { home });
+    await state.transition(ISSUE, 'slices-approved', { home, approvedBy: 'the owner' });
+
+    const result = await slice.materialize({
+      issue: ISSUE,
+      index: 1,
+      repoRoot: repo,
+      subject: 'added RunOptions',
+      home,
+      config: config(),
+    });
+
+    assert.equal(result.ok, false);
+    assert.match(result.error, /not a conventional commit subject/);
+  });
+
+  test('cuts a branch from the base and puts the slice on it, in one commit', async () => {
+    const result = await slice.materialize({
+      issue: ISSUE,
+      index: 1,
+      repoRoot: repo,
+      subject: 'feat(extension-api): add RunOptions',
+      home,
+      config: config(),
+    });
+
+    assert.equal(result.ok, true, result.error);
+    assert.equal(result.created, true);
+    assert.equal(result.base, 'main');
+
+    const changed = await git(['diff', '--name-only', 'main...HEAD'], repo);
+    assert.deepEqual(changed.split('\n'), [API]);
+    assert.equal(await git(['log', '-1', '--format=%s'], repo), 'feat(extension-api): add RunOptions');
+    assert.equal(await git(['rev-parse', '--abbrev-ref', 'HEAD'], repo), `DESKTOP-${ISSUE}/1-extension-api-run-options`);
+  });
+
+  // The reason materializing is safe to get wrong: it adds branches and
+  // touches nothing else.
+  // The husky hook adds it in a tree where pnpm install has run, and rejects
+  // the duplicate that -s would then produce. In a tree where it has not — a
+  // fresh worktree, which is where slicing works — nothing adds it, and
+  // preflight would reject a branch this command just made.
+  test('the commit carries a sign-off when no hook is there to add one', async () => {
+    const message = await git(['log', '-1', '--format=%B', `DESKTOP-${ISSUE}/1-extension-api-run-options`], repo);
+    assert.match(message, /^Signed-off-by: .+ <.+>$/m);
+  });
+
+  test('the working branch is exactly where it was', async () => {
+    const files = await git(['diff', '--name-only', `main...DESKTOP-${ISSUE}/work`], repo);
+    assert.deepEqual(files.split('\n').sort(), [API, EXEC, THEME, SPEC].sort());
+  });
+
+  test('a stacked slice branches from its parent, and carries only its own files', async () => {
+    const result = await slice.materialize({
+      issue: ISSUE,
+      index: 2,
+      repoRoot: repo,
+      subject: 'feat(main): thread RunOptions through exec',
+      home,
+      config: config(),
+    });
+
+    assert.equal(result.ok, true, result.error);
+    assert.equal(result.base, `DESKTOP-${ISSUE}/1-extension-api-run-options`);
+
+    const own = await git(['diff', '--name-only', `${result.base}...HEAD`], repo);
+    assert.deepEqual(own.split('\n'), [EXEC]);
+  });
+
+  test('re-running adopts an unchanged branch rather than failing', async () => {
+    const again = await slice.materialize({
+      issue: ISSUE,
+      index: 1,
+      repoRoot: repo,
+      subject: 'feat(extension-api): add RunOptions',
+      home,
+      config: config(),
+    });
+
+    assert.equal(again.ok, true, again.error);
+    assert.equal(again.adopted, true);
+    assert.equal(again.created, false);
+  });
+
+  test('and refuses when the branch no longer matches the slice', async () => {
+    const branch = `DESKTOP-${ISSUE}/1-extension-api-run-options`;
+    await git(['checkout', branch], repo);
+    await writeFiles(repo, { [API]: '// SPDX-License-Identifier: Apache-2.0\nexport const version = 99;\n' });
+    await commitAll(repo, 'fix(extension-api): something a reviewer asked for');
+
+    const result = await slice.materialize({
+      issue: ISSUE,
+      index: 1,
+      repoRoot: repo,
+      subject: 'feat(extension-api): add RunOptions',
+      home,
+      config: config(),
+    });
+
+    assert.equal(result.ok, false);
+    assert.match(result.error, /--force/);
+
+    await git(['reset', '--hard', 'HEAD~1'], repo);
+  });
+
+  // The failure a live run spent three verification passes and a wrong
+  // diagnosis on (18834, 2026-09-02).
+  //
+  // After materialization the branch IS the slice: a review fix lands there,
+  // not in the working branch it was cut from. `verifyBranch` says exactly that
+  // and was reachable only from `cascade`, which has never run — so every
+  // `slice verify` digested the frozen `graph.source.ref` instead, recorded a
+  // green nobody could match, and `slice-standalone` called it stale on the
+  // next line. Re-running verify reproduced the same stale digest forever; only
+  // re-cutting the graph escaped it.
+  test('a slice verified after its branch moved is fresh, not stale', async () => {
+    const branch = `DESKTOP-${ISSUE}/1-extension-api-run-options`;
+    await git(['checkout', branch], repo);
+    await writeFiles(repo, { [API]: '// SPDX-License-Identifier: Apache-2.0\nexport const version = 1;\nexport interface RunOptions { env?: string; cwd?: string }\n' });
+    await commitAll(repo, 'fix(extension-api): what the reviewer asked for');
+
+    const verified = await slice.verifySlice({
+      issue: ISSUE,
+      index: 1,
+      repoRoot: repo,
+      home,
+      config: config(),
+      packageMap: packageMap(repo),
+    });
+    assert.equal(verified.ok, true, verified.error);
+    // Built from the branch, and the base it is recorded against is the base
+    // the branch actually sits on.
+    assert.equal(verified.verification.base, 'main');
+    assert.equal(verified.verification.baseCommit, await git(['rev-parse', 'main'], repo));
+    assert.equal(verified.verification.standalone, true);
+
+    // The question the gate asks immediately afterwards, from the branch — which
+    // is what preflight passes as `ref`.
+    const fresh = await slice.checkFreshness({
+      graph: await slice.read(ISSUE, { home }),
+      index: 1,
+      repoRoot: repo,
+      base: 'main',
+      ref: branch,
+    });
+
+    assert.equal(fresh.fresh, true, `verify wrote a digest the gate calls stale: ${fresh.reason}`);
+
+    await git(['reset', '--hard', 'HEAD~1'], repo);
+    await git(['checkout', `DESKTOP-${ISSUE}/work`], repo);
+  });
+
+  // It used to leave the trailer to the hook when one was installed. The hook
+  // appends with `echo >>`, and a message made from a single -m has no blank
+  // line after the subject — so the trailer joined the subject paragraph and
+  // git read all 130 characters of it as the subject. The branch this command
+  // had just made could not pass its own sign-off check.
+  test('the trailer goes where trailers go, hook or no hook', async () => {
+    const hooks = join(repo, '.fixture-hooks');
+    await mkdir(hooks, { recursive: true });
+    // Stands in for husky: appends a sign-off when the message has none, the
+    // way podman-desktop's commit-msg hook does.
+    await writeFile(
+      join(hooks, 'commit-msg'),
+      '#!/bin/sh\nSOB=$(git var GIT_AUTHOR_IDENT | sed -n "s/^\\(.*>\\).*$/Signed-off-by: \\1/p")\n' +
+        'grep -qs "^$SOB" "$1" || echo "$SOB" >>"$1"\n',
+      { mode: 0o755 },
+    );
+    await git(['config', 'core.hooksPath', '.fixture-hooks'], repo);
+
+    try {
+      const result = await slice.materialize({
+        issue: ISSUE,
+        index: 3,
+        repoRoot: repo,
+        subject: 'feat(ui): high contrast themes',
+        home,
+        config: config(),
+      });
+      assert.equal(result.ok, true, result.error);
+
+      const branch = `DESKTOP-${ISSUE}/3-ui-contrast`;
+      const subject = await git(['log', '-1', '--format=%s', branch], repo);
+      const body = await git(['log', '-1', '--format=%b', branch], repo);
+
+      assert.equal(subject, 'feat(ui): high contrast themes', 'the subject is the subject, nothing appended');
+      assert.equal((body.match(/Signed-off-by:/g) ?? []).length, 1, 'exactly one, and it is in the body');
+    } finally {
+      await git(['config', '--unset', 'core.hooksPath'], repo);
+    }
+  });
+
+  test('a dirty tree stops it, because the mess would ride along', async () => {
+    await writeFiles(repo, { 'packages/ui/src/theme.ts': 'export const theme = "half-done";\n' });
+
+    const result = await slice.materialize({
+      issue: ISSUE,
+      index: 3,
+      repoRoot: repo,
+      subject: 'feat(ui): high contrast themes',
+      home,
+      config: config(),
+    });
+
+    assert.equal(result.ok, false);
+    assert.match(result.error, /1 uncommitted change/);
+
+    await git(['checkout', '--', '.'], repo);
+  });
+});
+
+describe('cascade', () => {
+  before(async () => {
+    // A review fix lands in slice #1, the way one does: on the branch, after
+    // the pull request is open.
+    await git(['checkout', `DESKTOP-${ISSUE}/1-extension-api-run-options`], repo);
+    await writeFiles(repo, {
+      [API]: '// SPDX-License-Identifier: Apache-2.0\nexport const version = 1;\nexport interface RunOptions { env?: string; cwd?: string }\n',
+    });
+    await commitAll(repo, 'fix(extension-api): add cwd, as review asked');
+  });
+
+  test('rebases what is stacked on the changed slice and verifies it again', async () => {
+    const result = await slice.cascade({
+      issue: ISSUE,
+      from: 1,
+      repoRoot: repo,
+      home,
+      config: config(),
+      packageMap: packageMap(repo),
+    });
+
+    assert.deepEqual(result.conflicted, []);
+    assert.deepEqual(result.rebased, [2]);
+    assert.equal(result.ok, true, JSON.stringify(result.results));
+
+    // #2 now sits on top of the fixed #1 rather than the version it was cut on.
+    const merged = await git(['merge-base', '--is-ancestor', `DESKTOP-${ISSUE}/1-extension-api-run-options`, `DESKTOP-${ISSUE}/2-main-exec-plumbing`], repo).then(
+      () => true,
+      () => false,
+    );
+    assert.equal(merged, true);
+  });
+
+  test('the verification stored for a rebased slice is from its branch', async () => {
+    const graph = await slice.read(ISSUE, { home });
+    const second = graph.slices.find((entry) => entry.index === 2);
+
+    assert.equal(second.verification.ok, true);
+    assert.equal(second.verification.standalone, false);
+
+    const fresh = await slice.checkFreshness({ graph, index: 2, repoRoot: repo, ref: second.branch });
+    assert.equal(fresh.fresh, true, 'what was verified is what the branch now contains');
+  });
+
+  test('a slice that stopped being green is reported, not rebased into a lie', async () => {
+    // The fix withdraws what #2 depends on. Nothing about the file lists
+    // changes; only the build knows.
+    await git(['checkout', `DESKTOP-${ISSUE}/1-extension-api-run-options`], repo);
+    await writeFiles(repo, { [API]: '// SPDX-License-Identifier: Apache-2.0\nexport const version = 1;\n' });
+    await commitAll(repo, 'revert(extension-api): drop RunOptions again');
+
+    const result = await slice.cascade({
+      issue: ISSUE,
+      from: 1,
+      repoRoot: repo,
+      home,
+      config: config(),
+      packageMap: packageMap(repo),
+    });
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.regressed, [2]);
+
+    const journal = await readFile(join(home, 'journal', `${new Date().toISOString().slice(0, 7)}.md`), 'utf8');
+    assert.match(journal, /event:slice-regressed.*no longer green: #2/);
+  });
+
+  test('dependentsOf follows the stack, not just the first step', () => {
+    const graph = {
+      slices: [
+        { index: 1, baseSlice: null },
+        { index: 2, baseSlice: 1 },
+        { index: 3, baseSlice: 2 },
+        { index: 4, baseSlice: null },
+      ],
+    };
+
+    assert.deepEqual(slice.dependentsOf(graph, 1), [2, 3]);
+    assert.deepEqual(slice.dependentsOf(graph, 3), []);
+  });
+});
+
+// A red run has two causes and they are different findings: the slice broke
+// something, or the base does not pass this command either. The live run
+// against the fork produced the second twice — a missing build step, then a
+// binary the install had not fetched — and every slice came back red for it.
+//
+// Its own repository, because the case is "main itself does not build", and a
+// fixture that shared main with the suites above would be telling them that.
+describe('a base that fails the same command', () => {
+  let broken;
+  let brokenHome;
+  let brokenTrees;
+
+  const FILE = 'packages/ui/src/theme.ts';
+
+  before(async () => {
+    broken = await initRepo('pdkit-slice-broken-');
+    brokenHome = await initRepo('pdkit-slice-broken-home-');
+    brokenTrees = join(broken, '..', `${basename(broken)}-trees`);
+
+    await seedWorkspace(broken);
+    // Broken on main, before any slice exists.
+    await writeFiles(broken, {
+      'scripts/typecheck.mjs': 'console.error("the toolchain itself is broken here");\nprocess.exit(9);\n',
+    });
+    await commitAll(broken, 'chore: seed, with a base that does not typecheck');
+
+    await git(['checkout', '-b', 'DESKTOP-7777/work'], broken);
+    await writeFiles(broken, { [FILE]: '// SPDX-License-Identifier: Apache-2.0\nexport const theme = "dark";\n' });
+    await commitAll(broken, 'feat(ui): dark');
+
+    await state.transition(7777, 'triaged', { home: brokenHome });
+    await state.transition(7777, 'planned', { home: brokenHome });
+  });
+
+  after(async () => {
+    await cleanup(broken, brokenHome, brokenTrees);
+  });
+
+  const brokenConfig = () => ({ ...CONFIG, worktrees: { ...CONFIG.worktrees, root: brokenTrees } });
+
+  test('the verification is inconclusive, and says which command', async () => {
+    const facts = await slice.facts({ issue: 7777, repoRoot: broken, home: brokenHome, config: brokenConfig(), packageMap: packageMap(broken) });
+    const stored = await slice.set({
+      issue: 7777,
+      proposal: { slices: [{ slug: 'ui', title: 'dark', files: [FILE], baseSlice: null }] },
+      facts,
+      config: brokenConfig(),
+      home: brokenHome,
+    });
+    assert.equal(stored.ok, true, JSON.stringify(stored.problems));
+
+    const result = await slice.verifySlice({
+      issue: 7777,
+      index: 1,
+      repoRoot: broken,
+      home: brokenHome,
+      config: brokenConfig(),
+      packageMap: packageMap(broken),
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.verification.baselineOk, false, 'the base fails it too');
+
+    // And the slice is not accused of failing to be independent, which would
+    // send somebody re-cutting a graph that was never the problem.
+    assert.deepEqual(slice.independenceProblems(result.graph), []);
+  });
+
+  test('the measurement is cached per base and command', async () => {
+    const cache = JSON.parse(await readFile(join(issueDir(brokenHome, 7777), 'verify', 'baseline.json'), 'utf8'));
+
+    assert.equal(Object.keys(cache).length, 1);
+    assert.equal(Object.values(cache)[0].ok, false);
+    assert.match(Object.values(cache)[0].command, /typecheck/);
+  });
+
+  test('and slices.md says inconclusive rather than a cross', async () => {
+    const graph = await slice.read(7777, { home: brokenHome });
+    const values = slice.renderValues(graph);
+
+    assert.match(values.rows, /inconclusive/);
+  });
+
+  // The gap DESKTOP-18832 walked into. Five places distinguished a slice that
+  // broke something from a run that proved nothing — `format`, `renderValues`,
+  // `independenceProblems`, the preflight check and the journal — and the sixth
+  // said `RED`. The sixth is the one a person runs and reads at the moment it
+  // happens, so it was the only one that mattered, and it sent a session on a
+  // half-hour investigation of a fact already sitting in slices.json.
+  test('the verdict has a third word, and it is not red', async () => {
+    const graph = await slice.read(7777, { home: brokenHome });
+
+    assert.equal(slice.verdict(graph.slices[0].verification), 'inconclusive');
+    assert.equal(slice.verdict(null), 'unverified');
+    assert.equal(slice.verdict({ ok: true }), 'green');
+    // Red is reserved for a base that passes what the slice failed. Anything
+    // else is an accusation the run did not measure.
+    assert.equal(slice.verdict({ ok: false, baselineOk: true }), 'red');
+    assert.equal(slice.verdict({ ok: false, baselineOk: null }), 'red');
+  });
+
+  test('the explanation names where the cause usually is', async () => {
+    const graph = await slice.read(7777, { home: brokenHome });
+    const text = slice.explainInconclusive(graph.slices[0].verification, { base: 'main' }).join('\n');
+
+    assert.match(text, /nothing has been shown about this slice/);
+    // Without this the reader is told the run proved nothing and not where to
+    // look, which is the half of the message that costs the half hour.
+    assert.match(text, /slicing\.verify\.prepare/);
+    assert.match(text, /verify\/baseline\.json/);
+  });
+
+  test('correcting the prepare list re-measures the base', async () => {
+    const file = join(issueDir(brokenHome, 7777), 'verify', 'baseline.json');
+    const before = Object.keys(JSON.parse(await readFile(file, 'utf8')));
+
+    // A base that fails because the tree was never told to build what the
+    // command needs is a fact about the prepare list as much as about the
+    // commit. Keyed on the command alone, the cache outlived the correction:
+    // every issue that had once measured a false baseline stayed inconclusive
+    // forever, and nothing said why.
+    const config = { ...brokenConfig(), slicing: { ...brokenConfig().slicing, verify: { worktree: 'reuse', install: 'never', prepare: ['build:something'] } } };
+
+    await slice.verifySlice({
+      issue: 7777,
+      index: 1,
+      repoRoot: broken,
+      home: brokenHome,
+      config,
+      packageMap: packageMap(broken),
+    });
+
+    const after = Object.keys(JSON.parse(await readFile(file, 'utf8')));
+    assert.equal(after.length, before.length + 1, 'a different preparation is a different question');
+  });
+
+  test('a sweep carries the verdict, so it cannot report N accusations for one cause', async () => {
+    const result = await slice.verifyAll({
+      issue: 7777,
+      repoRoot: broken,
+      home: brokenHome,
+      config: brokenConfig(),
+      packageMap: packageMap(broken),
+    });
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(
+      result.results.map((entry) => entry.verdict),
+      ['inconclusive'],
+    );
+  });
+});
+
+// Scenario 13: upstream asks for an already-published pull request to be split.
+// The slicer does not change — what changes is where the diff comes from.
+describe('--from-pr', () => {
+  let upstream;
+  let clone;
+
+  before(async () => {
+    upstream = await initRepo('pdkit-upstream-');
+    await writeFiles(upstream, { 'packages/main/src/a.ts': 'export const a = 1;\n' });
+    await commitAll(upstream, 'chore: seed');
+
+    // Somebody's pull request, published the way GitHub serves one.
+    await git(['checkout', '-b', 'their-work'], upstream);
+    await writeFiles(upstream, { 'packages/main/src/a.ts': 'export const a = 2;\n', 'packages/ui/src/b.ts': 'export const b = 1;\n' });
+    const head = await commitAll(upstream, 'feat: their change');
+    await git(['update-ref', 'refs/pull/7/head', head], upstream);
+
+    // Upstream moves on after the pull request was opened.
+    await git(['checkout', 'main'], upstream);
+    await writeFiles(upstream, { 'packages/preload/src/c.ts': 'export const c = 1;\n' });
+    await commitAll(upstream, 'chore: unrelated upstream work');
+
+    clone = await initRepo('pdkit-clone-');
+    await git(['remote', 'add', 'upstream', upstream], clone);
+    await git(['fetch', 'upstream', 'main'], clone);
+  });
+
+  after(async () => {
+    await cleanup(upstream, clone);
+  });
+
+  test('the head is fetched and the base is where it branched, not where upstream is now', async () => {
+    const fetched = await fetchPullRequestHead({
+      pr: 7,
+      repoRoot: clone,
+      config: { repo: { upstream_remote: 'upstream', base_branch: 'main' } },
+    });
+
+    const seed = await git(['rev-parse', 'upstream/main~1'], clone);
+    assert.equal(fetched.base, seed, 'the base is the fork point');
+
+    // Against the tip, the diff would carry the unrelated upstream commit and
+    // the slicer would be asked to place a file nobody in this PR touched.
+    const files = await slice.sliceDiff({
+      repoRoot: clone,
+      base: fetched.base,
+      ref: fetched.ref,
+      files: ['packages/main/src/a.ts', 'packages/ui/src/b.ts'],
+    });
+    assert.match(files, /packages\/ui\/src\/b\.ts/);
+    assert.equal(files.includes('packages/preload/src/c.ts'), false);
+  });
+
+  // Found on a live pull request, and it was silent. The clone's upstream/main
+  // was two months old, so the merge base fell back to that stale tip and the
+  // "diff of the pull request" came back with 446 commits of other people's
+  // work in it. The base was a real commit on main and the diff applied
+  // cleanly; nothing looked wrong until the file count was compared with what
+  // GitHub reported.
+  test('a clone whose base branch is stale still gets the real fork point', async () => {
+    // Upstream gains work the clone has never seen, AFTER the pull request
+    // branched — so a merge base measured against the clone's copy of main
+    // would be older than where they actually branched.
+    await git(['checkout', 'main'], upstream);
+    await writeFiles(upstream, { 'packages/main/src/newer.ts': 'export const newer = 1;\n' });
+    await commitAll(upstream, 'chore: landed after the clone last fetched');
+
+    await git(['checkout', 'main'], upstream);
+    await git(['checkout', '-b', 'later-work'], upstream);
+    await writeFiles(upstream, { 'packages/ui/src/later.ts': 'export const later = 1;\n' });
+    const head = await commitAll(upstream, 'feat: branched from the newer main');
+    await git(['update-ref', 'refs/pull/9/head', head], upstream);
+    await git(['checkout', 'main'], upstream);
+
+    const fetched = await fetchPullRequestHead({
+      pr: 9,
+      repoRoot: clone,
+      config: { repo: { upstream_remote: 'upstream', base_branch: 'main' } },
+    });
+
+    const diff = await slice.sliceDiff({
+      repoRoot: clone,
+      base: fetched.base,
+      ref: fetched.ref,
+      files: ['packages/ui/src/later.ts', 'packages/main/src/newer.ts'],
+    });
+
+    assert.match(diff, /packages\/ui\/src\/later\.ts/, 'their own file is in the diff');
+    assert.equal(
+      diff.includes('packages/main/src/newer.ts'),
+      false,
+      'a commit that landed before they branched is not theirs to answer for',
+    );
+  });
+
+  test('a pull request the remote does not serve is an error, not an empty slice', async () => {
+    await assert.rejects(
+      () => fetchPullRequestHead({ pr: 999, repoRoot: clone, config: { repo: { upstream_remote: 'upstream' } } }),
+      /999/,
+    );
+  });
+});
+
+// DESKTOP-18833: the branch was rebased onto upstream/main while the local
+// `main` sat 43 commits behind. Verify diffed against `main`, preflight against
+// `upstream/main`, and upstream had touched the slice's own files — so the two
+// digests never agreed, and re-verifying wrote the same disagreement again.
+describe('a local base branch behind upstream', () => {
+  const issue = 4343;
+  let repo_;
+  let home_;
+  let trees_;
+  let stale;
+  let tip;
+  let work;
+  let graph;
+
+  /** @returns {object} */
+  const config_ = () => ({ ...CONFIG, repo: { ...CONFIG.repo, upstream_remote: 'upstream' }, worktrees: { ...CONFIG.worktrees, root: trees_ } });
+
+  before(async () => {
+    repo_ = await initRepo('pdkit-stale-main-');
+    home_ = await initRepo('pdkit-stale-main-home-');
+    trees_ = join(repo_, '..', `${basename(repo_)}-trees`);
+
+    await seedWorkspace(repo_);
+    stale = await commitAll(repo_, 'chore: seed');
+
+    // Upstream moves on, in the slice's file and beside it. Only the
+    // remote-tracking ref sees it; the local `main` stays where it was.
+    await git(['checkout', '-b', 'scratch'], repo_);
+    await writeFiles(repo_, {
+      [THEME]: '// SPDX-License-Identifier: Apache-2.0\nexport const theme = "dark";\n',
+      'docs/meanwhile.md': 'what upstream landed while main sat\n',
+    });
+    tip = await commitAll(repo_, 'feat(ui): upstream changes the theme');
+    await git(['update-ref', 'refs/remotes/upstream/main', tip], repo_);
+
+    await git(['checkout', '-b', `DESKTOP-${issue}/work`, 'upstream/main'], repo_);
+    await git(['branch', '-D', 'scratch'], repo_);
+    await writeFiles(repo_, { [THEME]: '// SPDX-License-Identifier: Apache-2.0\nexport const theme = "high-contrast";\n' });
+    work = await commitAll(repo_, 'feat(ui): high contrast');
+
+    await state.transition(issue, 'triaged', { home: home_ });
+    await state.transition(issue, 'planned', { home: home_ });
+    await ids.allocateRequirement(issue, { home: home_ });
+    await ids.freezeRequirements(issue, { home: home_ });
+    await writeTask({ home: home_, issue, id: 'T1', satisfies: ['R1'], owns: [THEME] });
+  });
+
+  after(async () => {
+    await cleanup(repo_, home_, trees_);
+  });
+
+  test('facts measure the change set from upstream, not from the stale main', async () => {
+    const facts = await slice.facts({ issue, repoRoot: repo_, home: home_, config: config_(), packageMap: packageMap(repo_) });
+
+    assert.deepEqual(facts.files.map((file) => file.path), [THEME], 'what upstream landed is not part of the change set');
+    assert.equal(facts.base, 'main', 'the graph keeps the name; resolving it is done where it is used');
+
+    const result = await slice.set({
+      issue,
+      proposal: proposal([{ slug: 'ui-contrast', title: 'high contrast', files: [THEME], baseSlice: null }]),
+      facts,
+      config: config_(),
+      home: home_,
+    });
+    assert.equal(result.ok, true, JSON.stringify(result.problems));
+    graph = result.graph;
+  });
+
+  test('verify builds on upstream, and preflight finds the verification fresh', async () => {
+    const result = await slice.verifySlice({ issue, index: 1, repoRoot: repo_, home: home_, config: config_(), packageMap: packageMap(repo_) });
+
+    assert.equal(result.ok, true, result.error ?? result.output);
+    assert.equal(result.verification.base, 'upstream/main');
+    assert.equal(result.verification.baseCommit, tip);
+    assert.notEqual(result.verification.baseCommit, stale);
+
+    // The base preflight resolves and passes in.
+    const fresh = await slice.checkFreshness({ graph: result.graph, index: 1, repoRoot: repo_, base: 'upstream/main', ref: work });
+    assert.equal(fresh.fresh, true, fresh.reason);
+    graph = result.graph;
+  });
+
+  test('a materialized branch on upstream verifies against upstream, and stays fresh', async () => {
+    const branch = graph.slices[0].branch;
+    await git(['branch', branch, work], repo_);
+
+    const result = await slice.verifySlice({ issue, index: 1, repoRoot: repo_, home: home_, config: config_(), packageMap: packageMap(repo_) });
+    assert.equal(result.ok, true, result.error ?? result.output);
+    assert.equal(result.verification.baseCommit, tip);
+
+    const viaPreflight = await slice.checkFreshness({ graph: result.graph, index: 1, repoRoot: repo_, base: 'upstream/main', ref: branch });
+    const byDefault = await slice.checkFreshness({ graph: result.graph, index: 1, repoRoot: repo_, ref: branch, config: config_() });
+    assert.equal(viaPreflight.fresh, true, viaPreflight.reason);
+    assert.equal(byDefault.fresh, true, byDefault.reason);
+  });
+});

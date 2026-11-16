@@ -1,0 +1,984 @@
+/**********************************************************************
+ * Copyright (C) 2026 Red Hat, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ ***********************************************************************/
+
+// Tests for lib/pr.js.
+//
+// Two things here are load-bearing and the rest is bookkeeping.
+//
+// The merge rollup: `merged` is terminal in the state machine, so an issue that
+// moved there on its first merged slice could never push the second. The rollup
+// is what keeps that decision out of state.json.
+//
+// The CI verdict: a red job either means the change broke something or means
+// the job is red anyway, and the whole point of measuring is that nobody has to
+// guess which.
+
+import { test, describe, before, after, beforeEach } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import * as pr from '../lib/pr.js';
+import * as slice from '../lib/slice.js';
+import { read as readJournal } from '../lib/journal.js';
+
+const ISSUE = 7101;
+
+let home;
+
+/**
+ * A two-slice graph, one file each, without a git fixture.
+ *
+ * Only the back-reference is under test here; what makes a graph valid has its
+ * own tests against a real repository in test/slice.test.js.
+ *
+ * @param {string[]} paths one per slice, in order
+ */
+async function storeGraph(paths) {
+  const result = await slice.set({
+    issue: ISSUE,
+    home,
+    config: { branches: { sliced: 'DESKTOP-{issue}/{index}-{slug}' } },
+    facts: {
+      issue: ISSUE,
+      files: paths.map((path) => ({ path, package: null, layer: 'main', tasks: [], requirements: [] })),
+      changed: paths.map((path) => ({ status: 'M', path })),
+      requirements: [],
+      route: 'quickfix',
+      base: 'main',
+      ref: 'abc123',
+      layerOrder: ['main'],
+    },
+    proposal: {
+      slices: paths.map((path, index) => ({ index: index + 1, slug: `part-${index + 1}`, title: `part ${index + 1}`, files: [path], baseSlice: null })),
+    },
+  });
+
+  assert.equal(result.ok, true, JSON.stringify(result.problems));
+}
+
+before(async () => {
+  home = await mkdtemp(join(tmpdir(), 'pdkit-pr-'));
+});
+
+beforeEach(async () => {
+  // The journal is global, so it has to go too: entries from the previous
+  // test would otherwise be counted as this one's.
+  await rm(join(home, 'issues'), { recursive: true, force: true });
+  await rm(join(home, 'journal'), { recursive: true, force: true });
+});
+
+after(async () => {
+  await rm(home, { recursive: true, force: true });
+});
+
+describe('registering', () => {
+  test('an issue with nothing registered reads as nothing, not as an error', async () => {
+    assert.equal(await pr.read(ISSUE, { home }), null);
+  });
+
+  test('a pull request is recorded against its slice and branch', async () => {
+    const record = await pr.register({
+      issue: ISSUE,
+      number: 2871,
+      slice: 1,
+      branch: 'DESKTOP-7101/1-extension-api',
+      base: 'main',
+      url: 'https://example/2871',
+      home,
+    });
+
+    assert.equal(record.state, 'open');
+    assert.equal(record.slice, 1);
+    assert.equal(record.ci.verdict, 'pending', 'nothing has been read yet, and that is not a pass');
+
+    const book = await pr.read(ISSUE, { home });
+    assert.deepEqual(book.prs.map((entry) => entry.number), [2871]);
+  });
+
+  // Re-running /pd:pr after a preflight failure is the normal case, and being
+  // punished for it would push people to work around the command. Two records
+  // for one number would make every rollup below ambiguous.
+  test('registering the same number twice updates rather than duplicates', async () => {
+    await pr.register({ issue: ISSUE, number: 2871, slice: 1, branch: 'a', home });
+    await pr.register({ issue: ISSUE, number: 2871, base: 'main', home });
+
+    const book = await pr.read(ISSUE, { home });
+    assert.equal(book.prs.length, 1);
+    assert.equal(book.prs[0].branch, 'a', 'what was known is not erased by what was omitted');
+    assert.equal(book.prs[0].base, 'main');
+
+    const entries = await readJournal({ issue: ISSUE }, { home });
+    assert.equal(entries.filter((entry) => entry.event === 'pr-registered').length, 1);
+  });
+
+  test('records are kept in number order', async () => {
+    await pr.register({ issue: ISSUE, number: 2900, slice: 3, home });
+    await pr.register({ issue: ISSUE, number: 2871, slice: 1, home });
+
+    const book = await pr.read(ISSUE, { home });
+    assert.deepEqual(book.prs.map((entry) => entry.number), [2871, 2900]);
+  });
+
+  test('amending a pull request nobody registered says so', async () => {
+    await assert.rejects(() => pr.markMerged({ issue: ISSUE, number: 999, home }), /no pull request #999/);
+  });
+
+  test('the slice graph learns which pull request its slice became', async () => {
+    await storeGraph(['packages/main/src/a.ts', 'packages/ui/src/b.svelte']);
+
+    await pr.register({ issue: ISSUE, number: 2871, slice: 1, home });
+
+    const graph = await slice.read(ISSUE, { home });
+    assert.equal(graph.slices.find((entry) => entry.index === 1).pr, 2871);
+    assert.equal(graph.slices.find((entry) => entry.index === 2).pr, null);
+  });
+
+  // Two files disagreeing is worse than a refusal: prs.json would say slice #5
+  // exists and the graph would not, and nothing downstream could tell which is
+  // wrong.
+  test('registering against a slice the graph does not have is refused', async () => {
+    await storeGraph(['packages/main/src/a.ts', 'packages/ui/src/b.svelte']);
+
+    await assert.rejects(() => pr.register({ issue: ISSUE, number: 2871, slice: 5, home }), /no slice #5/);
+    assert.equal(await pr.read(ISSUE, { home }), null, 'nothing was written');
+  });
+});
+
+describe('a merge that happened in the browser', () => {
+  // It reaches the plugin through refresh and no other call. Until 0.16 that
+  // changed prs.json silently: state.json says where the work is, the journal
+  // says why and when, and a merge is exactly what it is read back for.
+  test('is journaled once, when the state actually changes', async () => {
+    const WEB = 4500;
+    await pr.register({ issue: WEB, number: 700, branch: 'DESKTOP-4500/one', home });
+
+    const merged = {
+      number: 700,
+      state: 'MERGED',
+      mergedAt: '2026-08-02T09:00:00Z',
+      headRefName: 'DESKTOP-4500/one',
+      baseRefName: 'main',
+      url: 'https://example/700',
+      updatedAt: '2026-08-02T09:00:00Z',
+      reviewDecision: 'APPROVED',
+      labels: [],
+      statusCheckRollup: [],
+    };
+
+    const exec = (file, args, options, callback) => {
+      const joined = args.join(' ');
+      const payload = joined.includes('reviewThreads')
+        ? { data: { repository: { pullRequest: { reviewThreads: { pageInfo: {}, nodes: [] } } } } }
+        : args.includes('reviews,comments')
+          ? { reviews: [], comments: [] }
+          : merged;
+      queueMicrotask(() => callback(null, JSON.stringify(payload), ''));
+      return { stdin: { end: () => {} } };
+    };
+
+    const config = { repo: { upstream: 'podman-desktop/podman-desktop' } };
+    await pr.refresh({ issue: WEB, number: 700, config, home, exec, peers: false });
+
+    const entries = (await readJournal({ issue: WEB }, { home })).filter((entry) => entry.event === 'pr-merged');
+    assert.equal(entries.length, 1);
+    assert.match(entries[0].detail, /#700 observed by refresh/);
+
+    // A second refresh finds the same state and has nothing to report.
+    await pr.refresh({ issue: WEB, number: 700, config, home, exec, peers: false });
+    assert.equal((await readJournal({ issue: WEB, event: 'pr-merged' }, { home })).length, 1);
+  });
+});
+
+describe('the merge rollup', () => {
+  beforeEach(async () => {
+    for (const [number, slice] of [[2871, 1], [2872, 2], [2873, 3]]) {
+      await pr.register({ issue: ISSUE, number, slice, home });
+    }
+  });
+
+  // The finding this whole invariant comes from: upstream merges slices one at
+  // a time, `merged` is terminal, and recording the first one on the issue
+  // would lock it before the second slice could reach preflight-green.
+  test('one merged slice of three does not finish the issue', async () => {
+    await pr.markMerged({ issue: ISSUE, number: 2871, home });
+
+    const summary = await pr.rollup(ISSUE, { home });
+    assert.deepEqual(summary.merged, [2871]);
+    assert.deepEqual(summary.open, [2872, 2873]);
+    assert.equal(summary.allMerged, false);
+  });
+
+  test('all three merged does', async () => {
+    for (const number of [2871, 2872, 2873]) await pr.markMerged({ issue: ISSUE, number, home });
+
+    const summary = await pr.rollup(ISSUE, { home });
+    assert.equal(summary.allMerged, true);
+    assert.deepEqual(summary.open, []);
+  });
+
+  // Scenario 10: a maintainer closing a PR is the entry to the redo route. It
+  // is not the same as merging, and it must not read as "done".
+  test('a closed pull request is neither merged nor open', async () => {
+    await pr.markMerged({ issue: ISSUE, number: 2871, home });
+    await pr.markClosed({ issue: ISSUE, number: 2872, reason: 'maintainer asked to split it', home });
+    await pr.markMerged({ issue: ISSUE, number: 2873, home });
+
+    const summary = await pr.rollup(ISSUE, { home });
+    assert.deepEqual(summary.closed, [2872]);
+    assert.equal(summary.allMerged, false, 'a closed slice is unfinished work, not finished work');
+
+    const entries = await readJournal({ issue: ISSUE }, { home });
+    assert.ok(entries.some((entry) => entry.event === 'pr-closed' && entry.detail.includes('split')));
+  });
+
+  // A rework closes its first attempt and opens a second (0.14). Without this
+  // the superseded pull request sits in the rollup forever and the issue can
+  // never reach `merged` — and the one distinction that matters, rejected
+  // versus replaced, would live in a reason field nothing reads.
+  describe('a pull request that was replaced rather than rejected', () => {
+    const REWORK = 4400;
+
+    test('is still unfinished while its replacement is open', async () => {
+      await pr.register({ issue: REWORK, number: 17577, branch: 'DESKTOP-4400/first', home });
+      await pr.register({ issue: REWORK, number: 18562, branch: 'DESKTOP-4400/second', home });
+      await pr.markClosed({ issue: REWORK, number: 17577, supersededBy: 18562, reason: 'reworked', home });
+
+      const summary = await pr.rollup(REWORK, { home });
+
+      assert.deepEqual(summary.superseded, [], 'nothing has landed yet, so nothing is settled');
+      assert.deepEqual(summary.unfinished, [17577, 18562]);
+      assert.equal(summary.allMerged, false);
+    });
+
+    test('and settles when the replacement lands', async () => {
+      // Self-contained: the suite wipes the state between tests, and a test
+      // that leans on the previous one passes in one order and fails in another.
+      await pr.register({ issue: REWORK, number: 17577, branch: 'DESKTOP-4400/first', home });
+      await pr.register({ issue: REWORK, number: 18562, branch: 'DESKTOP-4400/second', home });
+      await pr.markClosed({ issue: REWORK, number: 17577, supersededBy: 18562, reason: 'reworked', home });
+      await pr.markMerged({ issue: REWORK, number: 18562, home });
+
+      const summary = await pr.rollup(REWORK, { home });
+
+      assert.deepEqual(summary.superseded, [17577]);
+      assert.deepEqual(summary.unfinished, []);
+      assert.equal(summary.allMerged, true, 'the work landed; the pull request that carried it first did not have to');
+    });
+
+    test('a closure that names no successor still blocks, which is the rejection case', async () => {
+      const REJECTED = 4401;
+      await pr.register({ issue: REJECTED, number: 900, branch: 'DESKTOP-4401/one', home });
+      await pr.markClosed({ issue: REJECTED, number: 900, reason: 'maintainer said no', home });
+
+      const summary = await pr.rollup(REJECTED, { home });
+
+      assert.deepEqual(summary.unfinished, [900]);
+      assert.equal(summary.allMerged, false);
+    });
+
+    test('and a successor that was itself closed settles nothing', async () => {
+      const CHAIN = 4402;
+      await pr.register({ issue: CHAIN, number: 910, branch: 'DESKTOP-4402/one', home });
+      await pr.register({ issue: CHAIN, number: 911, branch: 'DESKTOP-4402/two', home });
+      await pr.markClosed({ issue: CHAIN, number: 910, supersededBy: 911, home });
+      await pr.markClosed({ issue: CHAIN, number: 911, reason: 'abandoned too', home });
+
+      const summary = await pr.rollup(CHAIN, { home });
+
+      assert.deepEqual(summary.superseded, []);
+      assert.equal(summary.allMerged, false);
+    });
+  });
+
+  test('an issue with no pull requests has not finished', async () => {
+    assert.equal((await pr.rollup(9999, { home })).allMerged, false);
+  });
+});
+
+describe('judging a red job', () => {
+  const check = (conclusion, status = 'COMPLETED') => ({ name: 'Windows', status, conclusion });
+
+  test('green is green and a run in flight is not a verdict', () => {
+    assert.equal(pr.judge(check('SUCCESS')).verdict, 'pass');
+    assert.equal(pr.judge(check('SKIPPED')).verdict, 'pass');
+    assert.equal(pr.judge(check(null, 'IN_PROGRESS')).verdict, 'pending');
+    assert.equal(pr.judge(check('CANCELLED')).verdict, 'cancelled');
+  });
+
+  // Twenty-five seconds after #18561 opened: twenty-three jobs in progress,
+  // nothing red, and the rollup said `fail`. A third-party status context
+  // spells "not yet" as a state rather than by having no conclusion, and a
+  // status context always normalizes to COMPLETED — so it arrived as "finished,
+  // and not green", which is what failure looks like everywhere else here.
+  test('a status context that says PENDING has not answered yet', () => {
+    assert.equal(pr.judge({ name: 'CodeRabbit', status: 'COMPLETED', conclusion: 'PENDING' }).verdict, 'pending');
+    assert.equal(pr.judge(check('QUEUED')).verdict, 'pending');
+    assert.equal(pr.judge(check('EXPECTED')).verdict, 'pending');
+  });
+
+  // Reaching "red" by elimination means every conclusion nobody thought of is
+  // reported as a broken build on somebody's pull request.
+  test('a conclusion that is not a known red is not called a failure', () => {
+    assert.equal(pr.judge(check('SOMETHING_NEW')).verdict, 'inconclusive');
+    assert.equal(pr.judge(check('FAILURE')).verdict, 'fail');
+    assert.equal(pr.judge(check('TIMED_OUT')).verdict, 'fail');
+  });
+
+  // Upstream's Domain Review Status follows labels a bot maintains and goes
+  // green only when the people who own the touched areas approve. Measured
+  // across the open pull requests: `inreview` label -> IN_PROGRESS, `reviewed`
+  // -> SUCCESS. It is a review state wearing a check's clothes.
+  test('a check waiting on people is not the same word as a check waiting on a machine', () => {
+    const gating = ['Domain Review Status'];
+    const waiting = { name: 'Domain Review Status', status: 'IN_PROGRESS', conclusion: '' };
+
+    assert.equal(pr.judge(waiting, { gating }).verdict, 'awaiting-review');
+    // Without the configuration it is simply unfinished — no guessing by name.
+    assert.equal(pr.judge(waiting).verdict, 'pending');
+    // And once the reviewers approve it is an ordinary green.
+    assert.equal(pr.judge({ ...waiting, status: 'COMPLETED', conclusion: 'SUCCESS' }, { gating }).verdict, 'pass');
+  });
+
+  test('the domains come out of the labels the bot maintains', () => {
+    const domains = pr.domainsOf([
+      { name: 'domain/containers/inreview' },
+      { name: 'domain/qe/reviewed' },
+      { name: 'area/website 🌐' },
+      'domain/foundations/inreview',
+    ]);
+
+    assert.deepEqual(domains, [
+      { domain: 'containers', state: 'inreview' },
+      { domain: 'foundations', state: 'inreview' },
+      { domain: 'qe', state: 'reviewed' },
+    ]);
+    assert.deepEqual(pr.domainsOf([]), []);
+    assert.deepEqual(pr.domainsOf(undefined), []);
+  });
+
+  // A build still running is the more urgent answer; when the machines are
+  // done, what is left is the name of whoever has to look.
+  test('waiting on people outranks nothing but a finished run', () => {
+    assert.equal(pr.rollupOf([{ verdict: 'awaiting-review' }, { verdict: 'pass' }]), 'awaiting-review');
+    assert.equal(pr.rollupOf([{ verdict: 'awaiting-review' }, { verdict: 'pending' }]), 'pending');
+    assert.equal(pr.rollupOf([{ verdict: 'awaiting-review' }, { verdict: 'fail' }]), 'fail');
+  });
+
+  // #19849: `ci pass` seven seconds after a force-push, from the quick checks
+  // that had started, with thirty jobs of the previous head not yet queued.
+  test('right after a push, a job the previous head ran and this one has not reported is pending', () => {
+    const job = (name, verdict = 'pass') => ({ name, workflow: null, conclusion: 'SUCCESS', verdict, peers: [], url: null });
+    const previous = { head: 'old', expected: [], jobs: [job('DCO'), job('linter'), job('unit tests')] };
+
+    const pushed = pr.awaitedJobs([job('DCO')], 'new', previous);
+    assert.deepEqual(pushed.expected, ['DCO', 'linter', 'unit tests']);
+    assert.deepEqual(pushed.jobs.filter((entry) => entry.notReported).map((entry) => entry.name), ['linter', 'unit tests']);
+    assert.equal(pr.rollupOf(pushed.jobs), 'pending', 'one green quick check is not a green run');
+
+    // A second refresh on the same head remembers what it was waiting for.
+    const again = pr.awaitedJobs([job('DCO'), job('linter')], 'new', { head: 'new', ...pushed });
+    assert.deepEqual(again.jobs.filter((entry) => entry.notReported).map((entry) => entry.name), ['unit tests']);
+
+    const done = pr.awaitedJobs([job('DCO'), job('linter'), job('unit tests')], 'new', { head: 'new', ...again });
+    assert.equal(pr.rollupOf(done.jobs), 'pass');
+  });
+
+  test('a job removed upstream is waited for on one head only', () => {
+    const job = (name) => ({ name, workflow: null, conclusion: 'SUCCESS', verdict: 'pass', peers: [], url: null });
+    const first = pr.awaitedJobs([job('DCO')], 'b', { head: 'a', jobs: [job('DCO'), job('retired')] });
+    assert.equal(pr.rollupOf(first.jobs), 'pending');
+
+    // The next push takes its expectations from real jobs only, not from the
+    // placeholders, so the retired workflow stops being waited for.
+    const next = pr.awaitedJobs([job('DCO')], 'c', { head: 'b', ...first });
+    assert.deepEqual(next.expected, ['DCO']);
+    assert.equal(pr.rollupOf(next.jobs), 'pass');
+  });
+
+  test('the rollup of a freshly opened pull request is pending, not fail', () => {
+    const jobs = [
+      { name: 'CodeRabbit', verdict: 'pending' },
+      { name: 'unit tests', verdict: 'pending' },
+      { name: 'typecheck', verdict: 'pass' },
+    ];
+
+    assert.equal(pr.rollupOf(jobs), 'pending');
+  });
+
+  test('red with green peers is ours', () => {
+    const verdict = pr.judge(check('FAILURE'), { peers: new Map([['Linux', [1, 2]]]) });
+    assert.equal(verdict.verdict, 'fail');
+    assert.deepEqual(verdict.peers, []);
+  });
+
+  // Blocking on something the change did not do teaches people to route around
+  // the gate; passing it is a lie. The third outcome is the honest one.
+  test('red on other people\'s pull requests too is inconclusive, and names them', () => {
+    const verdict = pr.judge(check('FAILURE'), { peers: new Map([['Windows', [18550, 18486]]]) });
+    assert.equal(verdict.verdict, 'inconclusive');
+    assert.deepEqual(verdict.peers, [18550, 18486]);
+  });
+
+  test('one other pull request is not yet a population', () => {
+    // Still reported, so a human can weigh it — but one coincidence is not a
+    // measurement, and calling it one would excuse real breakage.
+    const verdict = pr.judge(check('FAILURE'), { peers: new Map([['Windows', [18550]]]) });
+    assert.equal(verdict.verdict, 'fail');
+    assert.deepEqual(verdict.peers, [18550]);
+  });
+
+  // `pr view` reports the latest run per job, so a re-run that went green is
+  // exactly what hides a flake. Reading every run for the commit is what makes
+  // this measurable instead of a hunch.
+  test('the same job answering twice on one commit is a flake', () => {
+    const verdict = pr.judge(check('FAILURE'), {
+      runs: [
+        { name: 'Windows', conclusion: 'FAILURE' },
+        { name: 'Windows', conclusion: 'SUCCESS' },
+        { name: 'Linux', conclusion: 'SUCCESS' },
+      ],
+    });
+    assert.equal(verdict.verdict, 'flake');
+  });
+
+  // The shape the comment above always named and the code could not report. A
+  // job that failed and was re-run green has a CURRENT conclusion of success, so
+  // while the flake test sat below `if (GREEN) return pass` the only flake
+  // reachable was one still red — which is the rarer half. Found on #18779,
+  // where three jobs went red, two re-runs turned them green, and the report
+  // said pass.
+  //
+  // Whether a job disagreed with itself is a fact about the commit, not about
+  // what it says at the moment somebody looks.
+  test('a job that was red and is now green, after a re-run, is still a flake', () => {
+    const verdict = pr.judge(check('SUCCESS'), {
+      runs: [
+        { name: 'Windows', conclusion: 'FAILURE' },
+        { name: 'Windows', conclusion: 'SUCCESS' },
+      ],
+    });
+    assert.equal(verdict.verdict, 'flake');
+  });
+
+  // And the bound: agreeing with itself twice is not a flake, however many runs
+  // there are. Otherwise every re-run of a green job would report one.
+  test('a job that answered the same way twice is not a flake', () => {
+    const verdict = pr.judge(check('SUCCESS'), {
+      runs: [
+        { name: 'Windows', conclusion: 'SUCCESS' },
+        { name: 'Windows', conclusion: 'SUCCESS' },
+      ],
+    });
+    assert.equal(verdict.verdict, 'pass');
+  });
+
+  test('the rollup is the worst thing any job said', () => {
+    const jobs = (...verdicts) => verdicts.map((verdict) => ({ verdict }));
+
+    assert.equal(pr.rollupOf(jobs('pass', 'inconclusive', 'fail')), 'fail');
+    assert.equal(pr.rollupOf(jobs('pass', 'inconclusive', 'flake')), 'flake');
+    assert.equal(pr.rollupOf(jobs('pass', 'inconclusive')), 'inconclusive');
+    assert.equal(pr.rollupOf(jobs('pass', 'pass')), 'pass');
+    assert.equal(pr.rollupOf([]), 'pending', 'no jobs read is not a pass');
+  });
+});
+
+// The measurement answers whose the red is. The log answers what broke, and
+// that is the part scenario 9 leaves to whoever reads the report.
+describe('the logs behind a red run', () => {
+  const job = (name, verdict) => ({
+    name,
+    workflow: 'pr-check',
+    conclusion: verdict === 'pass' ? 'SUCCESS' : 'FAILURE',
+    verdict,
+    peers: [],
+    url: `https://github.com/podman-desktop/podman-desktop/actions/runs/1/job/${name.length}`,
+  });
+
+  const record = (...jobs) => ({ ci: { verdict: 'fail', checkedAt: null, jobs } });
+
+  /** Records every call so the count is assertable, and answers with a log. */
+  function fakeGh(stdout) {
+    const calls = [];
+    const exec = (file, args, options, callback) => {
+      calls.push(args);
+      queueMicrotask(() => callback(null, stdout, ''));
+      return { stdin: { end: () => {} } };
+    };
+    return { calls, exec };
+  }
+
+  const CONFIG = { repo: { upstream: 'podman-desktop/podman-desktop' } };
+
+  test('only the jobs the measurement says are ours', async () => {
+    const { calls, exec } = fakeGh('Windows\tRun tests\tAssertionError\n');
+
+    const logs = await pr.failureLogs(record(job('Windows', 'fail'), job('Linux', 'inconclusive'), job('macOS', 'flake'), job('website', 'pass')), {
+      config: CONFIG,
+      exec,
+    });
+
+    // inconclusive describes someone else's problem and flake is already the
+    // finding: fetching either spends a request to produce reading nobody
+    // should act on.
+    assert.equal(calls.length, 1);
+    assert.deepEqual(logs.map((entry) => entry.job), ['Windows']);
+    assert.equal(logs[0].available, true);
+    assert.deepEqual(logs[0].lines, ['Windows\tRun tests\tAssertionError']);
+  });
+
+  test('a green run costs nothing', async () => {
+    const { calls } = fakeGh('');
+    const logs = await pr.failureLogs({ ci: { verdict: 'pass', jobs: [job('Windows', 'pass')] } }, { config: CONFIG });
+
+    assert.deepEqual(logs, []);
+    assert.equal(calls.length, 0);
+  });
+
+  // Nothing here reaches prs.json. A log expires, and a stale copy stored
+  // beside the verdict would carry the verdict's standing.
+  test('the record is not written to', async () => {
+    const { exec } = fakeGh('boom\n');
+    const before = await pr.read(ISSUE, { home });
+
+    await pr.failureLogs(record(job('Windows', 'fail')), { config: CONFIG, exec });
+
+    assert.deepEqual(await pr.read(ISSUE, { home }), before);
+  });
+});
+
+describe('refreshing from GitHub', () => {
+  /**
+   * A fake gh that answers each call by matching its argv.
+   *
+   * @param {Record<string, unknown>} answers
+   */
+  function fakeGh(answers) {
+    return (file, args, options, callback) => {
+      const argv = args.join(' ');
+      const key = argv.includes('graphql')
+        ? 'threads'
+        : argv.includes('check-runs')
+          ? 'runs'
+          : argv.includes('pr list')
+            ? 'peers'
+            : argv.includes('reviews,comments')
+              ? 'discussion'
+              : 'pr';
+
+      queueMicrotask(() => callback(null, JSON.stringify(answers[key] ?? {}), ''));
+      return { stdin: { end: () => {} } };
+    };
+  }
+
+  const CONFIG = { repo: { upstream: 'podman-desktop/podman-desktop', fork: 'vzhukovs/podman-desktop' } };
+
+  const threadPage = (nodes) => ({
+    data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false }, nodes } } } },
+  });
+
+  const thread = (id, resolved) => ({
+    id,
+    isResolved: resolved,
+    isOutdated: false,
+    path: 'packages/main/src/x.ts',
+    line: 10,
+    comments: { nodes: [{ author: { login: 'coderabbitai' }, body: 'b', createdAt: '2026-05-20T00:00:00Z', url: 'u' }] },
+  });
+
+  test('what GitHub said is what gets stored', async () => {
+    await pr.register({ issue: ISSUE, number: 17577, slice: null, home });
+
+    const record = await pr.refresh({
+      issue: ISSUE,
+      number: 17577,
+      config: CONFIG,
+      home,
+      exec: fakeGh({
+        pr: {
+          number: 17577,
+          state: 'OPEN',
+          reviewDecision: 'CHANGES_REQUESTED',
+          headRefName: 'DESKTOP-7101/fix',
+          headRefOid: 'abc123',
+          baseRefName: 'main',
+          url: 'https://example/17577',
+          updatedAt: '2026-06-05T05:58:37Z',
+          statusCheckRollup: [
+            { name: 'Windows', status: 'COMPLETED', conclusion: 'SUCCESS', workflowName: 'pr-check' },
+            { name: 'Linux', status: 'COMPLETED', conclusion: 'FAILURE', workflowName: 'pr-check' },
+          ],
+        },
+        threads: threadPage([thread('t1', false), thread('t2', true)]),
+        discussion: { reviews: [{ author: { login: 'maintainer1' }, state: 'CHANGES_REQUESTED', body: 'split it', submittedAt: '2026-06-05T05:58:37Z' }], comments: [] },
+        peers: [{ number: 18550, statusCheckRollup: [{ name: 'Linux', status: 'COMPLETED', conclusion: 'FAILURE' }] }],
+        runs: { check_runs: [{ name: 'Linux', conclusion: 'failure' }] },
+      }),
+    });
+
+    assert.equal(record.review.decision, 'CHANGES_REQUESTED');
+    assert.equal(record.review.threadsOpen, 1, 'resolved threads are counted but not as open');
+    assert.equal(record.review.threadsTotal, 2);
+    assert.equal(record.branch, 'DESKTOP-7101/fix');
+
+    // One peer is not a population, so this stays ours.
+    assert.equal(record.ci.verdict, 'fail');
+    assert.deepEqual(record.ci.jobs.map((job) => job.verdict), ['pass', 'fail']);
+
+    const stored = JSON.parse(await readFile(join(home, 'issues', String(ISSUE), 'prs.json'), 'utf8'));
+    assert.equal(stored.prs[0].ci.verdict, 'fail');
+  });
+
+  test('a merged pull request is recorded as merged, not as open', async () => {
+    await pr.register({ issue: ISSUE, number: 17577, home });
+
+    const record = await pr.refresh({
+      issue: ISSUE,
+      number: 17577,
+      config: CONFIG,
+      home,
+      exec: fakeGh({
+        pr: { number: 17577, state: 'MERGED', mergedAt: '2026-06-10T00:00:00Z', statusCheckRollup: [] },
+        threads: threadPage([]),
+        discussion: { reviews: [], comments: [] },
+      }),
+    });
+
+    assert.equal(record.state, 'merged');
+    assert.equal((await pr.rollup(ISSUE, { home })).allMerged, true);
+  });
+
+  // A green pull request has no red job to explain, so it should not pay for
+  // the population read that only a red job needs.
+  //
+  // The per-commit runs are the other way round, and this test used to assert
+  // the opposite. Skipping them while nothing is red asks "did this job answer
+  // twice" exactly when the answer must be no, because the ordinary flake is
+  // red, re-run, green — nothing is red by the time anyone looks. Measured on
+  // #18779: three jobs red, two re-runs, and the report said pass until this
+  // fetch became unconditional.
+  test('a green run does not go looking for peers, but does read the commit runs', async () => {
+    await pr.register({ issue: ISSUE, number: 17577, home });
+
+    const seen = [];
+    await pr.refresh({
+      issue: ISSUE,
+      number: 17577,
+      config: CONFIG,
+      home,
+      exec: (file, args, options, callback) => {
+        seen.push(args.join(' '));
+        const argv = args.join(' ');
+        const body = argv.includes('graphql')
+          ? threadPage([])
+          : argv.includes('reviews,comments')
+            ? { reviews: [], comments: [] }
+            : { number: 17577, state: 'OPEN', statusCheckRollup: [{ name: 'Linux', status: 'COMPLETED', conclusion: 'SUCCESS' }] };
+        queueMicrotask(() => callback(null, JSON.stringify(body), ''));
+        return { stdin: { end: () => {} } };
+      },
+    });
+
+    assert.ok(!seen.some((argv) => argv.includes('pr list')), 'the peer population was read for nothing');
+    assert.ok(
+      seen.some((argv) => argv.includes('check-runs')),
+      'a flake is invisible unless the runs are read while the checks are green',
+    );
+  });
+});
+
+// What `close` reads before it decides whether an issue may end.
+//
+// The record it reads is the one most likely to be stale: reviews, rebases and
+// the merge itself all happen in the browser, and nothing local hears about any
+// of them. On DESKTOP-17221 prs.json had last been read seven weeks earlier, so
+// `close` reported `pr-open`, `allMerged: false` and a worktree it refused to
+// remove — about a pull request merged that morning. The refusal was correct
+// about what it had been given, which is the shape of defect this catches.
+describe('re-reading what is still open', () => {
+  /** gh, answering from a script. Same shape as the stub in the refresh tests. */
+  function fakeGh(answers) {
+    const seen = [];
+    const exec = (file, args, options, callback) => {
+      const argv = args.join(' ');
+      seen.push(argv);
+
+      const key = argv.includes('graphql')
+        ? 'threads'
+        : argv.includes('check-runs')
+          ? 'runs'
+          : argv.includes('pr list')
+            ? 'peers'
+            : argv.includes('reviews,comments')
+              ? 'discussion'
+              : 'pr';
+
+      queueMicrotask(() => callback(null, JSON.stringify(answers[key] ?? {}), ''));
+      return { stdin: { end: () => {} } };
+    };
+    return { seen, exec };
+  }
+
+  const CONFIG = { repo: { upstream: 'podman-desktop/podman-desktop' } };
+
+  const merged = (number, branch) => ({
+    pr: { number, state: 'MERGED', mergedAt: '2026-09-21T13:30:00Z', headRefName: branch, baseRefName: 'main', statusCheckRollup: [] },
+    threads: { data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false }, nodes: [] } } } } },
+    discussion: { reviews: [], comments: [] },
+    runs: { check_runs: [] },
+  });
+
+  test('a merge nobody told the plugin about is found, and the rollup changes with it', async () => {
+    await pr.register({ issue: ISSUE, number: 18562, branch: 'DESKTOP-17221/fix', base: 'main', home });
+    assert.equal((await pr.rollup(ISSUE, { home })).allMerged, false);
+
+    const { exec } = fakeGh(merged(18562, 'DESKTOP-17221/fix'));
+    const result = await pr.refreshOpen({ issue: ISSUE, config: CONFIG, home, exec });
+
+    assert.deepEqual(result.failed, []);
+    assert.deepEqual(result.refreshed, [{ number: 18562, state: 'merged', mergedAt: '2026-09-21T13:30:00Z' }]);
+    assert.equal((await pr.rollup(ISSUE, { home })).allMerged, true, 'without a hand-typed `pr refresh`');
+
+    // The other thing that was broken by the stale record, and the reason it is
+    // asserted here rather than in test/worktree.test.js: `close` will not
+    // remove a squash-merged branch's worktree unless the record says a pull
+    // request landed it, and until this read nothing did.
+    assert.equal(pr.landed(await pr.read(ISSUE, { home }), 'DESKTOP-17221/fix'), 18562);
+  });
+
+  // Closing is not a reason to ask whether somebody else's pull request is
+  // red, and the peer read is the expensive half of a refresh.
+  test('the peer population is not read', async () => {
+    await pr.register({ issue: ISSUE, number: 18562, branch: 'DESKTOP-17221/fix', home });
+
+    const { seen, exec } = fakeGh(merged(18562, 'DESKTOP-17221/fix'));
+    await pr.refreshOpen({ issue: ISSUE, config: CONFIG, home, exec });
+
+    assert.ok(!seen.some((argv) => argv.includes('pr list')));
+  });
+
+  // Two states GitHub does not take back. Re-reading them spends four requests
+  // to be told what the record already says.
+  test('only the open ones cost anything', async () => {
+    await pr.register({ issue: ISSUE, number: 100, branch: 'a', home });
+    await pr.register({ issue: ISSUE, number: 101, branch: 'b', home });
+    await pr.markMerged({ issue: ISSUE, number: 100, home });
+    await pr.markClosed({ issue: ISSUE, number: 101, reason: 'superseded', home });
+
+    const { seen, exec } = fakeGh({});
+    const result = await pr.refreshOpen({ issue: ISSUE, config: CONFIG, home, exec });
+
+    assert.deepEqual(result, { refreshed: [], failed: [] });
+    assert.deepEqual(seen, []);
+  });
+
+  // gh missing, gh unauthenticated, the network down. Closing has to survive
+  // all three: the facts on disk are still worth reporting, and the rollup
+  // refuses on an open pull request anyway — which is the right answer when the
+  // truth could not be established.
+  test('a read that fails is reported with the age of what it could not replace', async () => {
+    await pr.register({ issue: ISSUE, number: 18562, branch: 'DESKTOP-17221/fix', home });
+
+    const exec = (file, args, options, callback) => {
+      queueMicrotask(() => callback(Object.assign(new Error('gh'), { code: 'ENOENT' }), '', ''));
+      return { stdin: { end: () => {} } };
+    };
+
+    const result = await pr.refreshOpen({ issue: ISSUE, config: CONFIG, home, exec });
+
+    assert.deepEqual(result.refreshed, []);
+    assert.equal(result.failed.length, 1);
+    assert.equal(result.failed[0].number, 18562);
+    assert.match(result.failed[0].error, /gh is not installed/);
+    // Never read: the label has to say that rather than imply a reading of
+    // age zero, which is what the dashboard learned the hard way.
+    assert.equal(result.failed[0].reading.label, 'never');
+    assert.equal(result.failed[0].reading.old, true);
+
+    assert.equal((await pr.rollup(ISSUE, { home })).allMerged, false, 'an unestablished state cannot close an issue');
+  });
+
+  // An issue with three slices whose second read times out still knows the
+  // truth about the other two.
+  test('one failure does not take the others down with it', async () => {
+    await pr.register({ issue: ISSUE, number: 200, branch: 'one', home });
+    await pr.register({ issue: ISSUE, number: 201, branch: 'two', home });
+
+    const answers = merged(200, 'one');
+    const exec = (file, args, options, callback) => {
+      const argv = args.join(' ');
+      if (argv.includes('201')) {
+        queueMicrotask(() => callback(Object.assign(new Error('gh'), { stderr: 'HTTP 502' }), '', 'HTTP 502'));
+        return { stdin: { end: () => {} } };
+      }
+      const key = argv.includes('graphql') ? 'threads' : argv.includes('check-runs') ? 'runs' : argv.includes('reviews,comments') ? 'discussion' : 'pr';
+      queueMicrotask(() => callback(null, JSON.stringify(answers[key] ?? {}), ''));
+      return { stdin: { end: () => {} } };
+    };
+
+    const result = await pr.refreshOpen({ issue: ISSUE, config: CONFIG, home, exec });
+
+    assert.deepEqual(result.refreshed.map((entry) => entry.number), [200]);
+    assert.deepEqual(result.failed.map((entry) => entry.number), [201]);
+  });
+});
+
+describe('staleness and rendering', () => {
+  const record = (extra) => ({
+    number: 17577,
+    slice: null,
+    branch: 'DESKTOP-7101/fix',
+    base: 'main',
+    state: 'open',
+    registeredAt: '2026-05-01T00:00:00Z',
+    refreshedAt: '2026-07-31T00:00:00Z',
+    review: { decision: 'CHANGES_REQUESTED', threadsOpen: 2, threadsTotal: 4, lastActivityAt: '2026-06-05T00:00:00Z' },
+    ci: { verdict: 'inconclusive', checkedAt: null, jobs: [] },
+    ...extra,
+  });
+
+  test('staleness measures from the last activity of any kind', () => {
+    const now = new Date('2026-07-31T00:00:00Z');
+
+    const stale = pr.staleness(record(), { now });
+    assert.equal(stale.days, 56);
+    assert.equal(stale.stale, true);
+
+    // Someone else commenting yesterday is still activity: the PR is being
+    // looked at, and calling it stale would be wrong about who is waiting.
+    const fresh = pr.staleness(record({ review: { lastActivityAt: '2026-07-30T00:00:00Z' } }), { now });
+    assert.equal(fresh.stale, false);
+  });
+
+  // Every field on a dashboard row is what the last refresh saw. A sweep of ten
+  // pull requests was measured at 37 seconds (item K), so nobody refreshes
+  // before every glance — which makes an old row ordinary, not exceptional.
+  test('a row says how old the reading behind it is', () => {
+    const at = (when, now) => pr.reading(record({ refreshedAt: when }), { now: new Date(now) });
+
+    assert.equal(at('2026-07-31T00:00:00Z', '2026-07-31T00:00:20Z').label, 'just now');
+    assert.equal(at('2026-07-31T00:00:00Z', '2026-07-31T00:12:00Z').label, '12m');
+    assert.equal(at('2026-07-31T00:00:00Z', '2026-07-31T05:00:00Z').label, '5h');
+    assert.equal(at('2026-07-28T00:00:00Z', '2026-07-31T00:00:00Z').label, '3d');
+  });
+
+  test('never read is not the same as read a moment ago', () => {
+    const never = pr.reading(record({ refreshedAt: null }));
+
+    assert.equal(never.label, 'never');
+    assert.equal(never.at, null);
+    // Old, because nothing behind the row was ever measured — the strongest
+    // form of what the flag is for.
+    assert.equal(never.old, true);
+  });
+
+  test('past a few hours the row is flagged, not only counted', () => {
+    const now = new Date('2026-07-31T12:00:00Z');
+
+    assert.equal(pr.reading(record({ refreshedAt: '2026-07-31T11:00:00Z' }), { now }).old, false);
+    assert.equal(pr.reading(record({ refreshedAt: '2026-07-31T02:00:00Z' }), { now }).old, true);
+  });
+
+  test('a merged pull request is never stale', () => {
+    const merged = pr.staleness(record({ state: 'merged' }), { now: new Date('2026-07-31T00:00:00Z') });
+    assert.equal(merged.stale, false);
+  });
+
+  test('the threshold is configurable, because it is a guess', () => {
+    const now = new Date('2026-07-31T00:00:00Z');
+    const config = { review: { stale_after_days: 90 } };
+    assert.equal(pr.staleness(record(), { now, config }).stale, false);
+  });
+
+  test('an unread pull request renders as unread rather than as green', () => {
+    const values = pr.renderValues(record(), { issue: ISSUE });
+
+    assert.equal(values.ciVerdict, 'inconclusive');
+    assert.deepEqual(values.jobs, ['| — | — | — | not read yet | — |']);
+    assert.equal(values.threads, '_Not read yet._');
+    assert.equal(values.slice, 'single PR');
+  });
+
+  // The requirement trace left the published body on podman-desktop#19317,
+  // where a reviewer said our numbering means nothing to somebody holding the
+  // issue and the diff. It did not stop existing: this is where it went, and
+  // the tracking artefact is never published.
+  test('the R-IDs of a pull request reach the tracking record', () => {
+    const values = pr.renderValues(record({ slice: 2 }), { issue: ISSUE, requirements: ['R3', 'R4'] });
+
+    assert.equal(values.requirements, 'R3, R4');
+  });
+
+  test('a route that allocates no R-IDs says so rather than rendering empty', () => {
+    assert.equal(pr.renderValues(record(), { issue: ISSUE }).requirements, 'none recorded');
+    assert.equal(pr.renderValues(record(), { issue: ISSUE, requirements: [] }).requirements, 'none recorded');
+  });
+
+  test('the job table names the pull requests a red job is shared with', () => {
+    const values = pr.renderValues(
+      record({
+        slice: 2,
+        ci: {
+          verdict: 'inconclusive',
+          checkedAt: null,
+          jobs: [{ name: 'Windows', workflow: 'pr-check', conclusion: 'FAILURE', verdict: 'inconclusive', peers: [18550, 18486], url: null }],
+        },
+      }),
+      { issue: ISSUE },
+    );
+
+    assert.equal(values.slice, '#2');
+    assert.match(values.jobs[0], /\| Windows \| pr-check \| FAILURE \| inconclusive \| #18550, #18486 \|/);
+  });
+});
+
+// Where the work under review is, for whoever asks where an issue lives: the
+// branch the slices were cut from stays beside them, and only the record says
+// which of the two a reviewer is reading.
+describe('the branches open pull requests are on', () => {
+  async function book(prs) {
+    await mkdir(join(home, 'issues', String(ISSUE)), { recursive: true });
+    await writeFile(join(home, 'issues', String(ISSUE), 'prs.json'), JSON.stringify({ issue: ISSUE, prs }));
+  }
+
+  test('open ones only, first slice first', async () => {
+    await book([
+      { number: 4003, slice: 2, branch: 'DESKTOP-7101/2-second', state: 'open' },
+      { number: 4001, slice: 1, branch: 'DESKTOP-7101/1-first', state: 'open' },
+      { number: 4000, slice: null, branch: 'DESKTOP-7101/before-slicing', state: 'closed' },
+      { number: 4002, slice: 3, branch: 'DESKTOP-7101/3-landed', state: 'merged' },
+    ]);
+
+    assert.deepEqual(await pr.openBranches(ISSUE, { home }), ['DESKTOP-7101/1-first', 'DESKTOP-7101/2-second']);
+  });
+
+  test('a superseded record and one without a branch name nothing', async () => {
+    await book([
+      { number: 4001, slice: 1, branch: 'DESKTOP-7101/1-first', state: 'open', supersededBy: 4005 },
+      { number: 4004, slice: 2, branch: null, state: 'open' },
+    ]);
+
+    assert.deepEqual(await pr.openBranches(ISSUE, { home }), []);
+  });
+
+  test('nothing registered is an empty answer, not a refusal', async () => {
+    assert.deepEqual(await pr.openBranches(ISSUE, { home }), []);
+  });
+});

@@ -1,0 +1,41 @@
+#!/usr/bin/env node
+/**********************************************************************
+ * Copyright (C) 2026 Red Hat, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ ***********************************************************************/
+
+// Entry point for the pdkit CLI.
+//
+// This file is deliberately thin. It resolves lib/ relative to its own
+// location via import.meta.url — not the working directory, and not
+// ${CLAUDE_PLUGIN_ROOT}, which changes on every plugin update. The Bash tool
+// puts this directory on PATH, so `pdkit` is callable as a bare command from
+// any working directory, including a worktree.
+//
+// Keep bin/ to this one file: everything here becomes a bare command.
+
+// `pathToFileURL` and not the path itself. A filesystem path works as an import
+// specifier on Linux and macOS by accident — it begins with `/`, which is a
+// valid URL path — and on Windows it begins with `D:`, which ESM reads as an
+// unsupported scheme and refuses. Every `pdkit` invocation on Windows died here,
+// before the CLI was reached: uncaught, exit 1, and the gate along with it.
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { dirname, join } from 'node:path';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const { main } = await import(pathToFileURL(join(here, '..', 'lib', 'cli.js')).href);
+
+process.exitCode = await main(process.argv.slice(2));

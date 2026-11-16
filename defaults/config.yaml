@@ -1,0 +1,270 @@
+#
+# Copyright (C) 2026 Red Hat, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Default configuration shipped with the plugin.
+#
+# Three layers, later overriding earlier per key:
+#   1. this file
+#   2. $PDKIT_HOME/config.yaml
+#   3. <repo>/.pdkit.yaml
+#
+# In the podman-desktop fork, .pdkit.yaml belongs in .git/info/exclude rather
+# than .gitignore: the fork's .gitignore is upstream's file, and editing it puts
+# a stray line in every pull request.
+#
+# Parsed by lib/yaml.js, which supports a deliberate subset: nested maps,
+# sequences, scalars, comments. No anchors, no multiline scalars, no tags.
+
+version: 1
+
+repo:
+  upstream: podman-desktop/podman-desktop
+  # Empty on purpose: this file ships to everyone and cannot know whose fork you
+  # cloned. `pdkit init` reads it from the `fork_remote` URL and writes it into
+  # your $PDKIT_HOME/config.yaml — you are standing in the answer when you run
+  # it, so there is nothing to type. Until then every command says the key is
+  # not set rather than pretending somebody else's fork is yours.
+  fork: ""
+  upstream_remote: upstream
+  fork_remote: origin
+  base_branch: main
+  package_manager: pnpm
+
+state:
+  root: ~/.pdkit/podman-desktop
+
+branches:
+  single: "DESKTOP-{issue}/{slug}"
+  sliced: "DESKTOP-{issue}/{index}-{slug}"
+
+languages:
+  plan: en
+  reports: en
+  pr_body: en
+  commits: en
+  review_replies: en
+  review_report: en
+
+# There is no `routing:` block here, and its absence is deliberate. Model
+# selection lives in the `model:` frontmatter of skills and agents — see
+# section 5 of docs/specification/. A skill's own model can only be set
+# there, so a second copy in this file would be a lever that moves nothing
+# half the time and disagrees with the frontmatter the rest of it.
+
+slicing:
+  strategy: prefer-independent   # prefer-independent | stack | single
+  max_files_per_slice: 12
+  require_standalone_verify: true
+  # Every package in the fork has a place in this list. Three of them —
+  # packages/api, packages/webview-api and storybook — used to fall through to
+  # `other`, which meant their merge order was decided by nothing at all. The
+  # order is read twice: lower layers merge first, and layer decides which
+  # reviewers a slice will draw.
+  # One line: lib/yaml.js parses a deliberate subset and an inline sequence has
+  # to close on the line it opened.
+  layer_order: [extension-api, api, webview-api, main, preload, renderer, ui, storybook, extensions, tests, website]
+  verify:
+    # reuse keeps one tree per issue so node_modules survives between runs.
+    # ephemeral is correct and slow: every slice pays a full install, and a gate
+    # that is expensive to pass is a gate people route around.
+    worktree: reuse              # reuse | ephemeral
+    install: on-lockfile-change  # on-lockfile-change | always | never
+    # Build steps a fresh tree needs before anything can be checked in it, by
+    # script name; anything the repository does not define is skipped.
+    #
+    # podman-desktop needs both of these, for one reason twice over: a package
+    # that resolves through a `dist/` which is not in git, consumed by a
+    # typecheck that does not build it.
+    #
+    # @podman-desktop/core-api resolves through packages/api/dist, which exists
+    # only after build:core-api — and until it does, typecheck:main cannot find
+    # the module and eslint's type-aware rules see `any` where a type should be,
+    # reporting errors in files no slice touched.
+    #
+    # @podman-desktop/ui-svelte is the same shape and was found the same way,
+    # one live run later: typecheck:renderer runs build:preload:types and NOT
+    # build:ui, though every renderer component imports the package. On a clean
+    # tree that is 577 errors across 295 files, none of them in the slice — and
+    # since typecheck runs first, the test step that would have built it is
+    # never reached. Upstream's own typecheck:ui does run build:ui first, which
+    # is where the asymmetry shows.
+    #
+    # Either one missing turns every slice of every issue red for a reason that
+    # has nothing to do with slicing. Together they cost a few seconds.
+    prepare: [build:core-api, build:ui]
+
+# Script name overrides for preflight (section 7). Empty by default: names are
+# resolved from the repository's own package.json through a candidate chain,
+# which is the right source — podman-desktop has no `pnpm lint`, its `pnpm test`
+# drags in e2e, and upstream renames scripts without warning. A hardcoded name
+# that no longer exists becomes a check that silently never runs.
+#
+# Filling this in means the resolver got it wrong, which is a reason to fix the
+# resolver rather than to live with an override.
+preflight:
+  scripts:
+    tests: []                  # e.g. [test:main, test:unit]
+    lint: []
+    typecheck: []
+    schemas: []
+  # repo | packages. What `typecheck` means in preflight AND in `pdkit slice
+  # verify`. A type error lands in the package that consumes a change, not the
+  # one that makes it: on DESKTOP-19818 a preload-only slice passed
+  # `typecheck:preload` in both gates and broke the renderer's typecheck on
+  # upstream CI. `packages` brings the per-package scripts back, and reports
+  # itself as narrower when it does.
+  typecheck_scope: repo
+
+# How many failed captures of a task's `Done when` make it blocked. The key
+# exists because the behavior does: a ceiling that only lived in configuration
+# would be a number nothing reads, which is what open item G refused.
+#
+# Zero switches blocking off. That direction only — the count itself is not
+# configurable, because it comes from captures rather than from a claim.
+exec:
+  max_attempts: 3
+
+# Soft ceilings on how long a phase runs, in turns. Context is re-read whole on
+# every call, so a session's cost grows as the square of its length: one phase
+# of 400 turns costs four times what four phases of 100 do. This is not a
+# refusal and cannot be one — no command can see how many turns a session has
+# taken. It is the number a skill names to the person when it suggests stopping;
+# the SessionStart summary prints the one for the phase it opens.
+budget:
+  turns:
+    triage: 40
+    plan: 60
+    exec_per_task: 80
+    validate: 80
+    audit: 40
+    slice: 60
+    pr: 50
+    pr_sync: 60
+
+# What `pdkit issue fetch` prints. The body is always printed whole and is not
+# configurable: it is the requirement. Comments are the newest N, because a
+# discussion converges on its answer and the latest comments are closest to
+# what has to be done; `--full` prints every one.
+triage:
+  fetch_comments: 15
+
+quickfix:
+  max_changed_lines: 20
+  max_files: 3
+  forbid_paths: ["packages/extension-api/**", "**/*.schema.*"]
+  allocate_r_ids: false        # tracing goes by issue number
+  e2e: off
+
+validation:
+  e2e: prefer                  # prefer | required | off
+  e2e_stability_runs: 3
+  ship_with_feature: true
+  require_evidence: true       # PASS without artefacts is refused
+  # How the application is brought up under CDP. `binary` is empty on purpose:
+  # PODMAN_DESKTOP_BINARY comes next, and after it node_modules/.bin/electron .
+  # in the working tree — the development build, which is what upstream's own
+  # e2e drives when no packaged binary is set. Packaging costs minutes and
+  # proves nothing extra for validation.
+  #
+  # `binary` and `args` are read from $PDKIT_HOME/config.yaml only, as
+  # editor.path is: a repository's .pdkit.yaml that sets either — or moves
+  # state.root to a config of its own — is refused. `binary`, like
+  # PODMAN_DESKTOP_BINARY, is an absolute path, an .exe on Windows, and not
+  # writable by every user.
+  app:
+    binary: ""
+    debug_port: 9222
+    startup_timeout: 60s
+
+# The IDE `pdkit editor` opens an issue's worktree in. Empty on purpose, like
+# repo.fork: this file ships to everyone and cannot know what is installed where,
+# and guessing VS Code for somebody who works in WebStorm is worse than a
+# warning. Until it is set, `pdkit editor` prints the lines to add.
+#
+# Only $PDKIT_HOME/config.yaml is read for it. This is a program pdkit runs, so
+# a repository's .pdkit.yaml that sets it — or moves state.root to a config of
+# its own — is refused: a pull request under review decides what its tree holds.
+#
+#   macOS    /Applications/WebStorm.app        (a .app goes through `open -a`)
+#   Windows  'C:\Program Files\JetBrains\WebStorm 2026.2\bin\webstorm64.exe'
+#            VS Code: '...\Microsoft VS Code\Code.exe'
+#            (single quotes: a backslash inside double quotes is an escape)
+#   Linux    ~/.local/share/JetBrains/Toolbox/scripts/webstorm
+#
+# An absolute path, always — a bare `code` is searched for in the working
+# directory first on Windows. On Windows an .exe only: a .cmd or .bat runs
+# through cmd.exe, which re-parses its arguments in ways no quoting survives.
+# A program every user on the machine can write is refused.
+editor:
+  path: ""
+
+journal:
+  path: journal/
+  reanchor_scope: issue        # SessionStart injects the active issue only
+
+review:
+  # Logins, not just accounts GitHub marks with a [bot] suffix — several of
+  # these post under a plain login. Taken from what actually comments on
+  # podman-desktop pull requests: coderabbit reviews, codecov posts a coverage
+  # table on every PR.
+  bots_collapsed: [coderabbitai, codecov, github-actions, dependabot, renovate]
+  # Checks that wait for people rather than for a machine. Upstream's
+  # `Domain Review Status` follows the domain/<area>/inreview labels its triager
+  # bot maintains, and goes green only once the reviewers who own those areas
+  # approve — so it never resolves on its own, and reporting it as `pending`
+  # tells a reader to come back later for something that is not going to happen.
+  gating_checks: ["Domain Review Status"]
+  # A match EXPANDS a collapsed bot thread back to full text. It never collapses
+  # anything and is never consulted for a human: dropping a security finding
+  # because it lacked a configured word is the mistake the filter exists to
+  # prevent, so the filter does not get to make it.
+  bot_escalate: [security, data-loss, correctness]
+  stale_after_days: 14         # uncalibrated, like the quickfix thresholds
+
+gates:
+  push_ttl: 10m
+  # require_states used to live here and was deleted in 0.6 — that is what
+  # closed open item B, and it closed by removal rather than by finding the key
+  # a job.
+  #
+  # Which states a token may be issued from now lives in state.GATE_ELIGIBLE,
+  # keyed by what is being written: push only from preflight-green, reply from
+  # pr-open and review-in-progress. The only thing a config key could really do
+  # is WIDEN one of those lists, and a widened push list is a token issued
+  # before preflight ran. Every other piece of this plugin holds because the
+  # unwanted input does not exist — receipts have no text parameter, the verify
+  # verdict has no way in — and a knob that opens the gate wider contradicts
+  # exactly that.
+  #
+  # push_ttl stays: how fast consent goes stale is a real preference, and no
+  # value of it lets a write through that was not confirmed.
+
+worktrees:
+  enabled: true
+  root: ../pd-worktrees
+  copy_files: [".env", ".env.local"]
+
+# Expected MCP servers. The plugin ships no .mcp.json and does not start these:
+# a plugin-level declaration loads for everyone, which would make them mandatory
+# rather than optional. /pd:doctor checks what is present and degrades
+# gracefully. Which agents can see a server's tools is set by the `tools:` field
+# in agents/*.md, not here.
+mcp:
+  playwright: auto             # auto | on | off
+  context7: off
+  basic_memory: off
+  github: off

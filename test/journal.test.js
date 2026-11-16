@@ -1,0 +1,314 @@
+/**********************************************************************
+ * Copyright (C) 2026 Red Hat, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ ***********************************************************************/
+
+// Contract for lib/journal.js.
+//
+// Two properties carry the weight. The line format is read by people and by
+// the re-anchoring injection, so it is pinned literally against the example in
+// section 2.3. And the module must have no way to remove an entry: a journal
+// that can be rewritten answers "why did we do this" with whatever the last
+// writer preferred.
+
+import { test, describe, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import * as journal from '../lib/journal.js';
+
+let home;
+
+before(async () => {
+  home = await mkdtemp(join(tmpdir(), 'pdkit-journal-'));
+});
+
+after(async () => {
+  await rm(home, { recursive: true, force: true });
+});
+
+describe('the line format', () => {
+  test('matches the example in section 2.3', () => {
+    const line = journal.formatEntry({
+      at: '2026-07-30T14:02:11Z',
+      issue: 12345,
+      slice: 2,
+      event: 'plan-approved',
+      detail: 'R1,R2,R3 frozen',
+    });
+
+    assert.match(line, /^2026-07-30T14:02:11Z\s+issue:12345\s+slice:2\s+event:plan-approved\s+R1,R2,R3 frozen$/);
+  });
+
+  test('an absent field is a placeholder, not a blank column', () => {
+    const line = journal.formatEntry({
+      at: '2026-07-31T09:12:44Z',
+      issue: 12908,
+      slice: null,
+      event: 'route',
+      detail: 'quickfix (14 lines, 2 files)',
+    });
+
+    assert.match(line, /issue:12908\s+—\s+event:route/);
+  });
+
+  test('round-trips through parseEntry', () => {
+    const entry = { at: '2026-07-30T14:02:11Z', issue: 12345, slice: 2, event: 'plan-approved', detail: 'R1 frozen' };
+    assert.deepEqual(journal.parseEntry(journal.formatEntry(entry)), entry);
+  });
+
+  // One entry, one line. A detail that carried a newline would split into a
+  // second line that parses as prose and disappears from every filtered view.
+  test('newlines in a detail are flattened', () => {
+    const line = journal.formatEntry({
+      at: '2026-07-30T14:02:11Z',
+      issue: 1,
+      slice: null,
+      event: 'note',
+      detail: 'first\nsecond',
+    });
+
+    assert.equal(line.includes('\n'), false);
+    assert.equal(journal.parseEntry(line).detail, 'first second');
+  });
+
+  test('prose in the file is not an entry', () => {
+    assert.equal(journal.parseEntry('# Journal'), null);
+    assert.equal(journal.parseEntry(''), null);
+  });
+});
+
+describe('append', () => {
+  test('writes into the month file of the entry', async () => {
+    await journal.append({ at: '2026-07-30T14:02:11Z', issue: 12345, event: 'plan-approved', detail: 'R1 frozen' }, { home });
+    await journal.append({ at: '2026-08-02T10:00:00Z', issue: 12345, event: 'pr-open', detail: '#2871' }, { home });
+
+    const july = await readFile(join(home, 'journal', '2026-07.md'), 'utf8');
+    const august = await readFile(join(home, 'journal', '2026-08.md'), 'utf8');
+    assert.match(july, /plan-approved/);
+    assert.equal(july.includes('pr-open'), false);
+    assert.match(august, /pr-open/);
+  });
+
+  test('never truncates what is already there', async () => {
+    const before = await readFile(join(home, 'journal', '2026-07.md'), 'utf8');
+    await journal.append({ at: '2026-07-30T15:00:00Z', issue: 999, event: 'note', detail: 'second' }, { home });
+    const after = await readFile(join(home, 'journal', '2026-07.md'), 'utf8');
+
+    assert.ok(after.startsWith(before), 'an append rewrote earlier content');
+    assert.match(after, /second/);
+  });
+
+  // The invariant from section 2.2, checked against the module surface rather
+  // than against intentions: if a remove ever appears, this fails.
+  test('the module exports no way to remove an entry', () => {
+    const surface = Object.keys(journal);
+    for (const name of ['remove', 'delete', 'rewrite', 'clear', 'truncate', 'write']) {
+      assert.equal(surface.includes(name), false, `journal exports "${name}"`);
+    }
+  });
+});
+
+describe('read', () => {
+  test('filters by issue', async () => {
+    const entries = await journal.read({ issue: 12345 }, { home });
+    assert.deepEqual(
+      entries.map((entry) => entry.event),
+      ['plan-approved', 'pr-open'],
+    );
+  });
+
+  test('filters by event', async () => {
+    const entries = await journal.read({ event: 'note' }, { home });
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].issue, 999);
+  });
+
+  test('since skips whole month files', async () => {
+    const entries = await journal.read({ since: '2026-08' }, { home });
+    assert.deepEqual(
+      entries.map((entry) => entry.event),
+      ['pr-open'],
+    );
+  });
+
+  test('since is exact to the second inside a month', async () => {
+    const entries = await journal.read({ since: '2026-07-30T14:30:00Z' }, { home });
+    assert.deepEqual(
+      entries.map((entry) => entry.detail),
+      ['second', '#2871'],
+    );
+  });
+
+  test('prose lines in a month file are skipped', async () => {
+    await writeFile(join(home, 'journal', '2026-09.md'), '# September\n\nfree text\n');
+    const entries = await journal.read({ since: '2026-09' }, { home });
+    assert.deepEqual(entries, []);
+  });
+
+  test('no journal yet is an empty list, not an error', async () => {
+    const empty = await mkdtemp(join(tmpdir(), 'pdkit-journal-'));
+    assert.deepEqual(await journal.read({}, { home: empty }), []);
+    await rm(empty, { recursive: true, force: true });
+  });
+});
+
+// A conflict is the one thing in the cycle no measurement can produce, and
+// /pd:resume has been telling the model to journal one since before there was
+// anything that could write it.
+describe('conflict entries', () => {
+  const { conflictEntry } = journal;
+
+  const ok = { kind: 'mechanical', file: 'packages/main/src/plugin/exec.ts', resolution: 'took upstream import order' };
+
+  test('reads back as the line section 2.3 shows', () => {
+    const entry = conflictEntry({
+      kind: 'semantic',
+      file: 'exec.ts',
+      commit: 'a3f21e',
+      resolution: 'upstream replaced the callback the plan built on',
+      amendment: 'A1',
+    });
+
+    assert.equal(entry.ok, true);
+    assert.equal(entry.event, 'conflict-semantic');
+    assert.equal(entry.detail, 'exec.ts (upstream a3f21e) — upstream replaced the callback the plan built on; plan amended A1');
+  });
+
+  test('the commit and the amendment are optional, and absent means absent', () => {
+    const entry = conflictEntry(ok);
+
+    assert.equal(entry.event, 'conflict-mechanical');
+    assert.equal(entry.detail, 'packages/main/src/plugin/exec.ts — took upstream import order');
+  });
+
+  // The whole vocabulary. A caller that could name the event would be able to
+  // write `preflight-green` beside the one preflight measured, and the reader
+  // cannot tell a typed event from a produced one.
+  test('no third kind, whatever it is called', () => {
+    for (const kind of ['', 'both', 'preflight-green', 'mechanical-ish', 'MECHANICAL']) {
+      const result = conflictEntry({ ...ok, kind });
+      assert.equal(result.ok, false, `${kind} should not be a kind`);
+      assert.match(result.error, /expected mechanical or semantic/);
+    }
+  });
+
+  test('a resolution is required, and whitespace is not one', () => {
+    for (const resolution of [undefined, '', '   ']) {
+      const result = conflictEntry({ ...ok, resolution });
+      assert.equal(result.ok, false);
+      assert.match(result.error, /--resolution/);
+    }
+  });
+
+  test('a file is required: a conflict happened somewhere', () => {
+    const result = conflictEntry({ ...ok, file: '' });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /--file/);
+  });
+
+  // An A-ID is cited from the plan, the slices and the reply that told the
+  // reviewer what changed. A made-up one is a citation to nothing.
+  test('an amendment that is not an A-ID is refused', () => {
+    for (const amendment of ['1', 'A', 'amendment 1', 'A1.2']) {
+      const result = conflictEntry({ ...ok, amendment });
+      assert.equal(result.ok, false, `${amendment} should not pass as an A-ID`);
+      assert.match(result.error, /A-ID/);
+    }
+  });
+});
+
+// `--since` filters by string comparison against an ISO timestamp, and that
+// detail used to reach the command line: `1h` sorted above every date so the
+// whole journal came back, `24h` sorted below every date so nothing did. Two
+// opposite wrong answers, neither of them an error.
+// What SessionStart injects, and what it must not spend its budget on.
+//
+// The summary exists to remind somebody returning to the work of what happened.
+// `agent-done` is written once per subagent completion, so one `/pd:exec` with
+// five implementers produces five entries — and eight slots of "an agent
+// finished" would push out the receipt, the approval and the freeze, leaving a
+// summary that restores nothing. The entries stay in the journal, where the
+// counting reads them.
+describe('re-anchoring', () => {
+  const ISSUE = 4242;
+
+  before(async () => {
+    for (const [event, detail] of [
+      ['triaged', 'quickfix'],
+      ['requirements-frozen', 'R1,R2 frozen'],
+      ['plan-approved', 'approved by a human'],
+      ['agent-done', 'agent task a1'],
+      ['agent-done', 'agent task a2'],
+      ['agent-done', 'agent task a3'],
+      ['agent-done', 'agent task a4'],
+      ['agent-done', 'agent task a5'],
+      ['task-receipt', 'T1 accepted'],
+    ]) {
+      await journal.append({ issue: ISSUE, event, detail }, { home });
+    }
+  });
+
+  test('the story survives a run that dispatched five agents', async () => {
+    const summary = await journal.reanchor(ISSUE, { home });
+
+    assert.ok(!summary.includes('agent-done'), 'bookkeeping does not get the context budget');
+    for (const kept of ['triaged', 'requirements-frozen', 'plan-approved', 'task-receipt']) {
+      assert.ok(summary.includes(kept), `${kept} is what somebody returning needs`);
+    }
+  });
+
+  // Left out of the summary, not out of the record: the count is what the
+  // entries exist for.
+  test('the entries are still there to be counted', async () => {
+    const runs = (await journal.read({ issue: ISSUE, event: 'agent-done' }, { home }));
+
+    assert.equal(runs.length, 5);
+  });
+});
+
+describe('what --since accepts', () => {
+  const { resolveSince } = journal;
+  const NOW = Date.parse('2026-08-02T12:00:00Z');
+
+  test('a date is taken as written', () => {
+    assert.deepEqual(resolveSince('2026-08-01', NOW), { ok: true, at: '2026-08-01' });
+    assert.deepEqual(resolveSince('2026-08-01T09:30:00Z', NOW), { ok: true, at: '2026-08-01T09:30:00Z' });
+  });
+
+  test('an age becomes the timestamp it means', () => {
+    assert.equal(resolveSince('2h', NOW).at, '2026-08-02T10:00:00Z');
+    assert.equal(resolveSince('90m', NOW).at, '2026-08-02T10:30:00Z');
+    assert.equal(resolveSince('7d', NOW).at, '2026-07-26T12:00:00Z');
+    assert.equal(resolveSince('1w', NOW).at, '2026-07-26T12:00:00Z');
+  });
+
+  // The two that were wrong, now right, and in opposite directions from before.
+  test('the two that used to answer wrongly now answer', () => {
+    assert.equal(resolveSince('1h', NOW).at, '2026-08-02T11:00:00Z');
+    assert.equal(resolveSince('24h', NOW).at, '2026-08-01T12:00:00Z');
+  });
+
+  test('anything else is refused by name rather than compared as text', () => {
+    for (const bad of ['yesterday', '24', 'last week', '', 'tomorrow', '2h ago']) {
+      const result = resolveSince(bad, NOW);
+      assert.equal(result.ok, false, `${bad} should not be accepted`);
+      assert.match(result.error, /expected a date .* or an age/);
+    }
+  });
+});

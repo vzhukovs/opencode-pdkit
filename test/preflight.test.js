@@ -1,0 +1,1893 @@
+/**********************************************************************
+ * Copyright (C) 2026 Red Hat, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ ***********************************************************************/
+
+// Tests for lib/preflight — the runner, script scoping, and the checks that
+// run commands.
+//
+// The property that matters most is that preflight cannot be green by
+// accident. A check that could not run, a script that no longer exists, a test
+// command that was killed — each of those has a way of looking like a pass, and
+// each is asserted here to look like what it is instead.
+//
+// Commands run against a fixture repository with npm scripts that echo and
+// exit, so the checks are exercised for real rather than mocked.
+
+import { test, describe, before, beforeEach, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
+import { promisify } from 'node:util';
+
+import { approvablePlan } from './helpers/approvable-plan.js';
+import { cleanup, commitAll, git as gitIn, initRepo, packageMap, seedWorkspace, writeFiles, writeTask } from './helpers/repo-fixture.js';
+import { emits, exits } from './helpers/commands.js';
+import { capture } from '../lib/evidence.js';
+import * as ids from '../lib/ids.js';
+import * as validation from '../lib/validation.js';
+import { BODY_DEPENDENT, BODY_NOT_DRAFTED, CHECK_IDS, format, loadChecks, prepare, run, skipForBody, waitingForBody } from '../lib/preflight/index.js';
+import * as pr from '../lib/pr.js';
+import * as slice from '../lib/slice.js';
+import * as state from '../lib/state.js';
+import { staleCopyright } from '../lib/preflight/checks/maintainer-rules.js';
+import { candidatesFor, offDisk, runScript, scopedScripts, typecheckScripts, unrunnable } from '../lib/preflight/scope.js';
+import { buildPackageMap } from '../lib/repo.js';
+
+const execFileAsync = promisify(execFile);
+
+let repo;
+let home;
+
+const SCRIPTS = {
+  'lint:check': emits('linted\n'),
+  'test:main': emits('main tests ok\n'),
+  'test:unit': emits('all unit tests ok\n'),
+  'test:renderer': exits(1, { err: 'renderer failed\n' }),
+  typecheck: emits('typechecked\n'),
+};
+
+before(async () => {
+  repo = await mkdtemp(join(tmpdir(), 'pdkit-preflight-repo-'));
+  home = await mkdtemp(join(tmpdir(), 'pdkit-preflight-home-'));
+
+  const git = (args) => execFileAsync('git', args, { cwd: repo, encoding: 'utf8' });
+
+  await writeFile(join(repo, 'package.json'), JSON.stringify({ name: 'root', scripts: SCRIPTS }, null, 2));
+  await writeFile(join(repo, 'pnpm-workspace.yaml'), 'packages:\n  - packages/*\n');
+  await writeFile(join(repo, '.pdkit.yaml'), 'repo:\n  package_manager: npm\n');
+
+  for (const [dir, name] of [
+    ['packages/main', '@podman-desktop/main'],
+    ['packages/renderer', 'renderer'],
+  ]) {
+    await mkdir(join(repo, dir, 'src'), { recursive: true });
+    await writeFile(join(repo, dir, 'package.json'), JSON.stringify({ name }));
+  }
+
+  await git(['init', '-q', '-b', 'main']);
+  await git(['config', 'user.email', 'test@example.com']);
+  await git(['config', 'user.name', 'Test']);
+  await writeFile(join(repo, 'packages/main/src/base.ts'), 'export const base = 1;\n');
+  await git(['add', '-A']);
+  await git(['commit', '-q', '-m', 'chore: base']);
+
+  await git(['checkout', '-q', '-b', 'DESKTOP-5001/work']);
+  await writeFile(join(repo, 'packages/main/src/added.ts'), 'export const added = 1;\n');
+  await git(['add', '-A']);
+  await git(['commit', '-q', '-m', 'feat(main): add\n\nSigned-off-by: Test <test@example.com>']);
+
+  await buildPackageMap(repo, {
+    home,
+    config: { slicing: { layer_order: ['main', 'renderer'] } },
+  });
+});
+
+after(async () => {
+  await rm(repo, { recursive: true, force: true });
+  await rm(home, { recursive: true, force: true });
+});
+
+/** @returns {Promise<import('../lib/preflight/index.js').PreflightContext>} */
+const context = (overrides = {}) => prepare({ issue: 5001, repoRoot: repo, home, ...overrides });
+
+describe('the runner', () => {
+  test('loads a module for every declared check', async () => {
+    const checks = await loadChecks();
+
+    assert.equal(checks.length, CHECK_IDS.length);
+    assert.deepEqual(checks.map((check) => check.id), CHECK_IDS);
+    for (const check of checks) assert.equal(typeof check.run, 'function', `${check.id} has no run()`);
+  });
+
+  // A file under checks/ that CHECK_IDS does not name is a check that never
+  // runs, and nothing else would say so.
+  test('CHECK_IDS names every file under checks/, and only those', async () => {
+    const files = (await readdir(new URL('../lib/preflight/checks/', import.meta.url))).filter((name) => name.endsWith('.js'));
+
+    assert.deepEqual(files.map((name) => basename(name, '.js')).sort(), [...CHECK_IDS].sort());
+  });
+
+  // BODY_DEPENDENT is a copy of what the checks say about themselves. The
+  // order is the list's own and nothing reads it, so the sets are compared.
+  test('BODY_DEPENDENT is exactly the checks that export needsBody', async () => {
+    const checks = await loadChecks();
+
+    assert.deepEqual(checks.filter((check) => check.needsBody).map((check) => check.id).sort(), [...BODY_DEPENDENT].sort());
+    assert.equal(new Set(BODY_DEPENDENT).size, BODY_DEPENDENT.length);
+    for (const check of checks) assert.equal(typeof check.needsBody, 'boolean', `${check.id}: needsBody`);
+  });
+
+  // The second pass of the /pd:pr flow needs only these four. Re-running
+  // `pnpm test` on three packages to re-read a paragraph is minutes of
+  // nothing.
+  test('loadChecks can be narrowed, and refuses a name it does not have', async () => {
+    const narrowed = await loadChecks(BODY_DEPENDENT);
+
+    assert.deepEqual(narrowed.map((check) => check.id).sort(), [...BODY_DEPENDENT].sort());
+    await assert.rejects(() => loadChecks(['nope']), /no such check: nope/);
+  });
+
+  test('every body-dependent check really does read the body', async () => {
+    const prepared = await context();
+
+    for (const id of BODY_DEPENDENT) {
+      const checks = await loadChecks([id]);
+      const withoutBody = (await run({ ...prepared, prBody: null }, checks)).results[0];
+
+      // Either it has nothing to say about this diff, or it defers. What it
+      // must never do is pass on a body it has not seen — and it must never
+      // fail *because* the body is absent, which is what `skip` is for.
+      if (withoutBody.status === 'pass') {
+        assert.match(
+          withoutBody.summary,
+          /nothing|untouched|no requirements|no e2e test/,
+          `${id} passed without a body for a reason that is not "nothing to check"`,
+        );
+      }
+      if (withoutBody.status === 'fail') {
+        assert.doesNotMatch(
+          withoutBody.summary,
+          /\bbody\b/i,
+          `${id} failed for lack of a body rather than deferring; that is what skip is for`,
+        );
+      }
+    }
+  });
+
+  test('prepare gathers the repository state once, for every check', async () => {
+    const prepared = await context();
+
+    assert.equal(prepared.branch, 'DESKTOP-5001/work');
+    assert.equal(prepared.base, 'main');
+    assert.deepEqual(prepared.changedFiles, ['packages/main/src/added.ts']);
+    assert.equal(prepared.commits.length, 1);
+    assert.ok('lint:check' in prepared.scripts);
+    assert.equal(prepared.prBody, null);
+  });
+
+  // A report listing three problems is one round trip; three reports of one
+  // problem each are three.
+  test('every check runs even after one fails', async () => {
+    const report = await run(await context());
+
+    assert.equal(report.results.length, CHECK_IDS.length);
+    assert.deepEqual(report.results.map((result) => result.id), CHECK_IDS);
+  });
+
+  // The failure mode this guards against: preflight going green on the
+  // strength of a bug in preflight.
+  test('a check that throws is a failure, not a pass', async () => {
+    const throwing = (blocking) => ({
+      id: blocking ? 'broken-blocking' : 'broken-advisory',
+      blocking,
+      run: async () => {
+        throw new Error('boom');
+      },
+    });
+
+    const report = await run(await context(), [throwing(true), throwing(false)]);
+
+    assert.equal(report.results[0].status, 'fail');
+    assert.match(report.results[0].summary, /the check itself failed: boom/);
+    assert.equal(report.ok, false, 'a check that could not run must not leave the report green');
+
+    // A non-blocking check that breaks is worth knowing about but does not
+    // stop a push.
+    assert.equal(report.results[1].status, 'warn');
+  });
+
+  test('a warning does not block, a failure does', async () => {
+    const fixed = (id, status, blocking) => ({
+      id,
+      blocking,
+      run: async () => ({ id, status, blocking, summary: id }),
+    });
+
+    assert.equal((await run(await context(), [fixed('a', 'warn', false)])).ok, true);
+    assert.equal((await run(await context(), [fixed('b', 'skip', true)])).ok, true);
+    assert.equal((await run(await context(), [fixed('c', 'fail', true)])).ok, false);
+  });
+
+  test('the e2e checks pass only because this diff carries no test, and say so', async () => {
+    // They used to be stubs returning `skip`. Now they answer, and the answer
+    // on a diff with no spec in it has to name that reason — a bare `pass` here
+    // would be indistinguishable from a check that examined a test and liked it.
+    const report = await run(await context());
+
+    for (const id of ['e2e-stability', 'e2e-environment']) {
+      const result = report.results.find((entry) => entry.id === id);
+      assert.equal(result.status, 'pass', id);
+      assert.match(result.summary, /no e2e test in this diff/, id);
+    }
+  });
+
+  test('validation-evidence fails an unvalidated issue on the standard route', async () => {
+    const report = await run(await context(), await loadChecks(['validation-evidence']));
+
+    assert.equal(report.results[0].status, 'fail');
+    assert.match(report.results[0].summary, /nothing was validated/);
+  });
+
+  test('validation-evidence skips the quickfix route, which does not validate at all', async () => {
+    const prepared = await context();
+    const report = await run({ ...prepared, route: 'quickfix' }, await loadChecks(['validation-evidence']));
+
+    assert.equal(report.results[0].status, 'skip');
+    assert.match(report.results[0].summary, /quickfix/);
+  });
+
+  test('slice-standalone skips on work that was never sliced, and says that is why', async () => {
+    const report = await run(await context(), await loadChecks(['slice-standalone']));
+
+    assert.equal(report.results[0].status, 'skip');
+    assert.match(report.results[0].summary, /no slice graph/);
+  });
+
+  test('format marks a red report and counts the blocking failures', () => {
+    const text = format({
+      ok: false,
+      results: [
+        { id: 'lint', status: 'pass', blocking: true, summary: 'lint:check' },
+        { id: 'tests', status: 'fail', blocking: true, summary: 'failing: test:main', remedy: 'fix them' },
+      ],
+    });
+
+    assert.match(text, /preflight: RED/);
+    assert.match(text, /1 blocking failure\./);
+    assert.match(text, /→ fix them/);
+  });
+});
+
+describe('script scoping', () => {
+  // None of these mappings is derivable, which is the whole reason candidates
+  // are tried instead of a name being computed.
+  test('candidates cover the shapes podman-desktop actually uses', () => {
+    assert.ok(candidatesFor('test', { name: '@podman-desktop/core-api', path: 'packages/api' }).includes('test:core-api'));
+    assert.ok(candidatesFor('test', { name: '@podman-desktop/ui-svelte', path: 'packages/ui' }).includes('test:ui'));
+    assert.ok(candidatesFor('test', { name: 'podman', path: 'extensions/podman' }).includes('test:extensions:podman'));
+  });
+
+  test('scoping picks the script for the package the diff touches', async () => {
+    const scope = await scopedScripts(await context(), { verb: 'test', fallback: ['test:unit'] });
+
+    assert.deepEqual(scope.packages, ['@podman-desktop/main']);
+    assert.deepEqual(scope.scripts, ['test:main']);
+    assert.equal(scope.usedFallback, false);
+  });
+
+  // The fallback is not silent. A package that quietly stopped being covered
+  // has to be visible in the report rather than absorbed by a green tick.
+  test('a package with no script of its own names itself in unresolved', async () => {
+    const scope = await scopedScripts(await context(), { verb: 'typecheck', fallback: ['typecheck'] });
+
+    assert.deepEqual(scope.unresolved, ['@podman-desktop/main']);
+    assert.equal(scope.usedFallback, true);
+    assert.deepEqual(scope.scripts, ['typecheck']);
+  });
+
+  // DESKTOP-19818: a preload-only slice ran typecheck:preload in slice verify
+  // and in preflight, passed both, and broke the renderer's typecheck on
+  // upstream CI. A type error lands in the consumer of a change, so the whole
+  // typecheck is the default even where the package has a script of its own.
+  test('typecheck is the whole repository, even when the package has its own script', async () => {
+    const prepared = await context();
+    const scope = await typecheckScripts({ ...prepared, scripts: { ...prepared.scripts, 'typecheck:main': 'x', typecheck: 'y' } });
+
+    assert.deepEqual(scope.scripts, ['typecheck']);
+    assert.equal(scope.whole, true);
+    assert.deepEqual(scope.packages, ['@podman-desktop/main']);
+  });
+
+  test('typecheck_scope: packages brings the per-package scripts back', async () => {
+    const prepared = await context();
+    const scope = await typecheckScripts({
+      ...prepared,
+      scripts: { ...prepared.scripts, 'typecheck:main': 'x', typecheck: 'y' },
+      config: { ...prepared.config, preflight: { ...prepared.config.preflight, typecheck_scope: 'packages' } },
+    });
+
+    assert.deepEqual(scope.scripts, ['typecheck:main']);
+    assert.equal(scope.whole, false);
+  });
+
+  test('a repository with no whole typecheck falls back to the scoped answer, and says so', async () => {
+    const prepared = await context();
+    const { typecheck: _whole, ...rest } = prepared.scripts;
+    const scope = await typecheckScripts({ ...prepared, scripts: { ...rest, 'typecheck:main': 'x' } });
+
+    assert.deepEqual(scope.scripts, ['typecheck:main']);
+    assert.equal(scope.whole, false);
+  });
+
+  test('the typecheck check says when it was narrower than the repository', async () => {
+    const prepared = await context();
+    const checks = await loadChecks(['typecheck']);
+    const narrowed = await run(
+      { ...prepared, config: { ...prepared.config, preflight: { ...prepared.config.preflight, typecheck_scope: 'packages' } } },
+      checks,
+    );
+    const whole = await run(prepared, checks);
+
+    assert.match(whole.results[0].summary, /whole repository/);
+    assert.doesNotMatch(narrowed.results[0].summary, /whole repository/);
+  });
+
+  test('runScript uses the configured package manager', async () => {
+    assert.equal(runScript(await context(), 'test:main'), 'npm run test:main');
+  });
+});
+
+describe('the checks that run commands', () => {
+  test('tests: a passing script passes, and the output is attached', async () => {
+    const report = await run(await context());
+    const result = report.results.find((entry) => entry.id === 'tests');
+
+    assert.equal(result.status, 'pass');
+    assert.match(result.output, /main tests ok/);
+  });
+
+  test('lint: resolves lint:check rather than lint', async () => {
+    const report = await run(await context());
+    const result = report.results.find((entry) => entry.id === 'lint');
+
+    assert.equal(result.status, 'pass');
+    assert.equal(result.summary, 'lint:check');
+  });
+
+  // What a failing gate has to look like: red, named, and carrying the output
+  // that says why.
+  test('a failing script fails the report and blocks it', async () => {
+    const prepared = await context();
+    const report = await run({
+      ...prepared,
+      changedFiles: ['packages/renderer/src/x.ts'],
+      changed: [{ status: 'M', path: 'packages/renderer/src/x.ts' }],
+    });
+    const result = report.results.find((entry) => entry.id === 'tests');
+
+    assert.equal(result.status, 'fail');
+    assert.match(result.summary, /test:renderer/);
+    assert.match(result.output, /renderer failed/);
+    assert.equal(report.ok, false);
+  });
+
+  // DESKTOP-19901: a node upgrade left the package manager off PATH, and three
+  // checks said "failing" with the remedy for broken tests.
+  test('a package manager that is not on PATH is the environment, not the code', async () => {
+    const prepared = await context();
+    const manager = 'pdkit-no-such-manager';
+    const report = await run({ ...prepared, config: { ...prepared.config, repo: { ...prepared.config?.repo, package_manager: manager } } });
+
+    for (const id of ['tests', 'lint', 'typecheck']) {
+      const result = report.results.find((entry) => entry.id === id);
+      assert.equal(result.status, 'fail', `${id}: nothing was measured, so it cannot pass`);
+      assert.match(result.summary, new RegExp(`could not run: ${manager} is not on PATH — the environment, not the code`), id);
+      assert.doesNotMatch(result.remedy ?? '', /fix the tests/, id);
+    }
+    assert.equal(report.ok, false);
+  });
+
+  test('unrunnable: only a command-not-found exit counts, and it names what was missing', () => {
+    const context = { config: {} };
+    const at = (exitCode, stderr) => ({ exitCode, stderr, stdout: '' });
+
+    assert.equal(unrunnable(at(1, 'sh: pnpm: command not found'), context), null, 'exit 1 is a script that ran and failed');
+    assert.equal(unrunnable(at(127, 'sh: pnpm: command not found'), context), 'pnpm is not on PATH');
+    assert.equal(unrunnable(at(127, 'sh: 1: vitest: not found'), context), '`vitest` is not on PATH (exit 127)');
+    assert.equal(unrunnable(at(127, ''), context), 'a command it calls is not on PATH (exit 127)');
+    // cmd.exe exits 1 for a command it cannot find; the sentence is the signal.
+    const windows = "'pnpm' is not recognized as an internal or external command,\r\noperable program or batch file.";
+    assert.equal(unrunnable(at(1, windows), context), 'pnpm is not on PATH');
+    assert.equal(unrunnable(at(1, "'vitest' is not recognized as an internal or external command,"), context), '`vitest` is not on PATH (exit 1)');
+  });
+
+  test('schemas: skipped when the diff cannot have changed them', async () => {
+    const report = await run(await context());
+    const result = report.results.find((entry) => entry.id === 'schemas');
+
+    assert.equal(result.status, 'skip');
+  });
+
+  // DESKTOP-19818: "8 checks read the pull request body and had none, so they
+  // judged nothing yet" above five of those eight printing a verdict.
+  test('only the checks that skipped for want of the body are counted as waiting for it', async () => {
+    const report = await run({ ...(await context()), prBody: null });
+    const waiting = waitingForBody(report.results);
+
+    for (const id of waiting) assert.ok(BODY_DEPENDENT.includes(id), id);
+    for (const result of report.results.filter((entry) => BODY_DEPENDENT.includes(entry.id))) {
+      assert.equal(waiting.includes(result.id), result.waitingFor === 'body', `${result.id}: ${result.summary}`);
+      assert.equal(result.waitingFor === 'body', result.summary.endsWith(BODY_NOT_DRAFTED), `${result.id}: ${result.summary}`);
+    }
+    assert.ok(waiting.includes('pr-body-template'), 'the template check always needs the body');
+    assert.ok(waiting.length < BODY_DEPENDENT.length, 'on this diff some body-dependent checks answer from the diff alone');
+  });
+
+  // The marker is what counts, not the words: a summary reworded tomorrow must
+  // not drop a check out of the count, and the phrase alone must not add one.
+  test('waitingForBody reads the marker, not the summary', () => {
+    const marked = skipForBody({ id: 'extension-api', blocking: true, lead: 'the public API is touched; ', remedy: 'draft it' });
+    assert.equal(marked.summary, 'the public API is touched; the PR body is not drafted yet');
+    assert.deepEqual(Object.keys(marked), ['id', 'status', 'blocking', 'summary', 'remedy', 'waitingFor']);
+
+    const results = [
+      marked,
+      { id: 'pr-body-template', status: 'skip', blocking: true, summary: 'reworded, no body yet', waitingFor: 'body' },
+      { id: 'pr-body-size', status: 'skip', blocking: false, summary: BODY_NOT_DRAFTED },
+      { id: 'steps-to-check', status: 'pass', blocking: true, summary: 'fine', waitingFor: 'body' },
+      { id: 'working-tree', status: 'skip', blocking: true, summary: 'n/a', waitingFor: 'body' },
+    ];
+
+    assert.deepEqual(waitingForBody(results), ['extension-api', 'pr-body-template']);
+  });
+
+  test('a missing script is a skip that says so, never a silent pass', async () => {
+    const prepared = await context();
+    const report = await run({ ...prepared, scripts: {} });
+
+    for (const id of ['tests', 'lint', 'typecheck', 'schemas']) {
+      const result = report.results.find((entry) => entry.id === id);
+      assert.equal(result.status, 'skip', `${id} should skip when no script exists`);
+      assert.match(result.summary, /no .* script|neither/);
+    }
+  });
+});
+
+// A check that only ever passes is indistinguishable from a check that does
+// nothing, so each of these is driven to fail as well.
+describe('the upstream rule checks', () => {
+  /** Run one check against a context with the given overrides. */
+  async function only(id, overrides) {
+    const checks = (await loadChecks()).filter((check) => check.id === id);
+    const report = await run({ ...(await context()), ...overrides }, checks);
+    return report.results[0];
+  }
+
+  const sha = 'abcdef1234567890';
+  const signed = { 'Signed-off-by': ['Test <test@example.com>'] };
+
+  test('spdx: an added source file without the header fails', async () => {
+    await writeFile(join(repo, 'packages/main/src/naked.ts'), 'export const naked = 1;\n');
+
+    const result = await only('spdx', {
+      changed: [{ status: 'A', path: 'packages/main/src/naked.ts' }],
+    });
+
+    assert.equal(result.status, 'fail');
+    assert.match(result.output, /naked\.ts/);
+  });
+
+  // Only added files. A modified file that never had a header is somebody
+  // else's omission, and adopting it grows the diff for no reason.
+  test('spdx: a modified file without the header is not this branch problem', async () => {
+    const result = await only('spdx', {
+      changed: [{ status: 'M', path: 'packages/main/src/naked.ts' }],
+    });
+
+    assert.equal(result.status, 'pass');
+  });
+
+  test('spdx: an added svelte file needs no header', async () => {
+    await writeFile(join(repo, 'packages/renderer/src/X.svelte'), '<div/>\n');
+
+    const result = await only('spdx', {
+      changed: [{ status: 'A', path: 'packages/renderer/src/X.svelte' }],
+    });
+
+    assert.equal(result.status, 'pass');
+    assert.match(result.summary, /no added files need a header/);
+  });
+
+  test('conventional-commits: an unknown type fails, and the remedy is not rebase -i', async () => {
+    const result = await only('conventional-commits', {
+      commits: [{ sha, subject: 'improve(main): things', body: '', trailers: signed }],
+    });
+
+    assert.equal(result.status, 'fail');
+    assert.match(result.output, /not one of the accepted types/);
+    assert.match(result.remedy, /reset --soft/);
+    assert.doesNotMatch(result.remedy, /rebase -i(?! *,? *which)/);
+  });
+
+  // The 0.3 correction, at the point where it would otherwise reject valid
+  // work every week.
+  test('conventional-commits: a missing scope passes with a note', async () => {
+    const result = await only('conventional-commits', {
+      commits: [{ sha, subject: 'fix: guard the empty case', body: '', trailers: signed }],
+    });
+
+    assert.equal(result.status, 'pass');
+    assert.match(result.output, /scope/);
+  });
+
+  test('signed-off-by: none fails', async () => {
+    const result = await only('signed-off-by', {
+      commits: [{ sha, subject: 'fix(main): x', body: '', trailers: {} }],
+    });
+
+    assert.equal(result.status, 'fail');
+    assert.match(result.remedy, /commit with -s/);
+  });
+
+  test('signed-off-by: two fails, and the remedy names what produced them', async () => {
+    const result = await only('signed-off-by', {
+      commits: [{ sha, subject: 'fix(main): x', body: '', trailers: { 'Signed-off-by': ['A <a@b>', 'A <a@b>'] } }],
+    });
+
+    assert.equal(result.status, 'fail');
+    assert.match(result.remedy, /rebase -i/);
+    assert.match(result.remedy, /reset --soft/);
+  });
+
+  test('extension-api: touching the declaration without a drafted body defers rather than passes', async () => {
+    const result = await only('extension-api', {
+      changedFiles: ['packages/extension-api/src/extension-api.d.ts'],
+      prBody: null,
+    });
+
+    assert.equal(result.status, 'skip');
+    assert.match(result.summary, /not drafted yet/);
+  });
+
+  test('extension-api: a body that skips disposal fails', async () => {
+    const result = await only('extension-api', {
+      changedFiles: ['packages/extension-api/src/extension-api.d.ts'],
+      prBody: 'This is backward compatible with existing extensions.',
+    });
+
+    assert.equal(result.status, 'fail');
+    assert.match(result.summary, /disposal/);
+  });
+
+  test('extension-api: a body covering both passes', async () => {
+    const result = await only('extension-api', {
+      changedFiles: ['packages/extension-api/src/extension-api.d.ts'],
+      prBody: 'Backward compatible: the field is optional. The listener is disposed with the extension.',
+    });
+
+    assert.equal(result.status, 'pass');
+  });
+
+  test('extension-api: an untouched declaration is skipped', async () => {
+    const result = await only('extension-api', { changedFiles: ['packages/main/src/x.ts'] });
+    assert.equal(result.status, 'skip');
+  });
+});
+
+// Without this one every other result is ambiguous: the file checks read the
+// committed diff and the command checks run the working tree.
+describe('working-tree', () => {
+  async function check() {
+    const checks = await loadChecks(['working-tree']);
+    return (await run(await context(), checks)).results[0];
+  }
+
+  // Earlier blocks leave files behind on purpose — the spdx cases need a file
+  // on disk to read. This check is the one that notices, so it starts from a
+  // clean fixture rather than from whatever ran before it.
+  before(async () => {
+    await execFileAsync('git', ['add', '-A'], { cwd: repo });
+    await execFileAsync('git', ['commit', '-q', '-m', 'chore: fixture leftovers\n\nSigned-off-by: Test <test@example.com>'], { cwd: repo });
+  });
+
+  test('a clean tree passes', async () => {
+    assert.equal((await check()).status, 'pass');
+  });
+
+  test('an uncommitted change blocks, and the remedy says why it matters', async () => {
+    await writeFile(join(repo, 'packages/main/src/base.ts'), 'export const base = 2;\n');
+
+    const result = await check();
+    assert.equal(result.status, 'fail');
+    assert.match(result.summary, /uncommitted/);
+    assert.match(result.remedy, /base\.\.\.HEAD.*working tree/s);
+
+    await execFileAsync('git', ['checkout', '--', 'packages/main/src/base.ts'], { cwd: repo });
+  });
+
+  // An untracked scratch file changes nothing about what is pushed — unless
+  // it is a spec file, in which case the test run covers code no reviewer
+  // will ever see.
+  test('an untracked file warns without blocking', async () => {
+    await writeFile(join(repo, 'scratch.md'), 'notes\n');
+
+    const result = await check();
+    assert.equal(result.status, 'warn');
+    assert.match(result.output, /scratch\.md/);
+
+    await rm(join(repo, 'scratch.md'));
+  });
+});
+
+describe('the artefact checks', () => {
+  async function only(id, overrides) {
+    const checks = (await loadChecks()).filter((check) => check.id === id);
+    const report = await run({ ...(await context()), ...overrides }, checks);
+    return report.results[0];
+  }
+
+  /** A body with the sections these checks read. */
+  const body = ({ steps = '1. Build → it builds\n2. Run → it runs\n3. Restart → still fine', notes = '- Checked on macOS.', extra = '' } = {}) =>
+    `### What issues does this PR fix or reference?\n\nFixes #5001\n${extra}\n\n### How to test this PR?\n\n${steps}\n\n**Notes for reviewers**\n${notes}\n\n- [ ] Tests are covering the bug fix or the new feature\n`;
+
+  // The threshold this measures had never been measured: it was a judgment
+  // made at triage, on an estimate, before any code existed.
+  describe('quickfix-size', () => {
+    test('it says nothing on any other route', async () => {
+      assert.equal((await only('quickfix-size', { route: 'standard' })).status, 'skip');
+    });
+
+    test('it reports the size and never blocks', async () => {
+      const result = await only('quickfix-size', {
+        route: 'quickfix',
+        config: { quickfix: { max_changed_lines: 20, max_files: 3 } },
+      });
+
+      assert.equal(result.blocking, false);
+      assert.equal(result.status, 'pass');
+      assert.match(result.summary, /tests excluded/);
+    });
+
+    test('a test does not count against the fix it covers', async () => {
+      // Issue #18248, live: one production line and 62 test lines. Counted
+      // together that is 64 against a threshold of 20, so a blocking version
+      // would have escalated a one-line fix into full planning for being
+      // properly tested — which is how a route meant to keep small changes
+      // small would start producing thinner tests.
+      const root = await initRepo('pdkit-qfsize-');
+
+      try {
+        await writeFiles(root, { 'packages/main/src/thing.ts': 'export const a = 1;\n' });
+        await commitAll(root, 'chore: base');
+        await gitIn(['checkout', '-q', '-b', 'work'], root);
+        await writeFiles(root, {
+          'packages/main/src/thing.ts': 'export const a = 2;\n',
+          'packages/main/src/thing.spec.ts': `${'// a long test\n'.repeat(60)}`,
+        });
+        await commitAll(root, 'fix: it');
+
+        const check = (await loadChecks(['quickfix-size']))[0];
+        const result = await check.run({
+          route: 'quickfix',
+          repoRoot: root,
+          base: 'main',
+          ref: 'work',
+          config: { quickfix: { max_changed_lines: 20, max_files: 3 } },
+        });
+
+        assert.equal(result.status, 'pass', '62 test lines must not escalate a two-line fix');
+        assert.match(result.summary, /2 line\(s\) in 1 file\(s\), plus 60 test line\(s\) in 1/);
+      } finally {
+        await cleanup(root);
+      }
+    });
+
+    test('a fix that outgrew the route warns and names the way back', async () => {
+      const result = await only('quickfix-size', {
+        route: 'quickfix',
+        config: { quickfix: { max_changed_lines: 0, max_files: 3 } },
+      });
+
+      assert.equal(result.status, 'warn');
+      assert.equal(result.blocking, false, 'a warning here must not stop a push');
+      assert.match(result.remedy, /pdkit issue escalate/);
+      assert.match(result.remedy, /nothing here decides it/);
+    });
+  });
+
+  test('branch-name: a branch for another issue fails', async () => {
+    const result = await only('branch-name', { issue: 9999 });
+
+    assert.equal(result.status, 'fail');
+    assert.match(result.summary, /names issue 5001.*for 9999/);
+  });
+
+  test('branch-name: a branch that is not ours fails', async () => {
+    assert.equal((await only('branch-name', { branch: 'my-feature' })).status, 'fail');
+    assert.equal((await only('branch-name', { branch: null })).status, 'fail');
+  });
+
+  test('branch-name: the right branch passes', async () => {
+    assert.equal((await only('branch-name', {})).status, 'pass');
+  });
+
+  // The defect this check found in itself: the section ran on past its own
+  // steps and counted "Notes for reviewers" and the template checkbox as
+  // steps with no expected result, failing a body the plugin had produced.
+  test('steps-to-check: notes and the checkbox are not steps', async () => {
+    const result = await only('steps-to-check', { prBody: body() });
+
+    assert.equal(result.status, 'pass');
+    assert.equal(result.summary, '3 steps, each with an expected result');
+  });
+
+  // Six checks read the body and each reads a part of it; none asked whether
+  // the body is the shape the template declares. On 18834 a body written by
+  // hand rather than rendered passed all six while missing upstream's own test
+  // checkbox and the attribution footer — and was published that way.
+  describe('pr-body-template', () => {
+    /** The template, filled in, as `pdkit render prBody` would produce it. */
+    async function rendered() {
+      const template = await readFile(join(process.cwd(), 'templates', 'pr-body.md'), 'utf8');
+      return template.replaceAll(/\{\{\w+\}\}/g, 'text');
+    }
+
+    test('a rendered body passes', async () => {
+      const result = await only('pr-body-template', { prBody: await rendered() });
+
+      assert.equal(result.status, 'pass');
+    });
+
+    test('a body missing the attribution footer fails', async () => {
+      const result = await only('pr-body-template', { prBody: (await rendered()).replace(/<sub>[\s\S]*<\/sub>/, '') });
+
+      assert.equal(result.status, 'fail');
+      assert.match(result.output, /Prepared with podman-desktop-kit/);
+      assert.match(result.remedy, /pdkit render prBody/);
+    });
+
+    // Upstream's line, not ours, and the half that costs a reviewer something.
+    test("a body missing upstream's test checkbox fails", async () => {
+      const result = await only('pr-body-template', {
+        prBody: (await rendered()).replace('- [ ] Tests are covering the bug fix or the new feature', ''),
+      });
+
+      assert.equal(result.status, 'fail');
+      assert.match(result.output, /Tests are covering/);
+    });
+
+    // The box is there to be ticked; ticking it is filling the template in.
+    test("a body with upstream's test checkbox ticked passes", async () => {
+      for (const mark of ['x', 'X']) {
+        const result = await only('pr-body-template', {
+          prBody: (await rendered()).replace('- [ ] Tests are covering', `- [${mark}] Tests are covering`),
+        });
+
+        assert.equal(result.status, 'pass', `- [${mark}]`);
+      }
+    });
+
+    test('a missing section is named too', async () => {
+      const result = await only('pr-body-template', { prBody: (await rendered()).replace('### How to test this PR?', '') });
+
+      assert.equal(result.status, 'fail');
+      assert.match(result.output, /How to test this PR/);
+    });
+
+    // Extra content is not a defect. Reporting it would push whoever wrote the
+    // body to say less, which is the opposite of what a reviewer wants.
+    test('saying more than the template asked for is fine', async () => {
+      const result = await only('pr-body-template', { prBody: `${await rendered()}\n\n### Anything else\n\nA note.\n` });
+
+      assert.equal(result.status, 'pass');
+    });
+
+    test('with no body it defers rather than failing', async () => {
+      const result = await only('pr-body-template', { prBody: null });
+
+      assert.equal(result.status, 'skip');
+      assert.match(result.remedy, /has to read it/);
+    });
+  });
+
+  // The other side of the bound above, and the failure it produced on the first
+  // multi-slice live run: eight steps written as `**1. Set up**` were reported
+  // as "0 steps, at least 3 are required" with a remedy about writing more of
+  // them. The answer took reading this check's source.
+  test('steps-to-check: says when a bold sub-heading cut the section short', async () => {
+    const result = await only('steps-to-check', {
+      prBody: body({
+        steps:
+          '**1. Set up**\n' +
+          '1. Build the app → it starts\n' +
+          '**2. Observe**\n' +
+          '2. Open Settings → the panel appears\n' +
+          '3. Restart the machine → the list refreshes',
+      }),
+    });
+
+    assert.equal(result.status, 'fail');
+    assert.match(result.summary, /the section ends at a bold sub-heading, 3 more are below it/);
+    assert.equal(result.output, '**1. Set up**', 'the line that cut it is named');
+    assert.match(result.remedy, /plain numbered list/);
+  });
+
+  test('steps-to-check: fewer than three fails', async () => {
+    const result = await only('steps-to-check', { prBody: body({ steps: '1. Build → it builds\n2. Run → it runs' }) });
+
+    assert.equal(result.status, 'fail');
+    assert.match(result.summary, /at least 3/);
+    assert.doesNotMatch(result.summary, /bold/, 'genuinely too few steps is not blamed on formatting');
+  });
+
+  // A step is not a line. Written out, one usually runs to three — the action,
+  // the command, and what should come back — and reading only the first says
+  // the step states no result while the reviewer is looking straight at one.
+  // Found on DESKTOP-18778, where all four steps were reported as vague.
+  test('steps-to-check: the result may sit on the step own continuation lines', async () => {
+    const result = await only('steps-to-check', {
+      prBody: body({
+        steps:
+          '1. Start a container with a long command:\n' +
+          '   `podman run -d --name long-cmd alpine sleep 3600`\n' +
+          '   Expected: the container starts.\n' +
+          '2. Open the Summary tab.\n' +
+          '   Expected: the command wraps inside the pane.\n' +
+          '3. Look at the rest of the card.\n' +
+          '   Expected: every field is still visible.',
+      }),
+    });
+
+    assert.equal(result.status, 'pass', result.output);
+    assert.equal(result.summary, '3 steps, each with an expected result');
+  });
+
+  // The bound on that. Continuation is indentation, because taking everything
+  // up to the next number would let unindented prose further down the section
+  // satisfy a step that says nothing — the exact failure this check is for.
+  test('steps-to-check: unindented prose does not rescue a vague step', async () => {
+    const result = await only('steps-to-check', {
+      prBody: body({
+        steps:
+          '1. Build it\n' +
+          '2. Test the dialog\n' +
+          '3. Look at it\n' +
+          'Afterwards the dialog shows the new label and the list displays it too.',
+      }),
+    });
+
+    assert.equal(result.status, 'fail');
+    assert.match(result.summary, /3 steps do not read as actions/);
+  });
+
+  // "Test the dialog" is not a step. What a reviewer needs is what should
+  // happen.
+  test('steps-to-check: a step with no expected result fails', async () => {
+    const result = await only('steps-to-check', {
+      prBody: body({ steps: '1. Build it\n2. Test the dialog\n3. Look at it' }),
+    });
+
+    assert.equal(result.status, 'fail');
+    // The message says what the check can see — a phrasing — rather than
+    // claiming the step states no result. See the case below for why.
+    assert.match(result.summary, /do not read as actions with a result/);
+    assert.match(result.remedy, /An arrow always counts/);
+  });
+
+  // Found on the first live run, on a body written by hand: "it reads `ls -l
+  // /etc`" is an expected result, and the check rejected it because `reads` was
+  // not in its vocabulary. A check that matches a phrasing has to be honest
+  // about matching a phrasing, and wide enough to cover how results get written.
+  test('steps-to-check: a result stated without an arrow still counts', async () => {
+    const result = await only('steps-to-check', {
+      prBody: body({
+        steps:
+          '1. Open the container details page — the Command field reads `ls -l /etc`\n' +
+          '2. Run `podman ps -a` — it lists `multi-arg`\n' +
+          '3. Restart the app — the selection is unchanged',
+      }),
+    });
+
+    assert.equal(result.status, 'pass');
+  });
+
+  test('steps-to-check: it applies on the quickfix route too', async () => {
+    const result = await only('steps-to-check', {
+      route: 'quickfix',
+      prBody: body({ steps: '1. Build it' }),
+    });
+
+    assert.equal(result.status, 'fail');
+  });
+
+  // podman-desktop#19317: "unnecessary long and verbose ... this makes it
+  // harder to review because of the content to read". Measured across the
+  // author's upstream pull requests, the hand-written ones ran 378-2551
+  // characters and the generated ones up to 14015 — and the complaint arrived
+  // on one of the smaller generated ones.
+  describe('pr-body-size', () => {
+    /** A body of a given shape, with every section the check knows. */
+    const sized = ({ what = 'It was broken. Now it is not.', notes = '- Checked on macOS.', steps = '1. Build → it builds\n2. Run → it runs\n3. Restart → still fine' } = {}) =>
+      `### What does this PR do?\n\n${what}\n\n**Where to look**\n\n\`main.ts\` is the logic; the rest is renames.\n\n` +
+      `**Not in this PR**\n\nNothing — one atomic change.\n\n### Screenshot / video of UI\n\nn/a — no UI change.\n\n` +
+      `### What issues does this PR fix or reference?\n\nFixes #5001\n\n### How to test this PR?\n\n${steps}\n\n` +
+      `**Notes for reviewers**\n\n${notes}\n\n- [ ] Tests are covering the bug fix or the new feature\n` +
+      `<sub>Prepared with podman-desktop-kit (Claude Code Plugin)</sub>\n`;
+
+    test('a body within its budget passes, and never blocks either way', async () => {
+      const result = await only('pr-body-size', { prBody: sized() });
+
+      assert.equal(result.status, 'pass');
+      assert.equal(result.blocking, false);
+      assert.match(result.summary, /steps \d+ chars, not counted/);
+    });
+
+    test('the sections over budget are named, and only those', async () => {
+      const result = await only('pr-body-size', {
+        prBody: sized({ what: 'x'.repeat(2000), notes: 'y'.repeat(1000) }),
+      });
+
+      assert.equal(result.status, 'warn');
+      assert.equal(result.blocking, false, 'a long paragraph must not stop a push');
+      assert.match(result.output, /! what {2}2000\/600/);
+      assert.match(result.output, /! notes for reviewers {2}1000\/400/);
+      assert.match(result.output, /^ {2}where to look/m, 'a section inside its budget is listed without a mark');
+      assert.match(result.remedy, /steps are not the place to save/);
+    });
+
+    // The constraint this whole change was made under: the steps are the one
+    // section a reviewer executes rather than reads, so counting them would
+    // push the one part worth expanding in the direction of the thing this
+    // check exists to prevent.
+    test('steps of any length are bounded, not counted', async () => {
+      const enormous = Array.from({ length: 40 }, (_, index) => `${index + 1}. Do the thing → the thing happened, at length, with fixtures and cleanup`).join('\n');
+      const result = await only('pr-body-size', { prBody: sized({ steps: enormous }) });
+
+      assert.equal(result.status, 'pass', 'a thorough set of steps is not a verbose body');
+      assert.ok(!/steps.*\/\d/.test(result.output ?? ''), 'the steps carry no budget to be measured against');
+    });
+
+    // A bold line of the author's own mid-paragraph is not a section boundary.
+    // Treating it as one would stop counting half way and report the number as
+    // if it had read the whole section.
+    test('only the template markers bound a section', async () => {
+      const result = await only('pr-body-size', {
+        prBody: sized({ what: `**Two things matter.**\n\n${'x'.repeat(900)}` }),
+      });
+
+      assert.equal(result.status, 'warn');
+      assert.match(result.output, /! what {2}9\d\d\/600/, 'the text after the author bold line counts too');
+    });
+
+    test('nothing to read yet is a skip, not a pass', async () => {
+      const result = await only('pr-body-size', { prBody: null });
+
+      assert.equal(result.status, 'skip');
+      assert.match(result.remedy, /has to read it/);
+    });
+  });
+
+  test('ci-blind-spots: an untouched blind area passes', async () => {
+    const result = await only('ci-blind-spots', { changedFiles: ['packages/main/src/x.ts'] });
+    assert.equal(result.status, 'pass');
+  });
+
+  // CI builds on three platforms and runs unit tests on one, and its e2e
+  // failures do not block a merge. A green PR is not evidence.
+  test('ci-blind-spots: packaging without Notes for reviewers fails', async () => {
+    const result = await only('ci-blind-spots', {
+      changedFiles: ['.electron-builder.config.cjs'],
+      prBody: '### How to test this PR?\n\n1. Build → it builds\n',
+    });
+
+    assert.equal(result.status, 'fail');
+    assert.match(result.summary, /packaging/);
+  });
+
+  test('ci-blind-spots: with the notes, it passes', async () => {
+    const result = await only('ci-blind-spots', {
+      changedFiles: ['.electron-builder.config.cjs'],
+      prBody: body({ notes: '- Packaged and launched on macOS 15; CI only builds the installer.' }),
+    });
+
+    assert.equal(result.status, 'pass');
+  });
+
+  test('ci-blind-spots: before the body exists it defers rather than passing', async () => {
+    const result = await only('ci-blind-spots', { changedFiles: ['packages/main/src/win32-paths.ts'], prBody: null });
+
+    assert.equal(result.status, 'skip');
+    assert.match(result.summary, /not drafted yet/);
+  });
+
+  // Scenario 7: the diff is mechanical and the risk is one level down, in
+  // transitive dependents that unit tests on one platform never load.
+  test('ci-blind-spots: a moved lockfile is a blind spot', async () => {
+    const result = await only('ci-blind-spots', {
+      changedFiles: ['pnpm-lock.yaml', 'packages/main/package.json'],
+      prBody: '### How to test this PR?\n\n1. Start it → it starts\n',
+    });
+
+    assert.equal(result.status, 'fail');
+    assert.match(result.summary, /dependency changes/);
+    assert.match(result.remedy, /pnpm why/);
+  });
+
+  // A package.json edited on its own installs exactly what was installed
+  // before. Asking about it would price the gate at a paragraph per renamed
+  // script, and a gate that is expensive to pass is one people route around.
+  test('ci-blind-spots: package.json without the lockfile is not one', async () => {
+    const result = await only('ci-blind-spots', {
+      changedFiles: ['packages/main/package.json'],
+      prBody: '### How to test this PR?\n\n1. Start it → it starts\n',
+    });
+
+    assert.equal(result.status, 'pass');
+  });
+
+  // The remedy used to ask about the platform whatever the finding was. A
+  // remedy that names the wrong thing gets answered with the wrong thing.
+  test('ci-blind-spots: the remedy asks about what was actually hit', async () => {
+    const result = await only('ci-blind-spots', {
+      changedFiles: ['pnpm-lock.yaml'],
+      prBody: '### How to test this PR?\n\n1. Start it → it starts\n',
+    });
+
+    assert.doesNotMatch(result.remedy, /name the platform you checked on/);
+  });
+
+  // A warning, because every one of these is sometimes correct. Blocking
+  // would train people to route around the gate.
+  test('debug-leftovers: warns without blocking', async () => {
+    const git = (args) => execFileAsync('git', args, { cwd: repo, encoding: 'utf8' });
+    await writeFile(join(repo, 'packages/main/src/messy.ts'), 'export const f = (x: any) => { console.log(x); };\n');
+    await git(['add', '-A']);
+    await git(['commit', '-q', '-m', 'chore: messy\n\nSigned-off-by: Test <test@example.com>']);
+
+    const checks = (await loadChecks()).filter((check) => check.id === 'debug-leftovers');
+    const report = await run(await context(), checks);
+
+    assert.equal(report.results[0].status, 'warn');
+    assert.equal(report.ok, true, 'a warning must not block');
+    assert.match(report.results[0].summary, /console\.log/);
+    assert.match(report.results[0].summary, /any/);
+  });
+});
+
+describe('maintainer-rules', () => {
+  // Scope is the difference between a check that is read and one that is
+  // ignored: Playwright specs keep afterEach, extensions may export functions.
+  test('a pattern outside the files its rule covers is not reported', async () => {
+    const git = (args) => execFileAsync('git', args, { cwd: repo, encoding: 'utf8' });
+    await mkdir(join(repo, 'tests/playwright/src'), { recursive: true });
+    await writeFile(join(repo, 'tests/playwright/src/flow.spec.ts'), 'afterEach(() => {});\nvi.spyOn(a, "b");\n');
+    await mkdir(join(repo, 'extensions/foo/src'), { recursive: true });
+    await writeFile(join(repo, 'extensions/foo/src/util.ts'), 'export function helper(): void {}\n');
+    await git(['add', '-A']);
+    await git(['commit', '-q', '-m', 'chore: elsewhere\n\nSigned-off-by: Test <test@example.com>']);
+
+    const checks = (await loadChecks()).filter((check) => check.id === 'maintainer-rules');
+    const report = await run(await context(), checks);
+
+    // The fixture repository is shared and earlier tests leave commits in it,
+    // so the claim is about these labels, not about the status as a whole.
+    const summary = report.results[0].summary;
+    assert.doesNotMatch(summary, /afterEach/);
+    assert.doesNotMatch(summary, /vi\.spyOn/);
+    assert.doesNotMatch(summary, /export function/);
+  });
+
+  // A rule with no exception blocks: upstream's review agent raises every one
+  // of these as an `issue:`, and a warning is what let them reach it before.
+  test('fails on a rule with no exception, citing the section', async () => {
+    const git = (args) => execFileAsync('git', args, { cwd: repo, encoding: 'utf8' });
+    await writeFile(
+      join(repo, 'packages/main/src/rules.spec.ts'),
+      "import { readFile } from 'fs';\nimport x from '../other';\nvi.spyOn(x, 'f');\nafterEach(() => {});\n",
+    );
+    await writeFile(join(repo, 'packages/main/src/rules.ts'), '/* Copyright (C) 2022-2024 Red Hat, Inc. */\nexport function helper(): void {}\n');
+    await git(['add', '-A']);
+    await git(['commit', '-q', '-m', 'chore: rules\n\nSigned-off-by: Test <test@example.com>']);
+
+    const checks = (await loadChecks()).filter((check) => check.id === 'maintainer-rules');
+    const report = await run(await context(), checks);
+    const result = report.results[0];
+
+    assert.equal(result.status, 'fail');
+    assert.equal(result.blocking, true);
+    assert.equal(report.ok, false, 'a strict hit must stop the push');
+    assert.match(result.summary, /vi\.spyOn ×1 \(§2\)/);
+    assert.match(result.summary, /afterEach\/afterAll\/beforeAll ×1/);
+    assert.match(result.summary, /relative \.\.\/ import ×1 \(§5\)/);
+    assert.match(result.summary, /node built-in without node: ×1/);
+    assert.match(result.summary, /export function in packages\/main ×1 \(§6\)/);
+    assert.match(result.summary, /copyright not \d{4} alone ×1 \(§1\)/);
+  });
+
+  // A rule that carries its own condition ("when automocking suffices") is
+  // one a grep cannot settle. It warns, and the self-review rules on it.
+  test('only warns on a rule whose condition a grep cannot see', async () => {
+    const root = await initRepo('pdkit-maintainer-rules-');
+    try {
+      await writeFiles(root, { 'README.md': 'base\n' });
+      await commitAll(root, 'chore: base');
+      await gitIn(['checkout', '-q', '-b', 'work'], root);
+      await writeFiles(root, { 'packages/main/src/a.spec.ts': "vi.mock(import('./electron.js'), () => ({ app: {} }));\n" });
+      await commitAll(root, 'test(main): factory');
+
+      const { run: check } = await import('../lib/preflight/checks/maintainer-rules.js');
+      const result = await check({ base: 'main', ref: 'HEAD', repoRoot: root });
+
+      assert.equal(result.status, 'warn');
+      assert.match(result.summary, /^to judge: vi\.mock with a factory ×1 \(§2\)/);
+      assert.match(result.remedy, /self-review/);
+    } finally {
+      await cleanup(root);
+    }
+  });
+
+  test('each pattern catches its line and leaves the legitimate one alone', async () => {
+    const { scan } = await import('../lib/preflight/checks/maintainer-rules.js');
+    const labels = (file, line) => scan(file, [line], 2026).map((hit) => hit.label);
+    const MAIN = 'packages/main/src/a.ts';
+    const SPEC_FILE = 'packages/main/src/a.spec.ts';
+
+    // Caught.
+    assert.deepEqual(labels(MAIN, 'const x = foo!.bar;'), ['! non-null assertion']);
+    assert.deepEqual(labels(MAIN, 'const a: any = 1;'), ['any']);
+    assert.deepEqual(labels(MAIN, '} catch {}'), ['an empty catch']);
+    assert.deepEqual(labels(MAIN, '  void this.start();'), ['void to discard a promise']);
+    assert.deepEqual(labels(MAIN, 'export const f = async (a: string): Promise<void> => {'), ['exported arrow function in packages/main']);
+    assert.deepEqual(labels(MAIN, 'function helper(): void {'), ['file-scope function in packages/main']);
+    assert.deepEqual(labels(MAIN, 'const title = app.name;'), ['Electron app.name']);
+    assert.deepEqual(labels(SPEC_FILE, 'await new Promise(resolve => setTimeout(resolve, 500));'), ['a real sleep in a unit spec']);
+    assert.deepEqual(labels(SPEC_FILE, 'expect(handler).toBeDefined();'), ['expect(…).toBeDefined() instead of assert()']);
+    assert.deepEqual(labels('packages/renderer/src/lib/A.svelte', 'let timer: NodeJS.Timeout;'), ['Node types in renderer code']);
+    assert.deepEqual(labels('packages/renderer/src/lib/a.ts', 'await tick();'), ['tick() in component code']);
+
+    // Left alone.
+    assert.deepEqual(labels(MAIN, 'if (!x) return;'), []);
+    assert.deepEqual(labels(MAIN, 'if (a !== b) {}'), []);
+    assert.deepEqual(labels(MAIN, "const s = 'hi!';"), []);
+    assert.deepEqual(labels(MAIN, 'export const LIMIT = 1;'), []);
+    assert.deepEqual(labels(MAIN, 'const company = anything;'), []);
+    assert.deepEqual(labels(SPEC_FILE, "vi.mock(import('./util.js'));"), []);
+    assert.deepEqual(labels('extensions/foo/src/a.ts', 'export function helper(): void {}'), []);
+    // The one exception section 4 names for eslint-disable.
+    assert.deepEqual(labels(MAIN, '// eslint-disable-next-line @typescript-eslint/no-empty-object-type'), []);
+    assert.deepEqual(labels(MAIN, '// eslint-disable-next-line @typescript-eslint/no-explicit-any'), ['eslint-disable']);
+  });
+
+  test('a copyright line is stale when it is a range or not this year', () => {
+    assert.equal(staleCopyright(' * Copyright (C) 2026 Red Hat, Inc.', 2026), false);
+    assert.equal(staleCopyright(' * Copyright (C) 2024 Red Hat, Inc.', 2026), true);
+    assert.equal(staleCopyright(' * Copyright (C) 2022-2026 Red Hat, Inc.', 2026), true);
+    assert.equal(staleCopyright('const x = 1;', 2026), false);
+  });
+});
+
+describe('api-surface', () => {
+  // The trap itself. A symbol that looks internal but is declared in
+  // extension-api.d.ts is public API, with obligations nobody thought they
+  // were taking on.
+  test('an added export that appears in the public surface fails', async () => {
+    const surface = join(repo, 'packages/extension-api/src');
+    await mkdir(surface, { recursive: true });
+    await writeFile(join(surface, 'extension-api.d.ts'), 'export interface RunOptions { env?: string }\n');
+
+    const git = (args) => execFileAsync('git', args, { cwd: repo, encoding: 'utf8' });
+    await writeFile(join(repo, 'packages/main/src/exec.ts'), 'export interface RunOptions { env?: string }\n');
+    await git(['add', '-A']);
+    await git(['commit', '-q', '-m', 'feat(main): add RunOptions\n\nSigned-off-by: Test <test@example.com>']);
+
+    const checks = (await loadChecks()).filter((check) => check.id === 'api-surface');
+    const report = await run(await context(), checks);
+
+    assert.equal(report.results[0].status, 'fail');
+    assert.match(report.results[0].output, /RunOptions/);
+    assert.match(report.results[0].remedy, /public API/);
+  });
+
+  test('an added export that is nowhere in the surface passes', async () => {
+    const git = (args) => execFileAsync('git', args, { cwd: repo, encoding: 'utf8' });
+    await writeFile(join(repo, 'packages/main/src/internal.ts'), 'export interface PurelyInternal { x: number }\n');
+    await git(['add', '-A']);
+    await git(['commit', '-q', '-m', 'feat(main): add internal\n\nSigned-off-by: Test <test@example.com>']);
+
+    const checks = (await loadChecks()).filter((check) => check.id === 'api-surface');
+    const prepared = await context();
+    const report = await run({ ...prepared, changedFiles: ['packages/main/src/internal.ts'] }, checks);
+
+    assert.equal(report.results[0].status, 'pass');
+  });
+});
+
+// A sliced issue is where preflight stops being a single question. Which slice
+// this run is about decides what it is a diff FROM, which requirements it is
+// expected to cover, and whether a stored verification still applies — and
+// getting any of the three wrong produces a report that is confident about the
+// wrong change.
+describe('a sliced issue', () => {
+  const ISSUE = 7301;
+  const API = 'packages/extension-api/src/api.ts';
+  const EXEC = 'packages/main/src/exec.ts';
+
+  let sliced;
+  let slicedHome;
+  let slicedTrees;
+  let graph;
+
+  const config = () => ({
+    repo: { base_branch: 'main', package_manager: 'npm' },
+    branches: { sliced: 'DESKTOP-{issue}/{index}-{slug}' },
+    slicing: { layer_order: ['extension-api', 'main', 'ui', 'tests'], verify: { install: 'never' } },
+    worktrees: { root: slicedTrees, copy_files: [] },
+  });
+
+  before(async () => {
+    sliced = await initRepo('pdkit-preflight-sliced-');
+    slicedHome = await initRepo('pdkit-preflight-sliced-home-');
+    slicedTrees = join(sliced, '..', `${basename(sliced)}-trees`);
+
+    await seedWorkspace(sliced);
+    await commitAll(sliced, 'chore: seed');
+
+    await gitIn(['checkout', '-b', `DESKTOP-${ISSUE}/work`], sliced);
+    await writeFiles(sliced, {
+      [API]: '// SPDX-License-Identifier: Apache-2.0\nexport interface RunOptions { env?: string }\n',
+      [EXEC]: '// SPDX-License-Identifier: Apache-2.0\nimport type { RunOptions } from "@fixture/api";\nexport function exec(_o: RunOptions) {}\n',
+    });
+    await commitAll(sliced, 'feat: change set');
+
+    await state.transition(ISSUE, 'triaged', { home: slicedHome });
+    await state.transition(ISSUE, 'planned', { home: slicedHome });
+    for (let i = 0; i < 2; i += 1) await ids.allocateRequirement(ISSUE, { home: slicedHome });
+    await ids.freezeRequirements(ISSUE, { home: slicedHome });
+    await writeTask({ home: slicedHome, issue: ISSUE, id: 'T1', satisfies: ['R1'], owns: [API] });
+    await writeTask({ home: slicedHome, issue: ISSUE, id: 'T2', satisfies: ['R2'], owns: [EXEC] });
+
+    const facts = await slice.facts({ issue: ISSUE, repoRoot: sliced, home: slicedHome, config: config(), packageMap: packageMap(sliced) });
+    const stored = await slice.set({
+      issue: ISSUE,
+      proposal: {
+        slices: [
+          { slug: 'api', title: 'add RunOptions', files: [API], baseSlice: null },
+          { slug: 'main-exec', title: 'thread it through', files: [EXEC], baseSlice: 1 },
+        ],
+      },
+      facts,
+      config: config(),
+      home: slicedHome,
+    });
+    assert.equal(stored.ok, true, JSON.stringify(stored.problems));
+
+    await slice.verifyAll({ issue: ISSUE, repoRoot: sliced, home: slicedHome, config: config(), packageMap: packageMap(sliced) });
+    // The approval reads a plan; written once the graph is set, which this
+    // suite cuts from the diff rather than from a plan.
+    await approvablePlan(ISSUE, { home: slicedHome, slices: 2 });
+
+    for (const [index, subject] of [[1, 'feat(extension-api): add RunOptions'], [2, 'feat(main): thread RunOptions']]) {
+      for (const to of ['plan-approved', 'implemented', 'validated', 'audited', 'sliced', 'slices-approved']) {
+        await state.transition(ISSUE, to, { home: slicedHome, approvedBy: 'test' });
+      }
+      const made = await slice.materialize({ issue: ISSUE, index, repoRoot: sliced, subject, home: slicedHome, config: config() });
+      assert.equal(made.ok, true, made.error);
+    }
+
+    graph = await slice.read(ISSUE, { home: slicedHome });
+  });
+
+  after(async () => {
+    await cleanup(sliced, slicedHome, slicedTrees);
+  });
+
+  const on = (overrides = {}) => prepare({ issue: ISSUE, repoRoot: sliced, home: slicedHome, ...overrides });
+
+  test('the base of a stacked slice is its parent branch, not main', async () => {
+    // Standing on slice #2's branch, which is where /pd:pr runs preflight.
+    await gitIn(['checkout', `DESKTOP-${ISSUE}/2-main-exec`], sliced);
+    const prepared = await on();
+
+    assert.equal(prepared.slice, 2, 'the slice is inferred from the branch');
+    assert.equal(prepared.base, `DESKTOP-${ISSUE}/1-api`);
+    // The whole point: from main this list would also contain slice #1's file.
+    assert.deepEqual(prepared.changedFiles, [EXEC]);
+  });
+
+  test('and an independent slice still reads against main', async () => {
+    await gitIn(['checkout', `DESKTOP-${ISSUE}/1-api`], sliced);
+    const prepared = await on();
+
+    assert.equal(prepared.slice, 1);
+    assert.equal(prepared.base, 'main');
+    assert.deepEqual(prepared.changedFiles, [API]);
+  });
+
+  // The base came from the graph and the ref was whatever happened to be
+  // checked out, which is right only because the flow runs preflight from the
+  // slice's own worktree. Found by dry-running scenario 13: a graph cut from a
+  // published pull request, `--slice 1`, and a green report about a diff the
+  // slice had nothing to do with.
+  test('the ref is the slice branch, not whatever is checked out', async () => {
+    const was = await gitIn(['branch', '--show-current'], sliced);
+    await gitIn(['checkout', 'main'], sliced);
+
+    try {
+      const prepared = await on({ slice: 2 });
+
+      assert.equal(prepared.ref, `DESKTOP-${ISSUE}/2-main-exec`);
+      assert.deepEqual(prepared.changedFiles, [EXEC], 'standing on main must not empty the diff');
+      assert.equal(prepared.problem, null);
+    } finally {
+      await gitIn(['checkout', was], sliced);
+    }
+  });
+
+  // The flow materializes before it runs preflight, so no branch means the run
+  // is out of order. Reporting on HEAD instead answers a question nobody asked.
+  test('a slice with no branch yet is refused rather than measured', async () => {
+    const branch = `DESKTOP-${ISSUE}/2-main-exec`;
+    const was = await gitIn(['branch', '--show-current'], sliced);
+    const sha = await gitIn(['rev-parse', branch], sliced);
+    await gitIn(['checkout', 'main'], sliced);
+    await gitIn(['branch', '-D', branch], sliced);
+
+    try {
+      const missing = await on({ slice: 2 });
+
+      assert.match(missing.problem ?? '', /has no branch/);
+      assert.match(missing.problem ?? '', /materialize/);
+      assert.deepEqual(missing.changedFiles, [], 'nothing is measured once the run is refused');
+    } finally {
+      await gitIn(['branch', branch, sha], sliced);
+      await gitIn(['checkout', was], sliced);
+    }
+  });
+
+  // Work reaches a pull request without ever being materialized when the branch
+  // was cut before the graph existed. The graph then names a branch nobody has,
+  // and on DESKTOP-18832 standing on the only branch the issue had matched no
+  // slice at all: `slice-standalone` skipped, advising "run preflight while
+  // standing on the slice branch", which is where the session already was.
+  describe('a slice published from a branch the graph did not name', () => {
+    const PUBLISHED = `DESKTOP-${ISSUE}/store-api`;
+
+    let was;
+
+    before(async () => {
+      was = await gitIn(['branch', '--show-current'], sliced);
+      await gitIn(['branch', PUBLISHED, `DESKTOP-${ISSUE}/1-api`], sliced);
+      // Off it first: the branch is what this worktree has checked out.
+      await gitIn(['checkout', 'main'], sliced);
+      await gitIn(['branch', '-D', `DESKTOP-${ISSUE}/1-api`], sliced);
+      await pr.register({ issue: ISSUE, number: 4300, slice: 1, branch: PUBLISHED, base: 'main', home: slicedHome });
+    });
+
+    after(async () => {
+      await gitIn(['checkout', 'main'], sliced);
+      await gitIn(['branch', `DESKTOP-${ISSUE}/1-api`, PUBLISHED], sliced);
+      await gitIn(['branch', '-D', PUBLISHED], sliced);
+      await gitIn(['checkout', was], sliced);
+      await rm(join(slicedHome, 'issues', String(ISSUE), 'prs.json'), { force: true });
+    });
+
+    test('standing on it is recognized as standing on the slice', async () => {
+      await gitIn(['checkout', PUBLISHED], sliced);
+      const prepared = await on();
+
+      assert.equal(prepared.slice, 1, 'the branch under review is the slice');
+      assert.deepEqual(prepared.changedFiles, [API]);
+      assert.equal(prepared.problem, null);
+    });
+
+    // Telling its author to materialize it would make a second name for one
+    // commit, which is what the live run did by hand.
+    test('--slice reads it instead of asking for a materialize', async () => {
+      await gitIn(['checkout', 'main'], sliced);
+      const prepared = await on({ slice: 1 });
+
+      assert.equal(prepared.ref, PUBLISHED);
+      assert.deepEqual(prepared.changedFiles, [API]);
+      assert.equal(prepared.problem, null);
+    });
+  });
+
+  // An empty diff passes every file check trivially, so the report comes out
+  // green and the gate opens on a branch with nothing on it. Reached in
+  // practice by a materialize whose commit the repository's pre-commit hook
+  // refused: the branch was created, and empty.
+  test('a slice branch with nothing on it is refused, not called green', async () => {
+    const branch = `DESKTOP-${ISSUE}/2-main-exec`;
+    const was = await gitIn(['branch', '--show-current'], sliced);
+    const sha = await gitIn(['rev-parse', branch], sliced);
+    await gitIn(['checkout', 'main'], sliced);
+    await gitIn(['branch', '-f', branch, `DESKTOP-${ISSUE}/1-api`], sliced);
+
+    try {
+      const empty = await on({ slice: 2 });
+
+      assert.match(empty.problem ?? '', /nothing lies between/);
+      assert.deepEqual(empty.changedFiles, []);
+    } finally {
+      await gitIn(['branch', '-f', branch, sha], sliced);
+      await gitIn(['checkout', was], sliced);
+    }
+  });
+
+  // Under a graph nothing is published except a slice, so a run about none of
+  // them answers about whatever is checked out. On DESKTOP-19818, after a
+  // join, that was a replaced pull request's branch, reported green.
+  test('a branch that is none of the slices is refused rather than measured', async () => {
+    const was = await gitIn(['branch', '--show-current'], sliced);
+    await gitIn(['checkout', `DESKTOP-${ISSUE}/work`], sliced);
+
+    try {
+      const stray = await on();
+
+      assert.match(stray.problem ?? '', /DESKTOP-7301\/work is none of the graph's 2 slices; pass --slice/);
+      assert.deepEqual(stray.changedFiles, []);
+      assert.match((await on({ slice: 9 })).problem ?? '', /the graph has no slice #9; it has #1, #2/);
+    } finally {
+      await gitIn(['checkout', was], sliced);
+    }
+  });
+
+  describe('a slice that replaces published pull requests', () => {
+    const OLD = `DESKTOP-${ISSUE}/old-api`;
+    const path = () => join(slicedHome, 'issues', String(ISSUE), 'slices.json');
+
+    let was;
+    let original;
+
+    before(async () => {
+      was = await gitIn(['branch', '--show-current'], sliced);
+      await gitIn(['branch', OLD, 'main'], sliced);
+      // The replaced pull request carried the index the joined slice now has.
+      await pr.register({ issue: ISSUE, number: 4301, slice: 1, branch: OLD, base: 'main', home: slicedHome });
+      original = await readFile(path(), 'utf8');
+      const joined = JSON.parse(original);
+      joined.slices[0].supersedes = [4301];
+      await writeFile(path(), JSON.stringify(joined, null, 2));
+    });
+
+    after(async () => {
+      await writeFile(path(), original);
+      await gitIn(['checkout', was], sliced);
+      await gitIn(['branch', '-D', OLD], sliced);
+      await rm(join(slicedHome, 'issues', String(ISSUE), 'prs.json'), { force: true });
+    });
+
+    test('--slice reads the slice branch, not the replaced pull request', async () => {
+      const prepared = await on({ slice: 1 });
+
+      assert.equal(prepared.ref, `DESKTOP-${ISSUE}/1-api`);
+      assert.deepEqual(prepared.changedFiles, [API]);
+      assert.equal(prepared.problem, null);
+    });
+
+    test('standing on the replaced branch says whose it is', async () => {
+      await gitIn(['checkout', OLD], sliced);
+      const prepared = await on();
+
+      assert.equal(prepared.slice, undefined);
+      assert.match(prepared.problem ?? '', /it is the branch of #4301, which a joined slice replaces/);
+    });
+  });
+
+  test('a one-slice graph is about that slice wherever preflight stands', async () => {
+    const path = join(slicedHome, 'issues', String(ISSUE), 'slices.json');
+    const original = await readFile(path, 'utf8');
+    const one = JSON.parse(original);
+    one.slices = one.slices.slice(0, 1);
+    await writeFile(path, JSON.stringify(one, null, 2));
+    const was = await gitIn(['branch', '--show-current'], sliced);
+    await gitIn(['checkout', `DESKTOP-${ISSUE}/work`], sliced);
+
+    try {
+      const prepared = await on();
+
+      assert.equal(prepared.slice, 1);
+      assert.equal(prepared.ref, `DESKTOP-${ISSUE}/1-api`);
+      assert.deepEqual(prepared.changedFiles, [API]);
+    } finally {
+      await writeFile(path, original);
+      await gitIn(['checkout', was], sliced);
+    }
+  });
+
+  test('slice-standalone passes on a fresh green verification', async () => {
+    const report = await run(await on(), await loadChecks(['slice-standalone']));
+
+    assert.equal(report.results[0].status, 'pass', report.results[0].summary);
+    assert.match(report.results[0].summary, /slice #1 standalone on main/);
+  });
+
+  // "Verified" must not decay into "was verified once", and on a materialized
+  // branch a mismatch also means the branch is not what was verified.
+  test('slice-standalone fails once the branch moves away from what was verified', async () => {
+    await writeFiles(sliced, { [API]: '// SPDX-License-Identifier: Apache-2.0\nexport interface RunOptions { env?: string; cwd?: string }\n' });
+    await commitAll(sliced, 'fix(extension-api): add cwd');
+
+    const report = await run(await on(), await loadChecks(['slice-standalone']));
+
+    assert.equal(report.results[0].status, 'fail');
+    assert.match(report.results[0].summary, /stale/);
+    assert.match(report.results[0].remedy, /slice verify/);
+
+    await gitIn(['reset', '--hard', 'HEAD~1'], sliced);
+  });
+
+  // DESKTOP-19818: `slice verify` and the preflight after it ran the same
+  // typecheck, lint and tests on the same commit, and together outlived a
+  // 600-second tool timeout.
+  test('scripts the verification already ran on this very commit are not run again', async () => {
+    await gitIn(['checkout', `DESKTOP-${ISSUE}/1-api`], sliced);
+    await slice.verifyAll({ issue: ISSUE, repoRoot: sliced, home: slicedHome, config: config(), packageMap: packageMap(sliced) });
+    const receipt = await readFile(join(slicedHome, 'issues', String(ISSUE), 'verify', 'S1.md'), 'utf8');
+    const head = (await gitIn(['rev-parse', 'HEAD'], sliced)).trim();
+    assert.ok(receipt.includes(`- Commit: ${head}`), 'the fixture has to verify the branch commit itself');
+
+    const report = await run(await on(), await loadChecks(['tests', 'lint', 'typecheck']));
+    for (const result of report.results) {
+      assert.equal(result.status, 'pass', `${result.id}: ${result.summary}`);
+      assert.match(result.summary, new RegExp(`passed in slice verify on ${head.slice(0, 11)}`), result.id);
+    }
+
+    // A tracked change is code that commit does not hold: run them.
+    const path = join(sliced, API);
+    const original = await readFile(path, 'utf8');
+    await writeFile(path, `${original}// edited\n`);
+    try {
+      const dirty = await run(await on(), await loadChecks(['lint']));
+      assert.doesNotMatch(dirty.results[0].summary, /passed in slice verify/);
+    } finally {
+      await writeFile(path, original);
+    }
+  });
+
+  // The file checks follow the slice's branch wherever the tree stands; the
+  // scripts run what is on disk. In the issue's tree on the branch its slices
+  // were cut from, a green from tests, lint and typecheck would be about that
+  // branch and reported as the slice's.
+  describe('a tree standing on another commit than the slice', () => {
+    const SCRIPTED = ['tests', 'lint', 'typecheck'];
+    let was;
+
+    before(async () => {
+      was = await gitIn(['branch', '--show-current'], sliced);
+      await gitIn(['checkout', `DESKTOP-${ISSUE}/work`], sliced);
+    });
+
+    after(async () => {
+      await gitIn(['checkout', was], sliced);
+    });
+
+    test('the scripts are not run, and the report says where to run them', async () => {
+      const path = join(slicedHome, 'issues', String(ISSUE), 'slices.json');
+      const original = await readFile(path, 'utf8');
+      const unverified = JSON.parse(original);
+      delete unverified.slices[0].verification.evidence;
+      await writeFile(path, JSON.stringify(unverified, null, 2));
+
+      try {
+        const prepared = await on({ slice: 1 });
+        assert.equal(prepared.ref, `DESKTOP-${ISSUE}/1-api`);
+        assert.notEqual(prepared.diskSha, prepared.headSha);
+
+        const report = await run(prepared, await loadChecks(SCRIPTED));
+        assert.equal(report.ok, false);
+        for (const result of report.results) {
+          assert.equal(result.status, 'fail', result.id);
+          assert.equal(result.blocking, true, result.id);
+          assert.match(result.summary, new RegExp(`^not run: this tree has DESKTOP-${ISSUE}/work at [0-9a-f]{11} checked out`), result.id);
+          assert.ok(result.remedy.includes(`git switch DESKTOP-${ISSUE}/1-api`), result.id);
+          assert.equal(result.output, undefined, `${result.id} ran something`);
+        }
+        // The file checks still read the slice's own diff.
+        assert.deepEqual(prepared.changedFiles, [API]);
+      } finally {
+        await writeFile(path, original);
+      }
+    });
+
+    test('a verification that ran them on the slice\'s commit still counts', async () => {
+      const report = await run(await on({ slice: 1 }), await loadChecks(SCRIPTED));
+      for (const result of report.results) {
+        assert.equal(result.status, 'pass', `${result.id}: ${result.summary}`);
+        assert.match(result.summary, /passed in slice verify/, result.id);
+      }
+    });
+  });
+
+  test('on the slice\'s own branch nothing is refused', async () => {
+    const was = await gitIn(['branch', '--show-current'], sliced);
+    await gitIn(['checkout', `DESKTOP-${ISSUE}/1-api`], sliced);
+    try {
+      const prepared = await on({ slice: 1 });
+      assert.equal(prepared.diskSha, prepared.headSha);
+      assert.equal(offDisk('tests', true, prepared), null);
+    } finally {
+      await gitIn(['checkout', was], sliced);
+    }
+  });
+
+  test('and fails when the attached run has been edited', async () => {
+    const path = join(slicedHome, 'issues', String(ISSUE), 'verify', 'S1.md');
+    const original = await readFile(path, 'utf8');
+    await writeFile(path, original.replace(/typecheck ok/, 'everything is fine, trust me'));
+
+    const report = await run(await on(), await loadChecks(['slice-standalone']));
+
+    assert.equal(report.results[0].status, 'fail');
+    assert.match(report.results[0].summary, /not a valid capture/);
+
+    await writeFile(path, original);
+  });
+
+  test('a slice that never passed cannot be pushed on the strength of the graph', async () => {
+    const path = join(slicedHome, 'issues', String(ISSUE), 'slices.json');
+    const original = await readFile(path, 'utf8');
+    const broken = JSON.parse(original);
+    broken.slices[0].verification.ok = false;
+    broken.slices[0].verification.exitCode = 1;
+    await writeFile(path, JSON.stringify(broken, null, 2));
+
+    const report = await run(await on(), await loadChecks(['slice-standalone']));
+
+    assert.equal(report.results[0].status, 'fail');
+    assert.match(report.results[0].summary, /did not pass its standalone build/);
+
+    await writeFile(path, original);
+  });
+});
+
+// DESKTOP-19818's three bodies each said "merge #19829 → #19830 → #19831",
+// and the graph called the first two independent. The order was real; the
+// dependency behind it was a runtime contract nothing had verified.
+describe('merge-order', () => {
+  const graph = {
+    issue: 9100,
+    source: { base: 'main' },
+    slices: [
+      { index: 1, baseSlice: null, pr: 19829, files: [] },
+      { index: 2, baseSlice: null, pr: 19830, files: [] },
+      { index: 3, baseSlice: 2, pr: 19831, files: [] },
+    ],
+  };
+  const check = async (prBody, sliceRecord = graph.slices[0]) => {
+    const prepared = await context();
+    return (await run({ ...prepared, sliceGraph: graph, sliceRecord, prBody }, await loadChecks(['merge-order']))).results[0];
+  };
+
+  test('the 19818 body is refused: it orders two slices the graph calls independent', async () => {
+    const body =
+      'merge https://github.com/example/repo/pull/19829 → ' +
+      'https://github.com/example/repo/pull/19830 → https://github.com/example/repo/pull/19831.';
+    const result = await check(body);
+
+    assert.equal(result.status, 'fail');
+    assert.match(result.summary, /#19829 \(slice #1\) before #19830 \(slice #2\)/);
+    // #19830 → #19831 is a stack, and is not what is wrong.
+    assert.doesNotMatch(result.summary, /before #19831/);
+  });
+
+  test('an order that is a stack in the graph passes', async () => {
+    assert.equal((await check('Stacked: #19830 -> #19831', graph.slices[2])).status, 'pass');
+    assert.equal((await check('Depends on #19830, which merges first.', graph.slices[2])).status, 'pass');
+  });
+
+  test('prose that puts an independent slice first is the same claim', async () => {
+    const result = await check('This only works after #19829 merges.', graph.slices[1]);
+    assert.equal(result.status, 'fail');
+    assert.match(result.summary, /before this one/);
+  });
+
+  test('pull requests that are not slices of this issue are not its business', async () => {
+    assert.equal((await check('Follow-up to #17000 → #19375.')).status, 'pass');
+  });
+
+  test('a body with no order passes, and one pull request has nothing to order', async () => {
+    assert.equal((await check('Part of #19818')).status, 'pass');
+
+    const prepared = await context();
+    const single = { ...graph, slices: [graph.slices[0]] };
+    const result = (await run({ ...prepared, sliceGraph: single, prBody: '#1 → #2' }, await loadChecks(['merge-order']))).results[0];
+    assert.equal(result.status, 'skip');
+  });
+});
+
+// The three checks that read validation.json. Between them they carry the one
+// decision of stage 5 that is not about code: `unverified` does not stop the
+// pipeline, so the only thing keeping an undemonstrated step from disappearing
+// is that a pull request body which does not mention it will not pass here.
+describe('the validation checks', () => {
+  const ISSUE = 5001;
+  const SPEC = 'tests/playwright/src/specs/dialog.spec.ts';
+
+  let vHome;
+
+  const body = (notes) =>
+    `### How to test this PR?\n\n1. Build → it builds\n\n**Notes for reviewers**\n${notes}\n\n- [ ] Tests\n`;
+
+  /**
+   * @param {string} id
+   * @param {object} overrides
+   */
+  async function only(id, overrides = {}) {
+    const checks = (await loadChecks()).filter((check) => check.id === id);
+    const prepared = await prepare({ issue: ISSUE, repoRoot: repo, home: vHome });
+    const report = await run({ ...prepared, ...overrides }, checks);
+    return report.results[0];
+  }
+
+  before(async () => {
+    vHome = await mkdtemp(join(tmpdir(), 'pdkit-preflight-validation-'));
+  });
+
+  // Each test starts from an issue that has validated nothing. Sharing a record
+  // would mean a failed step recorded in one test decided the outcome of the
+  // next, and the check reads the worst step by design.
+  beforeEach(async () => {
+    await rm(join(vHome, 'issues'), { recursive: true, force: true });
+  });
+
+  after(async () => {
+    await rm(vHome, { recursive: true, force: true });
+    await rm(join(repo, 'tests'), { recursive: true, force: true });
+  });
+
+  test('a step with an artefact passes without needing anything in the body', async () => {
+    await validation.attach({ issue: ISSUE, home: vHome, title: 'the spec passes', run: await capture({ command: emits('ok\n') }) });
+
+    const result = await only('validation-evidence');
+
+    assert.equal(result.status, 'pass');
+    assert.match(result.summary, /every one with an artefact/);
+  });
+
+  test('a step with no artefact defers while there is no body, and fails once there is one without notes', async () => {
+    await validation.attach({ issue: ISSUE, home: vHome, title: 'needs a real container engine' });
+
+    const deferred = await only('validation-evidence');
+    assert.equal(deferred.status, 'skip', 'no body yet is not a verdict');
+
+    const failed = await only('validation-evidence', { prBody: '### How to test this PR?\n\n1. Build → it builds\n' });
+    assert.equal(failed.status, 'fail');
+    assert.match(failed.summary, /could not be demonstrated/);
+
+    const named = await only('validation-evidence', {
+      prBody: body('The container-engine scenario was not exercised: no engine on this machine.'),
+    });
+    assert.equal(named.status, 'pass');
+    assert.match(named.summary, /named in Notes for reviewers/);
+  });
+
+  test('a failed step fails the check, and the remedy points at the change rather than the record', async () => {
+    await validation.attach({ issue: ISSUE, home: vHome, title: 'the spec passes', run: await capture({ command: exits(4) }) });
+
+    const result = await only('validation-evidence', { prBody: body('everything checked') });
+
+    assert.equal(result.status, 'fail');
+    assert.match(result.remedy, /fix the change, not the record/);
+  });
+
+  test('an artefact edited after it was attached stops counting as evidence', async () => {
+    const shot = join(repo, 'evidence.png');
+    await writeFile(shot, 'first');
+    await validation.attach({
+      issue: ISSUE,
+      home: vHome,
+      repoRoot: repo,
+      title: 'contrast',
+      evidence: shot,
+      observed: '4.6:1',
+    });
+
+    assert.equal((await only('validation-evidence')).status, 'pass');
+
+    // The kept copy under the issue, not the source: that copy is what an
+    // auditor opens, and editing the original proves nothing about it.
+    await writeFile(join(vHome, 'issues', String(ISSUE), 'validation', 'artefacts', 'V1.png'), 'second');
+    const result = await only('validation-evidence');
+
+    assert.equal(result.status, 'fail');
+    assert.match(result.summary, /no longer match what was attached/);
+
+    await rm(shot);
+  });
+
+  test('e2e-stability: a spec in the diff with no series recorded fails', async () => {
+    await writeFiles(repo, { [SPEC]: 'test("dialog", async () => {});\n' });
+
+    const result = await only('e2e-stability', { changed: [{ status: 'A', path: SPEC }], changedFiles: [SPEC] });
+
+    assert.equal(result.status, 'fail');
+    assert.match(result.summary, /no series was recorded/);
+  });
+
+  test('e2e-stability: fewer runs than required fails, and three in a row passes', async () => {
+    await writeFiles(repo, { [SPEC]: 'test("dialog", async () => {});\n' });
+    await writeFile(join(repo, 'package.json'), JSON.stringify({ name: 'root', scripts: { ...SCRIPTS, 'test:e2e:run': 'true' } }, null, 2));
+
+    await validation.codify({ issue: ISSUE, home: vHome, repoRoot: repo, spec: SPEC });
+    await validation.stability({ issue: ISSUE, home: vHome, repoRoot: repo, runs: 2, config: { repo: { package_manager: 'npm' } } });
+
+    const short = await only('e2e-stability', { changed: [{ status: 'A', path: SPEC }], changedFiles: [SPEC] });
+    assert.equal(short.status, 'fail');
+    assert.match(short.summary, /2 of 3 consecutive/);
+
+    await validation.stability({ issue: ISSUE, home: vHome, repoRoot: repo, runs: 3, config: { repo: { package_manager: 'npm' } } });
+
+    const full = await only('e2e-stability', { changed: [{ status: 'A', path: SPEC }], changedFiles: [SPEC] });
+    assert.equal(full.status, 'pass');
+    assert.match(full.summary, /passed \d+ times in a row/);
+
+    await writeFile(join(repo, 'package.json'), JSON.stringify({ name: 'root', scripts: SCRIPTS }, null, 2));
+  });
+
+  test('e2e-stability: a spec edited after the series fails rather than passing on a stale run', async () => {
+    await writeFiles(repo, { [SPEC]: 'test("dialog", async () => {});\n' });
+    await writeFile(join(repo, 'package.json'), JSON.stringify({ name: 'root', scripts: { ...SCRIPTS, 'test:e2e:run': 'true' } }, null, 2));
+
+    await validation.codify({ issue: ISSUE, home: vHome, repoRoot: repo, spec: SPEC });
+    await validation.stability({ issue: ISSUE, home: vHome, repoRoot: repo, runs: 3, config: { repo: { package_manager: 'npm' } } });
+    assert.equal((await only('e2e-stability', { changed: [{ status: 'A', path: SPEC }], changedFiles: [SPEC] })).status, 'pass');
+
+    await writeFiles(repo, { [SPEC]: 'test("dialog", async () => { /* edited */ });\n' });
+    const result = await only('e2e-stability', { changed: [{ status: 'A', path: SPEC }], changedFiles: [SPEC] });
+
+    assert.equal(result.status, 'fail');
+    assert.match(result.summary, /changed after the runs were recorded/);
+
+    await writeFile(join(repo, 'package.json'), JSON.stringify({ name: 'root', scripts: SCRIPTS }, null, 2));
+  });
+
+  test('e2e-environment: a test that needs a container engine must say so in the body', async () => {
+    await writeFiles(repo, {
+      [SPEC]: 'test.skip(process.env.TEST_PODMAN_MACHINE !== "true", "needs a machine");\n',
+    });
+
+    const deferred = await only('e2e-environment', { changed: [{ status: 'A', path: SPEC }], changedFiles: [SPEC] });
+    assert.equal(deferred.status, 'skip');
+
+    const failed = await only('e2e-environment', {
+      changed: [{ status: 'A', path: SPEC }],
+      changedFiles: [SPEC],
+      prBody: '### How to test this PR?\n\n1. Build → it builds\n',
+    });
+    assert.equal(failed.status, 'fail');
+    assert.match(failed.summary, /container engine/);
+
+    const named = await only('e2e-environment', {
+      changed: [{ status: 'A', path: SPEC }],
+      changedFiles: [SPEC],
+      prBody: body('This spec skips without TEST_PODMAN_MACHINE, so CI will not exercise it.'),
+    });
+    assert.equal(named.status, 'pass');
+  });
+
+  test('e2e-environment: a test that needs nothing special passes', async () => {
+    await writeFiles(repo, { [SPEC]: 'test("dialog", async () => { await page.click("#ok"); });\n' });
+
+    const result = await only('e2e-environment', { changed: [{ status: 'A', path: SPEC }], changedFiles: [SPEC] });
+
+    assert.equal(result.status, 'pass');
+    assert.match(result.summary, /none needing anything special/);
+  });
+});

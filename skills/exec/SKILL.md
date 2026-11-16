@@ -1,0 +1,355 @@
+---
+name: exec
+description: "Implement the plan, one task per worker, each producing a receipt."
+argument-hint: "<issue-number> [task-id]"
+disable-model-invocation: true
+model: sonnet
+effort: medium
+---
+
+One `pd-implementer` per task, fresh context each time. Fresh context is not
+tidiness: a worker that has already failed twice carries both failures into the
+third attempt, and that is where drift starts.
+
+## Preconditions
+
+`pdkit state <issue>` says `plan-approved`. Implementing an unapproved plan
+means the requirements can still move under the code, and `pdkit task start`
+refuses an issue whose plan was not approved.
+
+The one exception is a later state, for the tasks of an amendment approved
+after validation or review found the plan wrong: those states have no way
+back, and `pdkit task start` accepts them up to review. Run those tasks only,
+by ID.
+
+## Once, before the first task
+
+**First, the issue's own tree.** Every task runs there, and nothing is written
+in the main checkout: that checkout is the template trees are made from, and
+it stays on the base branch. `pdkit worktree list` shows whether
+`DESKTOP-<n>` exists. If it does not:
+
+```
+pdkit worktree create --issue <n> --slug <a few words of the issue title>
+```
+
+The slug names the branch, `DESKTOP-<n>/<slug>`, and that is the branch the
+pull request will carry, so choose it as you would its title. Show the
+command to the person before running it. Then call the **EnterWorktree** tool
+with the path it printed. A `cd` moves one shell, while EnterWorktree moves
+the session and every subagent started after it. Implementers inherit the
+session's directory, and that is where their edits land.
+
+`pdkit task start` refuses any other tree, the main checkout included.
+
+Then, from inside the tree:
+
+```
+pdkit checkpoint <n> --phase exec
+pdkit task sync --issue <n>
+```
+
+The checkpoint is the way back if the run goes wrong: see the end of this
+file. Taken in the tree, it records the branch at its base, the tree itself,
+and the branch the main checkout stands on.
+
+Reads the `Owns` sets out of the task files into the state record, which is
+what the pre-write hook enforces. Skip it and the hook has nothing to enforce:
+it allows every write and says so, which is a worse failure than a refusal
+because it looks like nothing happened.
+
+## The queue, and the order
+
+```
+pdkit task list --issue <n>
+```
+
+Show its output to the person **first**, at the start of every exec session,
+and again after every `task stop`. It is the answer to "what is done and what
+is waiting", in one shape, from the receipts, the attempt counts, the stop
+reports and the plan — not from this session's memory of what it did.
+
+The order is the plan's, not yours: the `After` lines first, then the order the
+blocks are written in. The last line names the task to run next. Run that one.
+Do not pick by task number, by slice, or by what looks independent: a plan's
+safety-net task written first exists to run on the untouched tree, and a
+session that started at T1 instead ran it fourth, on a tree it could not pass
+on. `pdkit task start` refuses a task whose `After` is not done, and one an open
+stop report names; the refusal says what it waits on.
+
+When the person names a different task, run it if `task start` accepts it, and
+say what the queue had next. If the order in the plan is wrong, that is a
+finding about the plan, like any other.
+
+## Per task
+
+1. `pdkit task start --issue <n> --task <the task task list names>` in the
+   issue's tree. From here until `task stop`, writes outside its files are
+   refused and completing the task requires its receipt.
+2. Give the worker its task file, `tasks/T<k>.md` — `Owns`, `Done when`,
+   Context, Steps and Notes — and the frozen interfaces from `plan.md`. Nothing
+   else — not the whole plan, not the issue thread. The task's block in
+   `plan.md` is its header and one line of intent; the steps are in the file.
+
+   The worker is a `pd-implementer`, not this session working through the same
+   list. This is arithmetic, not taste: the subagent's context dies with it, and
+   this session's is paid for again on every turn until the cycle ends. Twenty
+   subagent runs measured in this plugin's own transcripts returned about 250
+   tokens each to their parent. The same task done here leaves every file read,
+   every edit and every test run in context — thousands of tokens, re-read on
+   each remaining task.
+3. The worker touches **only** the files in `Owns`. Anything else is a
+   planning error to report, not a boundary to cross.
+4. `pdkit receipt write --issue <n> --task T1` runs the `Done when` command and
+   records what it printed.
+5. Read the worker's report before committing. A worker that says it could not
+   read a file its instructions name, `maintainer-rules.md` above all, wrote
+   the code without the rules upstream's review agent applies. That is not a
+   plan problem and not a note to pass on: do not commit, find out why the
+   file was unreadable, and run the task again with a fresh worker.
+
+   Then run `pdkit preflight <n> --only maintainer-rules` yourself. Do not
+   take the report's word for it. A **fail** on a line in this task's `Owns`
+   means the code breaks a rule that has no exception. Do not commit. Send
+   the task back to a fresh worker with the hits as its input. A warning on
+   this task's lines needs the sentence the worker owes for it. If that
+   sentence is missing, or it does not show the rule's own condition holds,
+   send the task back too. A report without the per-section `§n:` lines is
+   incomplete, and is treated the same way.
+6. Commit: conventional subject, one `Signed-off-by`. Squash with
+   `git reset --soft <base> && git commit`, never `rebase -i`.
+7. `pdkit task stop`, then `pdkit task list --issue <n>` to the person: what is
+   done now, and what runs next.
+
+Tasks that share no files and that `task list` shows ready together may run in
+parallel. Tasks that do share files were mis-planned — say so instead of
+serializing around it.
+
+## Follow the plan literally
+
+A worker that improves on the plan is drift, and drift is what this whole
+structure exists to prevent. If the plan is wrong, that is a finding: stop,
+report it, and amend the plan. Do not fix it in passing.
+
+The distinction that matters: discovering the plan is wrong is valuable and
+expected. Silently doing something better is what makes the audit meaningless,
+because the diff no longer corresponds to anything that was agreed.
+
+## When the plan is wrong: the amendment
+
+"Amend the plan" is a sequence of commands, and most of it does not happen in
+this session. An amendment written here, with its new tasks typed into
+`tasks/` with a heredoc, leaves the tasks it replaced live in the ownership
+map and in the audit, and every one of those has to be mended by hand
+afterwards.
+
+Two sizes, and they need different things:
+
+- **Small** — `Requirements affected` rows only: a requirement reworded,
+  withdrawn, or superseded. Nothing under `Slices affected`. It can be written
+  where it was found; it still needs steps 2 and 4, in this session.
+- **Large** — the hypothesis the plan stood on is dead, and tasks are added or
+  replaced. That is a rewrite of the plan, and it gets every step below.
+
+The rule between them: **if an amendment creates a task, it goes through what
+a plan goes through.** A task written into an amendment has otherwise seen
+neither the plan checks nor `pd-plan-critic`.
+
+1. **Here: record the stop, do not write the amendment.** The finding is a
+   stop report, not a paragraph in chat and not a file in this session's
+   scratch directory, which nothing else reads:
+
+   ```
+   pdkit task stop --finding <values.json>
+   ```
+
+   The values file has five parts, and each is something the amendment will
+   need:
+   - `wrong` — the defect in the plan, with `file:line`;
+   - `evidence` — the command and what it printed, pasted. If it fails on the
+     base branch too, show that run: it is what makes this the plan's problem;
+   - `command` and `files` — the failing command as `Done when` has it, and the
+     paths the finding is about. `task stop` searches the plan for every other
+     live task that runs the same command or owns one of those files, and
+     refuses the report until each one is under `affects` or excused under
+     `unaffected` with a sentence. An amendment that fixed one task and left its
+     neighbor running the same broken command cost a third round;
+   - `decision` — what only the person can decide, with the options and their
+     cost, or `—`;
+   - `proposal` — what the amendment should change, per task: same Owns with a
+     new `Done when`, a new step, a new task, a requirement reworded.
+
+   It writes `stops/<task>-<k>.md` and stops the task, which will not start
+   again until an amendment replaces it or a person clears the report. Show the
+   person the report path and `pdkit task list`. Tasks that do not wait on the
+   stopped one can still run in this session; say which. Capture nothing for
+   the stopped task: `pdkit receipt write` does not check that a task is still
+   running.
+
+   Then, when nothing else can run, end the session. Do not draft the amendment
+   from the context that produced the finding: the report fits on a screen, and
+   that context is tens of thousands of tokens nobody needs to state a
+   requirement.
+
+   **What to tell the person**, every time a task stops: which task, the one
+   sentence from `wrong`, the report path, what `decision` asks of them, and
+   the next command — the amendment, in a new session on opus, starting with
+   `pdkit amendment draft --issue <n>`.
+2. **New session, on opus: write it.**
+
+   ```
+   pdkit amendment draft --issue <n> --out amendment-values.json
+   ```
+
+   drafts the values from every open stop report: the trigger, and a
+   replacement block for each task the reports name — same Satisfies, Owns,
+   After and Slice, `Done when` copied, a first step saying to continue from
+   what the task left in the tree. What only the report and the person can say
+   is marked `[FILL IN: …]`: the corrected command, the change itself, the
+   rationale. Finish those from `stops/*.md`, `plan.md` and the person's
+   answer to each report's `decision`; `amendment new` refuses a file with one
+   left in. Delete the block of a task that should stay as it is, and clear its
+   report instead (`pdkit task clear`). Then `pdkit plan probe <n> --amendment
+   A<k>` after `amendment new`, so the corrected commands have been run before
+   anyone approves them.
+
+   `pdkit amendment new --issue <n> --values <f>`. Requirement changes go in
+   `rows`. A task the amendment adds goes under `Slices affected` in exactly a
+   plan's shape, and its heading names what it replaces:
+
+   ```
+   ### T5 (replaces T2 and T3): <title>
+   - Satisfies: R1, R7
+   - Owns: packages/main/src/index.ts
+   - Done when: `npx vitest run packages/main/src/index.spec.ts` -> exit 0
+   - Steps:
+     1. <step>
+   ```
+
+   New tasks take the next free T-ID. Existing IDs are never reused or
+   renumbered.
+3. **If it adds or replaces tasks, review it as a plan.** `/pd:plan-review
+   <n>` in a new session, and hand the critic `amendments/A<k>.md` beside
+   `plan.md`: the review reads `plan.md`, and until approval the new tasks are
+   only in the amendment. `pdkit plan check <n>` cannot see them yet either.
+4. **A human approves it, by command.** `pdkit amendment approve A<k> --issue
+   <n> --by <who>`. "Approved" in chat changes nothing. Approval runs the
+   mechanical checks on the new tasks — an executable `Done when`, a live
+   R-ID, no `Owns` shared with a task that stays, no reused ID — and refuses
+   on any of them, leaving the amendment `proposed` with the line to fix.
+   It also refuses an amendment that leaves an R-ID with no live task, and
+   one that replaces a task an open stop report names while leaving another
+   task that report names as it is.
+   **A refusal is an answer.** Fix the line it names. If the fix would mean
+   two tasks owning one file, the work does not belong to this issue: bring
+   that to the person as `pdkit issue draft-blocker` and `pdkit issue block`.
+   Never delete task headings, or rewrite tasks as prose, to get the check
+   out of the way. That buys an approval, and the gap comes back as a refused
+   `slice set` after the work is done.
+   Then it applies the requirement table and materializes the tasks: it
+   renders `tasks/T<k>.md` from each block, adds the block to `plan.md` without
+   its Steps and Context, marks the replaced
+   tasks `withdrawn by A<k>` and re-runs `task sync`. `pdkit plan check <n>`
+   now reads the plan with them in it. If an amendment was approved but did
+   not fully apply, `pdkit amendment sync A<k> --issue <n>` finishes it.
+5. **New session, on sonnet: back to `/pd:exec <n>`.** The issue's state never
+   moved; the plan did. The stop reports the amendment settled are resolved by
+   it, and `pdkit task list` shows the replacement tasks where the withdrawn
+   ones stood in the order.
+
+Never write a task file by hand to get past a missing one. A task the plan
+names with no file in `tasks/`, or one `pdkit task start` reports with no
+recorded Owns set, means the amendment is not approved or not applied: go to
+step 4. A withdrawn task is refused by `task start`, by
+`receipt write` and by the pre-write hook, and each refusal names the task
+that replaced it. Start that task instead.
+
+## Receipts
+
+A task is done when the output of its `Done when` command is captured
+verbatim — not summarized, not trimmed to the interesting part.
+
+`pdkit receipt write` runs the command itself. There is no parameter for
+output text, so there is nothing to compose: the choice between "the tests
+passed" and the test runner's own words is not offered.
+
+Two refusals to expect from the SubagentStop hook, and they mean different
+things:
+
+- **no receipt, or one that no longer matches its digest** — run the command
+  above. A receipt edited after capture is refused by arithmetic, not by
+  suspicion.
+- **a valid receipt for a command that exited non-zero** — the work is not
+  finished. Fix it and capture again. If the command itself is wrong, that is
+  a finding about the plan; report it rather than editing `Done when` into
+  something that passes.
+
+## The third failure is not a fourth try
+
+Every failed capture is counted, from the capture itself — `pdkit task
+attempts --issue <n>` reads it back. At `exec.max_attempts` (three by default)
+the task is **blocked**: the completion hook refuses it and `pdkit task start`
+will not pick it up again.
+
+That refusal is the point of the mechanism, so do not route around it. The
+question it forces is a real one: what changed between the second attempt and
+the third? If the honest answer is "nothing, I tried harder", the plan is
+wrong rather than the code — and a wrong plan is amended, not retried.
+
+The way past is a sentence a human writes:
+
+```
+pdkit task unblock --issue <n> --task T1 --reason "<what is different this time>"
+```
+
+Report the block and what you learned from the three failures. Do not compose
+the reason yourself — the count restarts there, and in six weeks that line is
+the only record of why anyone expected a fourth attempt to differ.
+
+## Then
+
+When `pdkit task list` says every task has a passing receipt:
+`pdkit state <n> --to implemented`.
+
+## When the phase runs long
+
+`budget.turns.exec_per_task` is per task, because the length of this phase is
+the length of the plan. Treat it as a rough mark — the count you would keep of
+your own turns is not a precise one. The place to stop is between tasks: after
+`task stop`, the next task needs only its task file, and the last one left its
+receipt and its commit. Past the mark, take the task in hand to its receipt,
+stop it, and ask for a restart; `/pd:exec <issue>` in the new session starts
+from `pdkit task list`, which knows where this one stopped.
+
+## Next
+
+`/pd:validate <issue>` — evidence for what was built, before anything judges it
+against the plan.
+
+**In a new session.** Validation looks at the running application and reports
+what it saw; the reasoning that produced the code is the one thing it should
+not inherit, and running here it would — re-read in full on each turn. The
+receipts and the commits are what it needs. `pdkit next <issue>` prints the
+line, and so does the summary the session opens with.
+
+## When the phase went somewhere it should not
+
+If this phase built on an option pdkit does not carry, or a refusal was routed
+around before anyone noticed, go back to its start rather than patch forward:
+
+```
+pdkit rollback <n>              what would come back, and what stays
+pdkit rollback <n> --confirm    after the person has read that
+```
+
+Branches return to their heads at the checkpoint, and a branch the phase
+created is deleted. Either way the present tip is kept under
+`refs/pdkit-backup/` first. Trees follow: one the phase created is removed,
+one it removed comes back, and the main checkout returns to the branch it
+stood on. A task left running is stopped. Uncommitted changes in any of those
+trees refuse the whole rollback, by name: commit or stash them first.
+Artefacts return from the copy, with the present ones archived. The state record comes back too. It is refused if the phase
+moved the issue to another state, because a transition is not undone by
+rewriting the record. What was published stays published, and the journal
+keeps everything. Show the dry run in full and ask before `--confirm`. Then
+run the phase again, in a new session.
