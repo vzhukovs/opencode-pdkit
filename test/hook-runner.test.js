@@ -55,6 +55,7 @@ import { spdxHeader } from '../lib/upstream.js';
 import { start, stop } from '../lib/active.js';
 import * as gate from '../lib/gate.js';
 import { setOwns, transition, withdrawTask } from '../lib/state.js';
+import { read as readJournal } from '../lib/journal.js';
 import { BRANCH, otherRepository, podmanDesktopClone, readyIssue } from './helpers/gate-fixture.js';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -908,6 +909,85 @@ describe('invoke agrees with handle, for session-start', () => {
     }
     await git(repo, 'symbolic-ref', 'HEAD', 'refs/heads/main');
     assert.deepEqual([...outcomes].sort(), ['message', 'pass']);
+  });
+});
+
+// The same for pre-compact, whose work is not its decision but the journal
+// entry it writes: session-start.js imported, and the same payload through
+// bin/pdkit, each writing what it writes — the task, the state, the route,
+// or nothing.
+describe('invoke agrees with handle, for pre-compact', () => {
+  const ISSUE = 18249;
+  let home;
+  let repo;
+  let previousHome;
+  const git = (cwd, ...args) => execFileAsync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd });
+
+  before(async () => {
+    home = await realpath(await mkdtemp(join(tmpdir(), 'pdkit-runner-compact-home-')));
+    previousHome = process.env.PDKIT_HOME;
+    process.env.PDKIT_HOME = home;
+    repo = await realpath(await mkdtemp(join(tmpdir(), 'pdkit-runner-compact-repo-')));
+    await git(repo, 'init', '-q', '-b', 'main');
+    await git(repo, 'commit', '-q', '--allow-empty', '-m', 'init');
+  });
+
+  after(async () => {
+    await stop({ worktree: repo, home });
+    if (previousHome === undefined) delete process.env.PDKIT_HOME;
+    else process.env.PDKIT_HOME = previousHome;
+    for (const dir of [home, repo]) await rm(dir, { recursive: true, force: true });
+  });
+
+  /** The payload Open Code's bridge builds (opencode/bridge/payload.js), for a compaction in the repository. */
+  const compacting = () => ({ hook_event_name: 'PreCompact', session_id: 'ses_person', cwd: repo });
+
+  /** What the decision says, as far as the process protocol carries it. */
+  const carried = (decision) => ({ block: decision.block, reason: decision.reason, message: decision.message });
+
+  /** The `compact` entries a call wrote, without the time they were written at. */
+  const writtenBy = async (call) => {
+    const before = (await readJournal({ event: 'compact' }, { home })).length;
+    const decision = await call();
+    const written = (await readJournal({ event: 'compact' }, { home })).slice(before).map(({ issue, event, detail }) => ({ issue, event, detail }));
+    return { decision: carried(decision), written };
+  };
+
+  /** The issue in `state` on `route`, with its task running in the repository or not. */
+  const issue = ({ state = 'triaged', route, running = true } = {}) => async () => {
+    await stop({ worktree: repo, home });
+    await rm(issueDir(home, ISSUE), { recursive: true, force: true });
+    await transition(ISSUE, 'triaged', { home, ...(route ? { route } : {}) });
+    if (state !== 'triaged') await transition(ISSUE, state, { home });
+    if (running) await start({ issue: ISSUE, taskId: 'T1', worktree: repo, session: 'ses_person', home });
+  };
+
+  const FIXTURES = [
+    ['a task running, the issue on no route yet', issue()],
+    ['a task running, the issue on a route', issue({ route: 'standard' })],
+    ['no task running', issue({ running: false })],
+  ];
+
+  for (const [label, arrange] of FIXTURES) {
+    test(label, async () => {
+      await arrange();
+      const expected = await writtenBy(() => handleSessionStart(compacting(), { event: 'pre-compact', pluginRoot: ROOT }));
+      await arrange();
+      const actual = await writtenBy(() => invoke('pre-compact', compacting(), { root: ROOT }));
+
+      assert.deepEqual(actual, expected);
+    });
+  }
+
+  test('the fixtures cover every outcome: an entry, and none', async () => {
+    const outcomes = new Set();
+    for (const [, arrange] of FIXTURES) {
+      await arrange();
+      const { decision, written } = await writtenBy(() => handleSessionStart(compacting(), { event: 'pre-compact', pluginRoot: ROOT }));
+      assert.deepEqual(decision, { block: false, reason: undefined, message: undefined });
+      outcomes.add(written.length === 0 ? 'none' : written.map(({ detail }) => detail).join());
+    }
+    assert.deepEqual([...outcomes].sort(), ['T1 active, issue triaged', 'T1 active, issue triaged (standard)', 'none']);
   });
 });
 

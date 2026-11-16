@@ -297,6 +297,39 @@ describe('session-start', () => {
   });
 });
 
+describe('pre-compact', () => {
+  // HK-23: the work is the journal entry; the compaction goes on.
+  test('what the handler gives — nothing to say — lets the compaction go on', () => {
+    assert.deepEqual(answer('pre-compact', { block: false }), { action: { kind: 'pass' }, dropped: [] });
+  });
+
+  // pre-compact fails open: a run that gave no answer must not fail the
+  // compaction, nor an automatic one's turn (F73).
+  test('a run that gave no answer arrives as a pass, and is one', () => {
+    const decision = decide('pre-compact', { code: 1, stdout: '', stderr: 'SyntaxError: x\n', failure: null });
+    assert.equal(decision.block, false);
+    assert.match(decision.diagnostic, /^pdkit: hook "pre-compact" exited with code 1 .*; allowing$/);
+    assert.deepEqual(answer('pre-compact', decision), { action: { kind: 'pass' }, dropped: [] });
+  });
+
+  // The handler never refuses; a run that does stops nothing — only a throw
+  // could, and it would fail the compaction rather than skip it.
+  test('a refusal stops nothing, and its reason is listed as dropped', () => {
+    assert.deepEqual(answer('pre-compact', { block: true, reason: 'pdkit: not now' }), { action: { kind: 'pass' }, dropped: [{ field: 'reason', text: 'pdkit: not now' }] });
+  });
+
+  // The hook takes no text: a `result` would replace the summary.
+  test('a message and a notice are listed as dropped', () => {
+    assert.deepEqual(answer('pre-compact', { block: false, message: 'for the model', notice: 'for the person' }), {
+      action: { kind: 'pass' },
+      dropped: [
+        { field: 'message', text: 'for the model' },
+        { field: 'notice', text: 'for the person' },
+      ],
+    });
+  });
+});
+
 describe('combine: one answer for a call several runs decided', () => {
   const pass = { action: { kind: 'pass' }, dropped: [] };
   const refuse = (text) => ({ action: { kind: 'refuse', text }, dropped: [] });

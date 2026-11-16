@@ -647,3 +647,36 @@ export function sessionStart(event, host) {
     },
   ];
 }
+
+/**
+ * The payload for `pdkit hook pre-compact`: Claude Code's PreCompact, for a
+ * session about to be compacted — any session, a subagent's included: Open
+ * Code compacts a subagent's session as it compacts a person's, and the
+ * handler writes the same entry whichever it is (the active task of the
+ * directory).
+ *
+ * - `session_id` is the session being compacted. For a subagent's, Claude Code
+ *   would have sent its parent's: finding that takes a lookup, which the
+ *   compaction would wait on, and session-start.js reads only `cwd`.
+ * - `cwd` is the plugin instance's directory: the compaction hook's event
+ *   names none, and Open Code calls it in the instance of the session's
+ *   directory (F72, F137).
+ *
+ * `trigger` and `custom_instructions` are not set: the hook's event carries
+ * neither whether the compaction was asked for nor any words for it, and the
+ * handler reads neither.
+ *
+ * @param {{sessionID?: string}} event  the compaction hook's event
+ * @param {string|undefined} directory  ctx.location.directory
+ * @returns {Array<{hook_event_name: 'PreCompact', session_id: string, cwd?: string}>}
+ */
+export function preCompact(event, directory) {
+  if (typeof event?.sessionID !== 'string' || event.sessionID === '') return [];
+  return [
+    {
+      hook_event_name: 'PreCompact',
+      session_id: event.sessionID,
+      cwd: typeof directory === 'string' && directory !== '' ? directory : undefined,
+    },
+  ];
+}

@@ -27,7 +27,7 @@ import assert from 'node:assert/strict';
 import { join, resolve, win32 } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { hostPath, postBash, postClaim, postRead, postWrite, preBash, preWrite, sessionStart, startsSession, subagentStop } from '../opencode/bridge/payload.js';
+import { hostPath, postBash, postClaim, postRead, postWrite, preBash, preCompact, preWrite, sessionStart, startsSession, subagentStop } from '../opencode/bridge/payload.js';
 
 const DIRECTORY = join(tmpdir(), 'project');
 
@@ -883,6 +883,45 @@ describe('session-start', () => {
 
   test('a record that says nothing of its time has never run', () => {
     assert.equal(startsSession(record({ time: undefined })), true);
+  });
+});
+
+describe('pre-compact', () => {
+  /** The compaction hook's event, as Open Code passes it (F72): no directory, no reason. */
+  const compacting = (fields = {}) => ({ sessionID: 'ses_person', model: { id: 'echo', providerID: 'mock' }, system: [], messages: [], options: {}, agent: 'build', tools: {}, ...fields });
+
+  test("is Claude Code's PreCompact: the session, and the instance's directory", () => {
+    assert.deepEqual(preCompact(compacting(), DIRECTORY), [{ hook_event_name: 'PreCompact', session_id: 'ses_person', cwd: DIRECTORY }]);
+  });
+
+  // The event says neither whether the compaction was asked for nor with
+  // what words; the handler reads neither.
+  test('says no trigger and no instructions it was not given', () => {
+    const [payload] = preCompact(compacting(), DIRECTORY);
+    assert.equal(Object.hasOwn(payload, 'trigger'), false);
+    assert.equal(Object.hasOwn(payload, 'custom_instructions'), false);
+  });
+
+  // Open Code compacts a subagent's session too, and the entry is the
+  // directory's either way: the event is all there is to go on, and no
+  // lookup is made for a parent.
+  test("a subagent's compaction is a payload like any other", () => {
+    assert.deepEqual(preCompact(compacting({ sessionID: 'ses_child', agent: 'pd-scout' }), DIRECTORY), [
+      { hook_event_name: 'PreCompact', session_id: 'ses_child', cwd: DIRECTORY },
+    ]);
+  });
+
+  test('an event with no session is no payload', () => {
+    for (const event of [undefined, null, {}, { sessionID: '' }, { sessionID: 7 }]) {
+      assert.deepEqual(preCompact(event, DIRECTORY), [], JSON.stringify(event));
+    }
+  });
+
+  // The runner refuses to guess at a directory it is not given.
+  test('an instance with no directory gives no cwd', () => {
+    for (const directory of [undefined, '', 7]) {
+      assert.equal(preCompact(compacting(), directory)[0].cwd, undefined, String(directory));
+    }
   });
 });
 

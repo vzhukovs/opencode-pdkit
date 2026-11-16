@@ -37,6 +37,14 @@
 // runs on a session's first prompt, on a fork, and after a compaction; a
 // session continued as it is has no event to run it on (§13 DV10).
 //
+// pre-compact is on the compaction hook, which Open Code waits on before it
+// asks a model for the summary — so the entry is in the journal before the
+// compaction ends, and in the summary session-start gives after it, as Claude
+// Code ran PreCompact before and SessionStart after. Waited on, it is also
+// the compaction's to lose: a throw fails it, and a hang holds it for ever
+// (F73). So the callback never throws, and waits on nothing but the run,
+// which the runner stops at its deadline.
+//
 // It is the one module of the bridge the entry point loads, and it loads the
 // rest itself. The entry point registers the gate's callback before loading
 // anything, and hands it to preBash() once this module has loaded; if it fails
@@ -66,6 +74,7 @@ import {
   postRead as postReadPayloads,
   postWrite as postWritePayloads,
   preBash as preBashPayload,
+  preCompact as preCompactPayloads,
   preWrite as preWritePayloads,
   sessionStart as sessionStartPayloads,
   startsSession,
@@ -80,6 +89,7 @@ const POST_BASH = 'post-bash';
 const POST_READ = 'post-read';
 const SUBAGENT_STOP = 'subagent-stop';
 const SESSION_START = 'session-start';
+const PRE_COMPACT = 'pre-compact';
 
 /** Who added a message to a session: the plugin, by its ID, as Open Code's own plugins sign theirs. */
 const SOURCE = 'opencode-pdkit';
@@ -198,6 +208,7 @@ async function linesOf(file) {
  *   startOnPrompt: (event: {sessionID?: string}) => Promise<void>,
  *   startOnFork: (event: {sessionID?: string}) => Promise<void>,
  *   startOnCompaction: (event: {type?: string, data?: {sessionID?: string}}) => Promise<void>,
+ *   preCompact: (event: {sessionID?: string, result?: unknown}) => Promise<void>,
  *   register: () => Promise<void>,
  *   cleanup: () => Promise<void>,
  * }}
@@ -619,11 +630,40 @@ export function createBridge(ctx, plugin) {
     },
 
     /**
+     * pre-compact, for a session about to be compacted: the active task of
+     * this instance's directory written in the journal, before the summary is
+     * asked for. Open Code calls this once for each compaction — asked for,
+     * automatic, or after a request that overflowed — in the instance of the
+     * session's directory, a subagent's session included (F72).
+     *
+     * The event is left as it is: a `result` set on it would be taken for the
+     * summary, and no model asked (F72).
+     *
+     * Nothing leaves this callback as an exception: one would fail the
+     * compaction, and an automatic one the person's turn with it (F73). Nor
+     * does it wait on the host: the compaction waits on this callback without
+     * end, so the one thing it waits on is the run, which the runner stops at
+     * its deadline. Whatever fails lets the compaction go on without the
+     * entry, and says why in the log.
+     */
+    async preCompact(event) {
+      try {
+        const payloads = preCompactPayloads(event, ctx.location?.directory);
+        if (payloads.length === 0) return;
+        const decision = await invoke(PRE_COMPACT, payloads[0], { root: plugin.root });
+        report(PRE_COMPACT, [decision], answer(PRE_COMPACT, decision).dropped);
+      } catch (error) {
+        report(PRE_COMPACT, [failedOpen(PRE_COMPACT, error)], []);
+      }
+    },
+
+    /**
      * Register every hook but the gate, which the entry point owns and
      * registers first. pre-write is on the same point as the gate, after it;
      * the post hooks share one callback after a tool (afterTool);
      * subagent-stop is on the point a session reaches before it goes idle;
-     * session-start on a prompt, on a fork, and on the stream of compactions.
+     * session-start on a prompt, on a fork, and on the stream of compactions;
+     * pre-compact on the compaction itself.
      *
      * Each on its own: a point the host does not have — experimental.idle may
      * be renamed in a later Open Code (F57) — leaves the others registered.
@@ -647,7 +687,8 @@ export function createBridge(ctx, plugin) {
       await attempt(() => ctx.session.hook('prompt', (event) => bridge.startOnPrompt(event)));
       await attempt(() => ctx.session.hook('fork', (event) => bridge.startOnFork(event)));
       void watchCompactions();
-      // TODO(T4.13–T4.14): the rest of pdkit's hook events.
+      await attempt(() => ctx.session.hook('compaction', (event) => bridge.preCompact(event)));
+      // TODO(T4.14): the rest of pdkit's hook events.
       if (failures.length > 0) throw new Error(failures.join('; '));
     },
 

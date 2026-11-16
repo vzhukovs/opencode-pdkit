@@ -53,6 +53,8 @@ const FULL = [
   // session-start's, on a session's first prompt and on a fork.
   'session.hook prompt',
   'session.hook fork',
+  // pre-compact's, on a compaction, before the summary is asked for.
+  'session.hook compaction',
   'shell.hook create.before',
   'agent.transform',
   'command.transform',
@@ -193,10 +195,10 @@ describe('on a supported Open Code', () => {
 
   // Until the rest of the bridge and the registrars are filled in, loading the
   // plugin must not change what a session does beyond the gate, pre-write,
-  // post-write, post-claim, post-bash, post-read, subagent-stop and
-  // session-start — which have nothing to say about this command, this read
-  // or this prompt.
-  test('and none of the registrations but the gate, pre-write, post-write, post-claim, post-bash, post-read, subagent-stop and session-start changes anything yet', async (t) => {
+  // post-write, post-claim, post-bash, post-read, subagent-stop, session-start
+  // and pre-compact — which have nothing to say about this command, this
+  // read, this prompt or this compaction.
+  test('and none of the registrations but the gate, pre-write, post-write, post-claim, post-bash, post-read, subagent-stop, session-start and pre-compact changes anything yet', async (t) => {
     logOf(t);
     const { ctx, callbacks } = host();
 
@@ -226,6 +228,12 @@ describe('on a supported Open Code', () => {
     const prompt = asked();
     for (const before of callbacks('session.hook prompt')) await before(prompt);
     assert.deepEqual(prompt, asked());
+    // pre-compact writes in the journal, never in the compaction: a `result`
+    // on the event would be taken for the summary (F72).
+    const compacting = () => ({ sessionID: 'ses_1', model: { id: 'echo', providerID: 'mock' }, system: ['s'], messages: [], options: {}, agent: 'build', tools: {} });
+    const compaction = compacting();
+    for (const before of callbacks('session.hook compaction')) assert.equal(await before(compaction), undefined);
+    assert.deepEqual(compaction, compacting());
   });
 
   // The gate's rules are test/opencode-gate.test.js's; this is that the
@@ -586,6 +594,7 @@ describe('a registration that fails', () => {
     ['hooks', 'session.hook experimental.idle'],
     ['hooks', 'session.hook prompt'],
     ['hooks', 'session.hook fork'],
+    ['hooks', 'session.hook compaction'],
     ['shell environment', 'shell.hook create.before'],
   ]) {
     test(`leaves the gate and the rest in place: ${failing}`, async (t) => {

@@ -771,7 +771,7 @@ describe('where it is registered', () => {
 
     assert.deepEqual(points, ['tool.hook execute.before', 'tool.hook execute.before', 'tool.hook execute.after']);
     assert.deepEqual(log(), [
-      'opencode-pdkit: cannot register its hooks (unknown session hook: experimental.idle; unknown session hook: prompt; unknown session hook: fork); the gate and the rest are unaffected',
+      'opencode-pdkit: cannot register its hooks (unknown session hook: experimental.idle; unknown session hook: prompt; unknown session hook: fork; unknown session hook: compaction); the gate and the rest are unaffected',
     ]);
     const watches = stand.streams.filter(({ options }) => options.types?.includes('session.execution.failed'));
     assert.equal(watches.length, 0, 'no watch for a hook that is not there');

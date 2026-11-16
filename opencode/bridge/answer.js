@@ -54,6 +54,13 @@
 // on every request and which outlives the turn (F69): the summary is that
 // entry, and a summary that is now empty takes it away. A run that gave no
 // answer decides neither, and leaves the entry as it was.
+//
+// Before a compaction, the handler's work is the entry it writes in the
+// journal, and its answer is only that it is done: the compaction goes on.
+// Nothing it could say has a way here — the compaction hook takes no text
+// (setting its `result` would replace the summary), and a throw would fail
+// the compaction and, when it was automatic, the person's turn (F73) — so
+// whatever it says is `dropped`.
 
 /** @typedef {import('../../lib/hooks/runner.js').Decision} Decision */
 
@@ -142,6 +149,23 @@ const whenStarting = (decision) => {
   return { action: typeof text === 'string' && text.trim() !== '' ? { kind: 'instruct', text } : { kind: 'withdraw' }, dropped };
 };
 
+/**
+ * Before a compaction: the compaction goes on, whatever the run decided. The
+ * handler never refuses and says nothing — "a message here would be the first
+ * thing compaction discards" — so this is for a run that did anyway: a
+ * refusal does not stop the compaction, which only a throw could do, failing
+ * it, or the person's turn with it (F73), and its reason, like any text, is
+ * `dropped`. What a run that gave no answer means, runner.decide has already
+ * said: a pass — pre-compact fails open.
+ *
+ * @param {Decision} decision
+ * @returns {Answer}
+ */
+const whenCompacting = (decision) => ({
+  action: PASS,
+  dropped: unheard(decision, ['reason', 'message', 'notice']),
+});
+
 /** @type {Record<string, (decision: Decision) => Answer>} */
 const ANSWERS = {
   'pre-bash': beforeTool,
@@ -177,6 +201,9 @@ const ANSWERS = {
   // The summary of what the session was doing (HK-22, HK-37): its entry in
   // the session's instructions, or none when there is nothing to say.
   'session-start': whenStarting,
+  // The active task written in the journal before a compaction (HK-23): the
+  // work is the entry, and the compaction goes on.
+  'pre-compact': whenCompacting,
 };
 
 /**
