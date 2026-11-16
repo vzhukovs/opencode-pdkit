@@ -27,7 +27,7 @@ import assert from 'node:assert/strict';
 import { join, resolve, win32 } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { hostPath, postBash, postClaim, postRead, postWrite, preBash, preWrite, subagentStop } from '../opencode/bridge/payload.js';
+import { hostPath, postBash, postClaim, postRead, postWrite, preBash, preWrite, sessionStart, startsSession, subagentStop } from '../opencode/bridge/payload.js';
 
 const DIRECTORY = join(tmpdir(), 'project');
 
@@ -824,6 +824,65 @@ describe('subagent-stop', () => {
     for (const location of [undefined, {}, { directory: '' }, { directory: 7 }]) {
       assert.equal(subagentStop(idle(), { session: record({ location }), root: 'ses_root', held: false })[0].cwd, undefined, JSON.stringify(location));
     }
+  });
+});
+
+describe('session-start', () => {
+  const record = (fields = {}) => ({
+    id: 'ses_person',
+    projectID: 'global',
+    time: { created: 1794850025467, updated: 1794850025472 },
+    location: { directory: DIRECTORY },
+    ...fields,
+  });
+
+  test("is Claude Code's SessionStart: why, the session, and its directory", () => {
+    for (const source of ['startup', 'resume', 'compact']) {
+      assert.deepEqual(sessionStart({ sessionID: 'ses_person' }, { session: record(), source }), [
+        { hook_event_name: 'SessionStart', source, session_id: 'ses_person', cwd: DIRECTORY },
+      ]);
+    }
+  });
+
+  // Claude Code ran no SessionStart for a subagent.
+  test("a subagent's session is no payload", () => {
+    assert.deepEqual(sessionStart({ sessionID: 'ses_child' }, { session: record({ parentID: 'ses_person' }), source: 'startup' }), []);
+  });
+
+  test('a parent that is no ID is no parent', () => {
+    for (const parentID of [undefined, null, '', 7]) {
+      assert.equal(sessionStart({ sessionID: 'ses_person' }, { session: record({ parentID }), source: 'startup' }).length, 1, String(parentID));
+    }
+  });
+
+  test('an event with no session, or no record of it, is no payload', () => {
+    for (const event of [undefined, {}, { sessionID: '' }, { sessionID: 7 }]) {
+      assert.deepEqual(sessionStart(event, { session: record(), source: 'startup' }), [], JSON.stringify(event));
+    }
+    for (const session of [undefined, null, 'ses_person']) {
+      assert.deepEqual(sessionStart({ sessionID: 'ses_person' }, { session, source: 'startup' }), [], String(session));
+    }
+  });
+
+  // The runner refuses to guess at a directory it is not given.
+  test('a record with no directory gives no cwd', () => {
+    for (const location of [undefined, {}, { directory: '' }, { directory: 7 }]) {
+      assert.equal(sessionStart({ sessionID: 'ses_person' }, { session: record({ location }), source: 'startup' })[0].cwd, undefined, JSON.stringify(location));
+    }
+  });
+
+  // F270: what a session's record says about whether it ever ran.
+  test('a session starts with its first prompt: nothing run, nothing ended, not a fork', () => {
+    assert.equal(startsSession(record()), true);
+    assert.equal(startsSession(record({ time: { created: 1, updated: 2, busy: 2 } })), false, 'a run under way');
+    assert.equal(startsSession(record({ time: { created: 1, updated: 3, idle: 3 } })), false, 'a run ended');
+    assert.equal(startsSession(record({ outcome: 'failed' })), false, 'an outcome');
+    assert.equal(startsSession(record({ fork: { sessionID: 'ses_other', boundary: { type: 'through', messageID: 'msg_1' } } })), false, 'a fork');
+    for (const session of [undefined, null, 'ses_person']) assert.equal(startsSession(session), false, String(session));
+  });
+
+  test('a record that says nothing of its time has never run', () => {
+    assert.equal(startsSession(record({ time: undefined })), true);
   });
 });
 

@@ -260,6 +260,43 @@ describe('subagent-stop', () => {
   });
 });
 
+describe('session-start', () => {
+  const SUMMARY = 'pdkit: issue 18248 — triaged\n  task    : T1 (join the command arguments)';
+
+  test('a summary is the session\'s entry (HK-22)', () => {
+    assert.deepEqual(answer('session-start', { block: false, message: SUMMARY }), { action: { kind: 'instruct', text: SUMMARY }, dropped: [] });
+  });
+
+  // HK-37: nothing to say is a summary of nothing, which takes back one said before.
+  test('no summary withdraws the entry', () => {
+    for (const message of [undefined, '', '  \n']) {
+      assert.deepEqual(answer('session-start', { block: false, ...(message === undefined ? {} : { message }) }), { action: { kind: 'withdraw' }, dropped: [] }, JSON.stringify(message));
+    }
+  });
+
+  // session-start fails open, and no answer is not an empty summary: the
+  // entry stays as it was.
+  test('a run that gave no answer arrives as a pass, and is one', () => {
+    const decision = decide('session-start', { code: 1, stdout: '', stderr: 'SyntaxError: x\n', failure: null });
+    assert.equal(decision.block, false);
+    assert.match(decision.diagnostic, /^pdkit: hook "session-start" exited with code 1 .*; allowing$/);
+    assert.deepEqual(answer('session-start', decision), { action: { kind: 'pass' }, dropped: [] });
+  });
+
+  // Claude Code showed a SessionStart's exit-2 stderr to the person and put
+  // nothing in the context.
+  test('a refusal changes nothing, and its reason is listed as dropped', () => {
+    assert.deepEqual(answer('session-start', { block: true, reason: 'pdkit: no' }), { action: { kind: 'pass' }, dropped: [{ field: 'reason', text: 'pdkit: no' }] });
+  });
+
+  test('a notice is listed as dropped, and the summary beside it kept', () => {
+    assert.deepEqual(answer('session-start', { block: false, message: SUMMARY, notice: 'for the person' }), {
+      action: { kind: 'instruct', text: SUMMARY },
+      dropped: [{ field: 'notice', text: 'for the person' }],
+    });
+  });
+});
+
 describe('combine: one answer for a call several runs decided', () => {
   const pass = { action: { kind: 'pass' }, dropped: [] };
   const refuse = (text) => ({ action: { kind: 'refuse', text }, dropped: [] });

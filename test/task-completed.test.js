@@ -27,14 +27,14 @@
 import { test, describe, before, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { start, stop } from '../lib/active.js';
 import { record as recordAttempt, unblock as unblockTask } from '../lib/attempts.js';
-import { issueDir } from '../lib/config.js';
+import { issueDir, paths } from '../lib/config.js';
 import { writeReceipt } from '../lib/evidence.js';
 import { handle as sessionStart } from '../lib/hooks/session-start.js';
 import { HOOK_HANDLERS } from '../lib/hooks/events.js';
@@ -637,6 +637,25 @@ describe('re-anchoring', () => {
     assert.match(decision.message, new RegExp(`next {4}: ${TRANSITIONS['triaged'].join(', ')}`));
   });
 
+  // D12: the command a step names sets the phase's model, and the session
+  // stays on it; there is no `/model` to type (§13 DV4).
+  test('the summary names no model to switch to', async () => {
+    const { message } = await startSession();
+
+    assert.match(message, /run {5}: /);
+    assert.doesNotMatch(message, /model {3}:|\/model /);
+  });
+
+  // HK-36: a consent token must not outlive the session it was granted in.
+  // The TTL says so already; this is what makes it true after a crash.
+  test('a session start revokes every consent token', async () => {
+    await mkdir(paths(home).gates, { recursive: true });
+    for (const name of ['DESKTOP-18248__1-one', 'pr-1234']) await writeFile(join(paths(home).gates, `${name}.json`), '{}\n');
+
+    await startSession();
+    assert.deepEqual((await readdir(paths(home).gates)).filter((name) => name.endsWith('.json')), []);
+  });
+
   test('the journal is summarized, not injected whole', async () => {
     const decision = await startSession();
 
@@ -690,6 +709,7 @@ describe('re-anchoring', () => {
         assert.match(decision.message, /issue 18248 — triaged/);
         assert.match(decision.message, /task {4}: none running/);
         assert.match(decision.message, /run {5}: \/pd:plan 18248/);
+        assert.doesNotMatch(decision.message, /model {3}:|\/model /);
         // The ceiling for the phase the step opens, from budget.turns. Read
         // from the defaults rather than pinned, for the same reason as `next`.
         const { get, load } = await import('../lib/config.js');

@@ -47,12 +47,19 @@
 // message. What a handler says while it lets the subagent go — a receipt
 // accepted, a run let go stalled — went to Claude Code's debug log, and is
 // `dropped` here.
+//
+// When a session starts, what the handler prints is the summary Claude Code
+// put in the session's context. Open Code keeps a plugin's text for a session
+// as an entry of its instructions, which the model reads in its system prompt
+// on every request and which outlives the turn (F69): the summary is that
+// entry, and a summary that is now empty takes it away. A run that gave no
+// answer decides neither, and leaves the entry as it was.
 
 /** @typedef {import('../../lib/hooks/runner.js').Decision} Decision */
 
 /**
- * @typedef {{kind: 'refuse', text: string} | {kind: 'append', text: string} | {kind: 'hold', text: string} | {kind: 'pass'}} Action
- * @typedef {{field: 'message'|'notice', text: string}} Dropped
+ * @typedef {{kind: 'refuse', text: string} | {kind: 'append', text: string} | {kind: 'hold', text: string} | {kind: 'instruct', text: string} | {kind: 'withdraw'} | {kind: 'pass'}} Action
+ * @typedef {{field: 'message'|'notice'|'reason', text: string}} Dropped
  * @typedef {{action: Action, dropped: Dropped[]}} Answer
  */
 
@@ -63,7 +70,7 @@ const PASS = Object.freeze({ kind: 'pass' });
  * The fields of a decision that reach no one on this event.
  *
  * @param {Decision} decision
- * @param {Array<'message'|'notice'>} fields
+ * @param {Array<'message'|'notice'|'reason'>} fields
  * @returns {Dropped[]}
  */
 function unheard(decision, fields) {
@@ -116,6 +123,25 @@ const whenStopping = (decision) => ({
   dropped: unheard(decision, ['message', 'notice']),
 });
 
+/**
+ * When a session starts: the summary the handler printed becomes the
+ * session's entry, and no summary withdraws it — a session that was told an
+ * issue's state and is now outside it must not keep reading it. A run that
+ * gave no answer (runner.decide: a pass, session-start fails open) changes
+ * nothing. The handler never refuses; if a run exits 2 anyway, Claude Code
+ * showed its stderr to the person alone and put nothing in the context, so
+ * the reason is `dropped` and the entry left alone.
+ *
+ * @param {Decision} decision
+ * @returns {Answer}
+ */
+const whenStarting = (decision) => {
+  const dropped = unheard(decision, decision.block ? ['reason', 'notice'] : ['notice']);
+  if (decision.block || decision.undecided !== undefined) return { action: PASS, dropped };
+  const text = decision.message;
+  return { action: typeof text === 'string' && text.trim() !== '' ? { kind: 'instruct', text } : { kind: 'withdraw' }, dropped };
+};
+
 /** @type {Record<string, (decision: Decision) => Answer>} */
 const ANSWERS = {
   'pre-bash': beforeTool,
@@ -148,6 +174,9 @@ const ANSWERS = {
   // go says why only in what reaches no one: the receipt accepted (HK-35), a
   // run let go stalled (HK-20) or blocked (HK-21).
   'subagent-stop': whenStopping,
+  // The summary of what the session was doing (HK-22, HK-37): its entry in
+  // the session's instructions, or none when there is nothing to say.
+  'session-start': whenStarting,
 };
 
 /**

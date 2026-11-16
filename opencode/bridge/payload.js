@@ -591,3 +591,59 @@ export function subagentStop(event, host) {
     },
   ];
 }
+
+/**
+ * Whether a session has never run: no execution started (`time.busy`), none
+ * ended (`time.idle`, `outcome`), and not a fork, which carries the turns of
+ * the session it was forked from. Its prompt is then the first one, which is
+ * where Claude Code's SessionStart fell for a new session: before the first
+ * prompt (F67 — in Open Code a new session, and one after /new or /clear,
+ * exists only from its first prompt). Read from the session's record, not
+ * from session.created: the event comes before the plugin is loaded in a
+ * directory no session has run in yet, and that instance never sees it (F270).
+ *
+ * @param {{fork?: unknown, outcome?: unknown, time?: {busy?: unknown, idle?: unknown}}|undefined} session
+ *   the session's record (ctx.session.get)
+ * @returns {boolean}
+ */
+export function startsSession(session) {
+  if (session === null || typeof session !== 'object') return false;
+  if (session.fork !== undefined && session.fork !== null) return false;
+  if (session.outcome !== undefined && session.outcome !== null) return false;
+  return session.time?.busy === undefined && session.time?.idle === undefined;
+}
+
+/**
+ * The payload for `pdkit hook session-start`: Claude Code's SessionStart, for
+ * a session a person drives that starts, is forked, or was compacted. At most
+ * one: a session with a parent is a subagent's, and Claude Code ran no
+ * SessionStart for those, so none is built and no process started for it.
+ *
+ * `source` is Claude Code's word for why: `startup` for a session's first
+ * prompt (Open Code tells a new session from one after /clear no more than
+ * the handler needs to), `resume` for a fork — Claude Code's fork was a
+ * resumed session under a new ID — and `compact` after a compaction. A
+ * session continued as it is has no event in Open Code, and gets no payload
+ * (§13). session-start.js reads only `cwd`; the rest is there because Claude
+ * Code sent it.
+ *
+ * @param {{sessionID?: string}} event  the hook's event, or the event's data
+ * @param {{session: {parentID?: unknown, location?: {directory?: unknown}}|undefined, source: 'startup'|'resume'|'compact'}} host
+ *   the session's record (ctx.session.get), and why the summary is asked for
+ * @returns {Array<{hook_event_name: 'SessionStart', source: string, session_id: string, cwd?: string}>}
+ */
+export function sessionStart(event, host) {
+  const { session } = host;
+  if (typeof event?.sessionID !== 'string' || event.sessionID === '') return [];
+  if (session === null || typeof session !== 'object') return [];
+  if (typeof session.parentID === 'string' && session.parentID !== '') return [];
+  const directory = session.location?.directory;
+  return [
+    {
+      hook_event_name: 'SessionStart',
+      source: host.source,
+      session_id: event.sessionID,
+      cwd: typeof directory === 'string' && directory !== '' ? directory : undefined,
+    },
+  ];
+}

@@ -50,6 +50,9 @@ const FULL = [
   'tool.hook execute.after',
   // subagent-stop's, on the point a session reaches before it goes idle.
   'session.hook experimental.idle',
+  // session-start's, on a session's first prompt and on a fork.
+  'session.hook prompt',
+  'session.hook fork',
   'shell.hook create.before',
   'agent.transform',
   'command.transform',
@@ -190,9 +193,10 @@ describe('on a supported Open Code', () => {
 
   // Until the rest of the bridge and the registrars are filled in, loading the
   // plugin must not change what a session does beyond the gate, pre-write,
-  // post-write, post-claim, post-bash, post-read and subagent-stop — which
-  // have nothing to say about this command or this read.
-  test('and none of the registrations but the gate, pre-write, post-write, post-claim, post-bash, post-read and subagent-stop changes anything yet', async (t) => {
+  // post-write, post-claim, post-bash, post-read, subagent-stop and
+  // session-start — which have nothing to say about this command, this read
+  // or this prompt.
+  test('and none of the registrations but the gate, pre-write, post-write, post-claim, post-bash, post-read, subagent-stop and session-start changes anything yet', async (t) => {
     logOf(t);
     const { ctx, callbacks } = host();
 
@@ -216,6 +220,12 @@ describe('on a supported Open Code', () => {
     const read = paged();
     for (const after of callbacks('tool.hook execute.after')) await after(read);
     assert.deepEqual(read, paged());
+    // session-start puts its summary beside the prompt, never in it: Open Code
+    // takes the prompt from the event after the hook (F75).
+    const asked = () => ({ sessionID: 'ses_1', messageID: 'msg_1', prompt: { text: '/pd:plan 18248' }, metadata: {}, delivery: 'steer' });
+    const prompt = asked();
+    for (const before of callbacks('session.hook prompt')) await before(prompt);
+    assert.deepEqual(prompt, asked());
   });
 
   // The gate's rules are test/opencode-gate.test.js's; this is that the
@@ -574,6 +584,8 @@ describe('a registration that fails', () => {
     ['commands and skills', 'command.transform'],
     ['hooks', 'tool.hook execute.after'],
     ['hooks', 'session.hook experimental.idle'],
+    ['hooks', 'session.hook prompt'],
+    ['hooks', 'session.hook fork'],
     ['shell environment', 'shell.hook create.before'],
   ]) {
     test(`leaves the gate and the rest in place: ${failing}`, async (t) => {

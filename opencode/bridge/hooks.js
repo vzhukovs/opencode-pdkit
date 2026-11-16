@@ -32,6 +32,11 @@
 // its handler and Open Code does not (D11). That memory is the bridge's, per
 // loaded instance of the plugin, and goes with cleanup().
 //
+// session-start has no one point to stand on: Claude Code ran it when a
+// session started, was resumed or cleared, and after a compaction. Here it
+// runs on a session's first prompt, on a fork, and after a compaction; a
+// session continued as it is has no event to run it on (§13 DV10).
+//
 // It is the one module of the bridge the entry point loads, and it loads the
 // rest itself. The entry point registers the gate's callback before loading
 // anything, and hands it to preBash() once this module has loaded; if it fails
@@ -62,6 +67,8 @@ import {
   postWrite as postWritePayloads,
   preBash as preBashPayload,
   preWrite as preWritePayloads,
+  sessionStart as sessionStartPayloads,
+  startsSession,
   subagentStop as subagentStopPayloads,
 } from './payload.js';
 
@@ -72,9 +79,16 @@ const POST_CLAIM = 'post-claim';
 const POST_BASH = 'post-bash';
 const POST_READ = 'post-read';
 const SUBAGENT_STOP = 'subagent-stop';
+const SESSION_START = 'session-start';
 
 /** Who added a message to a session: the plugin, by its ID, as Open Code's own plugins sign theirs. */
 const SOURCE = 'opencode-pdkit';
+
+/**
+ * The key of the session summary among a session's instruction entries: the
+ * plugin's ID, as above. The model reads the entry as `<context key="…">`.
+ */
+const SUMMARY_KEY = SOURCE;
 
 /**
  * How many stops in a row of one round of a subagent the bridge holds before
@@ -101,6 +115,9 @@ const DEPTH_LIMIT = 16;
  * after a run fails or is interrupted (F57).
  */
 const ENDED = ['session.execution.failed', 'session.execution.interrupted'];
+
+/** A session's compaction that succeeded: where Claude Code ran SessionStart with `compact`. */
+const COMPACTED = 'session.compaction.ended';
 
 /** A line feed, the byte a line of a text file ends with. */
 const LF = 0x0a;
@@ -178,6 +195,9 @@ async function linesOf(file) {
  *   postRead: (event: {tool?: string, sessionID?: string, status?: string, input?: unknown, result?: unknown}) => Promise<import('./answer.js').Answer>,
  *   afterTool: (event: {tool?: string, sessionID?: string, status?: string, input?: unknown, result?: unknown}) => Promise<void>,
  *   subagentStop: (event: {sessionID?: string}) => Promise<void>,
+ *   startOnPrompt: (event: {sessionID?: string}) => Promise<void>,
+ *   startOnFork: (event: {sessionID?: string}) => Promise<void>,
+ *   startOnCompaction: (event: {type?: string, data?: {sessionID?: string}}) => Promise<void>,
  *   register: () => Promise<void>,
  *   cleanup: () => Promise<void>,
  * }}
@@ -224,7 +244,7 @@ export function createBridge(ctx, plugin) {
    */
   const held = new Map();
 
-  /** Ends the watch on runs that fail or are interrupted, at cleanup. */
+  /** Ends the bridge's watches on the host's events — runs that fail or are interrupted, compactions — at cleanup. */
   const watching = new AbortController();
 
   /**
@@ -265,6 +285,67 @@ export function createBridge(ctx, plugin) {
       root = above;
     }
     return typeof root === 'string' && root !== '' ? root : undefined;
+  };
+
+  /**
+   * A session's instruction entries, which Open Code marks experimental
+   * (ExperimentalSessionApi, F69): what the host has, or an error that says
+   * it has none — a failure like any other, which the caller fails open on.
+   *
+   * @returns {{put: (input: {sessionID: string, key: string, value: string}) => Promise<unknown>, remove: (input: {sessionID: string, key: string}) => Promise<unknown>}}
+   */
+  const entries = () => {
+    const entry = ctx.session?.instructions?.entry;
+    if (typeof entry?.put !== 'function' || typeof entry?.remove !== 'function') {
+      throw new Error('this Open Code has no session.instructions.entry, which is experimental');
+    }
+    return entry;
+  };
+
+  /**
+   * session-start for one session: the summary, as the session's entry. A
+   * run, unless the session is a subagent's (sessionStart builds no payload
+   * for one); then the entry is put, or withdrawn when the summary is empty —
+   * except on a session's first prompt, which has none to withdraw. A run
+   * with no answer leaves the entry as it was (answer.js). Throws what the
+   * host throws; the callers fail open.
+   *
+   * @param {string} sessionID
+   * @param {object|undefined} session  its record
+   * @param {'startup'|'resume'|'compact'} source
+   */
+  const summarize = async (sessionID, session, source) => {
+    const payloads = sessionStartPayloads({ sessionID }, { session, source });
+    if (payloads.length === 0) return;
+    const decision = await invoke(SESSION_START, payloads[0], { root: plugin.root });
+    const answered = answer(SESSION_START, decision);
+    report(SESSION_START, [decision], answered.dropped);
+    const { action } = answered;
+    if (action.kind === 'instruct') await entries().put({ sessionID, key: SUMMARY_KEY, value: action.text });
+    else if (action.kind === 'withdraw' && source !== 'startup') await entries().remove({ sessionID, key: SUMMARY_KEY });
+  };
+
+  /**
+   * Run session-start after each compaction of a session of this instance's
+   * directory. Every loaded instance sees every session's events (F137), so
+   * one that is not the session's own leaves it to that one. A compaction is
+   * not waited on: each is summarized on its own. Never throws; a watch that
+   * cannot be had, or breaks, says so once.
+   */
+  const watchCompactions = async () => {
+    try {
+      for await (const event of ctx.event.subscribe({ types: [COMPACTED], signal: watching.signal })) {
+        void bridge.startOnCompaction(event);
+      }
+    } catch (error) {
+      if (watching.signal.aborted) return;
+      report(SESSION_START, [
+        {
+          block: false,
+          diagnostic: `pdkit: the hook bridge cannot follow compactions (${reason(error)}); a compacted session keeps the summary it had`,
+        },
+      ], []);
+    }
   };
 
   /**
@@ -478,10 +559,71 @@ export function createBridge(ctx, plugin) {
     },
 
     /**
+     * session-start on a prompt: the first prompt of a session that has never
+     * run, before it reaches the model — Open Code waits on this hook before
+     * it takes the prompt in (F69, F75), so the summary is in the session's first
+     * request. Any other prompt costs a lookup and no process.
+     *
+     * Nothing leaves this callback as an exception: one, or a hook that never
+     * returns, would lose the person's input (C36). Whatever fails lets the
+     * prompt through without a summary, and says why in the log; a run that
+     * hangs is stopped at the runner's deadline.
+     */
+    async startOnPrompt(event) {
+      try {
+        const sessionID = event?.sessionID;
+        if (typeof sessionID !== 'string' || sessionID === '') return;
+        const session = await ctx.session.get({ sessionID });
+        if (!startsSession(session)) return;
+        await summarize(sessionID, session, 'startup');
+      } catch (error) {
+        report(SESSION_START, [failedOpen(SESSION_START, error)], []);
+      }
+    },
+
+    /**
+     * session-start on a fork: the fork carries the summary its session had
+     * (F71), from whenever that was written; Claude Code ran SessionStart on
+     * the resumed session a fork was. Open Code calls this hook in the fork's
+     * directory and finishes the fork after it (F271), so the summary is in
+     * the fork's first request. Never throws.
+     */
+    async startOnFork(event) {
+      try {
+        const sessionID = event?.sessionID;
+        if (typeof sessionID !== 'string' || sessionID === '') return;
+        await summarize(sessionID, await ctx.session.get({ sessionID }), 'resume');
+      } catch (error) {
+        report(SESSION_START, [failedOpen(SESSION_START, error)], []);
+      }
+    },
+
+    /**
+     * session-start after a compaction that succeeded, for a session of this
+     * instance's directory. The entry outlives the compaction as it was
+     * written (F70); the new summary reaches the model after the compaction's
+     * own, as a value that supersedes it (F272). Never throws.
+     */
+    async startOnCompaction(event) {
+      try {
+        if (event?.type !== COMPACTED) return;
+        const sessionID = event.data?.sessionID;
+        if (typeof sessionID !== 'string' || sessionID === '') return;
+        const session = await ctx.session.get({ sessionID });
+        const here = ctx.location?.directory;
+        if (typeof here !== 'string' || session?.location?.directory !== here) return;
+        await summarize(sessionID, session, 'compact');
+      } catch (error) {
+        report(SESSION_START, [failedOpen(SESSION_START, error)], []);
+      }
+    },
+
+    /**
      * Register every hook but the gate, which the entry point owns and
      * registers first. pre-write is on the same point as the gate, after it;
      * the post hooks share one callback after a tool (afterTool);
-     * subagent-stop is on the point a session reaches before it goes idle.
+     * subagent-stop is on the point a session reaches before it goes idle;
+     * session-start on a prompt, on a fork, and on the stream of compactions.
      *
      * Each on its own: a point the host does not have — experimental.idle may
      * be renamed in a later Open Code (F57) — leaves the others registered.
@@ -502,13 +644,17 @@ export function createBridge(ctx, plugin) {
         await ctx.session.hook('experimental.idle', (event) => bridge.subagentStop(event));
         void watch();
       });
-      // TODO(T4.12–T4.14): the rest of pdkit's hook events.
+      await attempt(() => ctx.session.hook('prompt', (event) => bridge.startOnPrompt(event)));
+      await attempt(() => ctx.session.hook('fork', (event) => bridge.startOnFork(event)));
+      void watchCompactions();
+      // TODO(T4.13–T4.14): the rest of pdkit's hook events.
       if (failures.length > 0) throw new Error(failures.join('; '));
     },
 
     /**
-     * What this instance remembers goes: the subagents it held, and the watch
-     * on their runs. The host removes the registrations itself (F250).
+     * What this instance remembers goes: the subagents it held, and the
+     * watches on runs and compactions. The host removes the registrations
+     * itself (F250).
      */
     async cleanup() {
       watching.abort();

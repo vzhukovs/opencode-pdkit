@@ -46,6 +46,7 @@ import { handle as handlePostClaim } from '../lib/hooks/post-claim.js';
 import { handle as handlePostBash } from '../lib/hooks/post-bash.js';
 import { handle as handlePostRead } from '../lib/hooks/post-read.js';
 import { handle as handleSubagentStop } from '../lib/hooks/task-completed.js';
+import { handle as handleSessionStart } from '../lib/hooks/session-start.js';
 import { record as recordAttempt, unblock as unblockTask } from '../lib/attempts.js';
 import { issueDir } from '../lib/config.js';
 import { writeReceipt } from '../lib/evidence.js';
@@ -824,6 +825,89 @@ describe('invoke agrees with handle, for subagent-stop', () => {
       outcomes.add(decision.block ? 'refuse' : decision.message ? 'message' : 'pass');
     }
     assert.deepEqual([...outcomes].sort(), ['message', 'pass', 'refuse']);
+  });
+});
+
+// The same for session-start: session-start.js imported, and the same payload
+// through bin/pdkit, on each of its outcomes — a summary of a task running, of
+// a blocked one, of an issue between phases, the way out of the main
+// checkout, and silence — and for each reason the bridge runs it.
+describe('invoke agrees with handle, for session-start', () => {
+  const ISSUE = 18248;
+  const BRANCH_OF_ISSUE = `DESKTOP-${ISSUE}/join-container-command`;
+  let home;
+  let repo;
+  let linked;
+  let previousHome;
+  const git = (cwd, ...args) => execFileAsync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd });
+
+  before(async () => {
+    home = await realpath(await mkdtemp(join(tmpdir(), 'pdkit-runner-start-home-')));
+    previousHome = process.env.PDKIT_HOME;
+    process.env.PDKIT_HOME = home;
+    repo = await realpath(await mkdtemp(join(tmpdir(), 'pdkit-runner-start-repo-')));
+    await git(repo, 'init', '-q', '-b', 'main');
+    await git(repo, 'commit', '-q', '--allow-empty', '-m', 'init');
+    linked = join(await realpath(tmpdir()), `pdkit-runner-start-linked-${process.pid}`, 'issue-tree');
+    await git(repo, 'worktree', 'add', '-q', '-b', BRANCH_OF_ISSUE, linked);
+    await transition(ISSUE, 'triaged', { home });
+    await setOwns(ISSUE, 'T1', ['src/owned.ts'], { home });
+    await mkdir(join(issueDir(home, ISSUE), 'tasks'), { recursive: true });
+    await writeFile(join(issueDir(home, ISSUE), 'tasks', 'T1.md'), '# T1: join the command arguments\n\n- Issue: 18248\n');
+  });
+
+  after(async () => {
+    await stop({ worktree: repo, home });
+    if (previousHome === undefined) delete process.env.PDKIT_HOME;
+    else process.env.PDKIT_HOME = previousHome;
+    await git(repo, 'worktree', 'remove', '--force', linked);
+    for (const dir of [home, repo, dirname(linked)]) await rm(dir, { recursive: true, force: true });
+  });
+
+  /** The payload Open Code's bridge builds (opencode/bridge/payload.js), for a session in `cwd`. */
+  const started = (cwd, source = 'startup') => ({ hook_event_name: 'SessionStart', source, session_id: 'ses_person', cwd });
+
+  /** What the decision says, as far as the process protocol carries it. */
+  const carried = (decision) => ({ block: decision.block, reason: decision.reason, message: decision.message });
+
+  /** The tree's task and its attempts, from scratch, and the main checkout on `head`. */
+  const tree = ({ running = true, failed = 0, head = 'main' } = {}) => async () => {
+    await stop({ worktree: repo, home });
+    await unblockTask({ issue: ISSUE, taskId: 'T1', reason: 'a fixture of its own', home });
+    for (let i = 0; i < failed; i += 1) await recordAttempt({ issue: ISSUE, taskId: 'T1', exitCode: 1, home });
+    if (running) await start({ issue: ISSUE, taskId: 'T1', worktree: repo, session: 'ses_person', home });
+    await git(repo, 'symbolic-ref', 'HEAD', `refs/heads/${head}`);
+  };
+
+  const FIXTURES = [
+    ['a task running', () => started(repo), tree()],
+    ['a blocked task', () => started(repo), tree({ failed: 3 })],
+    ['between phases, in the issue tree', () => started(linked), tree({ running: false })],
+    ["the main checkout on the issue's branch", () => started(repo), tree({ running: false, head: BRANCH_OF_ISSUE })],
+    ['silence: no task, and no issue named by the branch', () => started(repo), tree({ running: false })],
+    ['a fork', () => started(repo, 'resume'), tree()],
+    ['after a compaction', () => started(repo, 'compact'), tree()],
+  ];
+
+  for (const [label, payloadOf, arrange] of FIXTURES) {
+    test(label, async () => {
+      await arrange();
+      const expected = carried(await handleSessionStart(payloadOf(), { event: 'session-start', pluginRoot: ROOT }));
+      const actual = carried(await invoke('session-start', payloadOf(), { root: ROOT }));
+
+      assert.deepEqual(actual, expected);
+    });
+  }
+
+  test('the fixtures cover every outcome: a summary, and silence', async () => {
+    const outcomes = new Set();
+    for (const [, payloadOf, arrange] of FIXTURES) {
+      await arrange();
+      const decision = await handleSessionStart(payloadOf(), { event: 'session-start', pluginRoot: ROOT });
+      outcomes.add(decision.block ? 'refuse' : decision.message ? 'message' : 'pass');
+    }
+    await git(repo, 'symbolic-ref', 'HEAD', 'refs/heads/main');
+    assert.deepEqual([...outcomes].sort(), ['message', 'pass']);
   });
 });
 

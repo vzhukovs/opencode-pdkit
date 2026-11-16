@@ -745,8 +745,10 @@ describe('no answer lets the subagent go, and says why', () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     assert.equal((await stop(id)).length, 1);
-    assert.equal(log().length, 1);
-    assert.match(log()[0], /^opencode-pdkit: pdkit: the hook bridge cannot follow the runs of subagents that fail or are interrupted \(.+\); one held when that happens is taken, at its next stop, for one already told$/);
+    // session-start says what it cannot do without the stream in a line of its own.
+    const lines = log().filter((line) => !/compactions/.test(line));
+    assert.equal(lines.length, 1, log().join('\n'));
+    assert.match(lines[0], /^opencode-pdkit: pdkit: the hook bridge cannot follow the runs of subagents that fail or are interrupted \(.+\); one held when that happens is taken, at its next stop, for one already told$/);
   });
 });
 
@@ -768,7 +770,10 @@ describe('where it is registered', () => {
     await plugin.setup(stand.ctx);
 
     assert.deepEqual(points, ['tool.hook execute.before', 'tool.hook execute.before', 'tool.hook execute.after']);
-    assert.deepEqual(log(), ['opencode-pdkit: cannot register its hooks (unknown session hook: experimental.idle); the gate and the rest are unaffected']);
-    assert.equal(stand.streams.length, 0, 'no watch for a hook that is not there');
+    assert.deepEqual(log(), [
+      'opencode-pdkit: cannot register its hooks (unknown session hook: experimental.idle; unknown session hook: prompt; unknown session hook: fork); the gate and the rest are unaffected',
+    ]);
+    const watches = stand.streams.filter(({ options }) => options.types?.includes('session.execution.failed'));
+    assert.equal(watches.length, 0, 'no watch for a hook that is not there');
   });
 });
