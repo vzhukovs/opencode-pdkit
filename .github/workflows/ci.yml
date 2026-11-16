@@ -28,7 +28,7 @@ permissions:
 
 jobs:
   test:
-    # The plugin runs wherever Claude Code does, and the hook handlers spawn
+    # The plugin runs wherever Open Code does, and the hook handlers spawn
     # processes and touch the filesystem — the two places a platform difference
     # actually shows up. Running one OS would leave that untested, which is the
     # same blind spot `ci-blind-spots` exists to name in somebody else's PR.
@@ -55,11 +55,33 @@ jobs:
       - name: Test
         run: npm test
 
-  manifest:
+  plugin-load:
     # Separate from the suite because it answers a different question: not "does
     # the code work" but "will this load as a plugin at all". Every test above
-    # passes on a manifest Claude Code refuses.
+    # passes on a package Open Code refuses to load, and Open Code has no command
+    # that validates a plugin. scripts/check-plugin-load.js packs the package,
+    # loads the tarball into `opencode serve` and reads the plugin's state back
+    # from the server. No model, no secrets.
+    #
+    # Two Open Code versions. `minimum` is engines.opencode in package.json, the
+    # one place the minimum is written: the version a release must load on.
+    # `latest` gets no upper bound to respect, since the package declares none,
+    # so a failure there says a new Open Code broke something. It is a signal and
+    # never blocks.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Non-blocking for now: this job has never run on a runner, and a gate
+          # whose own reliability is unmeasured should not be the thing that
+          # stops a merge. Set this to false once it has been green for a few
+          # pull requests.
+          - opencode: minimum
+            signal-only: true
+          - opencode: latest
+            signal-only: true
     runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.signal-only }}
 
     steps:
       - uses: actions/checkout@v4
@@ -68,14 +90,25 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code
+      # npm is the install path Open Code documents for CI. The version check
+      # makes sure the minimum leg runs the minimum and not some other copy
+      # that happens to be on PATH.
+      - name: Install Open Code (${{ matrix.opencode }})
+        env:
+          CHANNEL: ${{ matrix.opencode }}
+        run: |
+          if [ "$CHANNEL" = minimum ]; then
+            version="$(node scripts/check-plugin-load.js --print-minimum)"
+          else
+            version=latest
+          fi
+          npm install --global "@opencode/cli@$version"
+          installed="$(opencode --version)"
+          echo "$installed"
+          if [ "$CHANNEL" = minimum ] && [ "$installed" != "opencode v$version" ]; then
+            echo "::error::expected opencode v$version, got: $installed"
+            exit 1
+          fi
 
-      # --strict treats a misspelled or leftover manifest field as an error,
-      # which is what we want before anybody installs it. Non-blocking for now:
-      # this job has never run on a runner, and a gate whose own reliability is
-      # unmeasured should not be the thing that stops a merge. Promote it to
-      # blocking once it has been green for a few pull requests.
-      - name: Validate the plugin manifest
-        continue-on-error: true
-        run: claude plugin validate . --strict
+      - name: Load the packed plugin
+        run: node scripts/check-plugin-load.js
