@@ -25,7 +25,10 @@
 // directory on PATH, `pdkit` is callable as a bare command from any working
 // directory, including a worktree. The plugin's server part puts it there: its
 // shell create.before hook (opencode/environment.js) adds this directory first
-// on the PATH of every command the shell tool runs.
+// on the PATH of every command the shell tool runs — or, where this directory's
+// path cannot go on PATH, a directory holding a symbolic link to this file.
+// That works because Node resolves the link before it sets import.meta.url of
+// the script it runs, so lib/ is still looked for beside the real file.
 //
 // Keep bin/ to this one file: everything here becomes a bare command.
 

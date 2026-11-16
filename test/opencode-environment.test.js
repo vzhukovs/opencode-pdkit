@@ -27,13 +27,14 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { chmod, cp, lstat, mkdir, mkdtemp, readdir, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
-import { onPath, prepare, registerEnvironment } from '../opencode/environment.js';
+import { cacheHome, onPath, prepare, registerEnvironment, standIn } from '../opencode/environment.js';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const BIN = join(ROOT, 'bin');
@@ -118,20 +119,267 @@ describe('a bin/ whose path holds the delimiter', () => {
     assert.equal(onPath('C:\\odd;name\\bin', ';'), false);
   });
 
-  test('registering says so once in the log, not once per command', async () => {
-    const lines = [];
-    const registered = [];
-    const ctx = { app: { version: '2.3.0' }, shell: { hook: async (name, callback) => registered.push(callback) } };
-    const root = `${tmpdir()}${delimiter}odd`;
+});
 
-    await registerEnvironment(ctx, { root, log: (line) => lines.push(line) });
+/** A context with only what registerEnvironment touches, and what it logged. */
+function host(root, app = { name: 'cli', version: '2.3.0', channel: 'latest' }) {
+  const registered = [];
+  const lines = [];
+  const ctx = { app, shell: { hook: async (name, callback) => registered.push({ name, callback }) } };
+  return { ctx, registered, plugin: { root, log: (line) => lines.push(line) }, lines };
+}
+
+/**
+ * A scratch directory with a cache in it and a plugin root under a directory
+ * named the way Open Code 2.3.0 names the one it installs `file:<tarball>` in.
+ * Through realpath: on macOS the temporary directory is reached by a link.
+ */
+async function scratch(t) {
+  const dir = await realpath(await mkdtemp(join(tmpdir(), 'pdkit-stand-in-')));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const installed = (generation) =>
+    join(dir, 'npm', `file:${dir}/pack/opencode-pdkit-0.16.0.tgz`, String(generation), 'node_modules', 'opencode-pdkit');
+  return { dir, cache: join(dir, 'cache'), root: installed(1763300000000), installed };
+}
+
+// What setup does about such a bin/ off Windows: link pdkit from a directory
+// of the user's cache that PATH can name, and put that directory first.
+describe('a stand-in for a bin/ PATH cannot name', { skip: process.platform === 'win32' ? 'Windows makes none' : false }, () => {
+  test('setup links pdkit from a directory of the cache and puts that first, with nothing to log', async (t) => {
+    const { cache, root } = await scratch(t);
+    const { ctx, registered, plugin, lines } = host(root);
+
+    await registerEnvironment(ctx, plugin, { cache, windows: false });
+    const created = event({ PATH: '/usr/bin:/bin' });
+    await registered[0].callback(created);
+
+    const [first, ...rest] = created.env.PATH.split(':');
+    assert.match(first, new RegExp(`^${cache}/opencode-pdkit/bin-[0-9a-f]{16}$`));
+    assert.deepEqual(rest, ['/usr/bin', '/bin']);
+    assert.deepEqual(await readdir(first), ['pdkit']);
+    assert.equal(await readlink(join(first, 'pdkit')), join(root, 'bin', 'pdkit'));
+    assert.equal(created.env.PDKIT_OPENCODE_VERSION, '2.3.0');
+    assert.deepEqual(lines, []);
+  });
+
+  // Anyone who can write to a directory first on PATH chooses what `pdkit` runs.
+  test('only this user can write to the directories it made', async (t) => {
+    const { cache, root } = await scratch(t);
+
+    const dir = await standIn(root, { cache });
+
+    for (const made of [join(cache, 'opencode-pdkit'), dir]) {
+      const stats = await lstat(made);
+      assert.equal(stats.isDirectory(), true, made);
+      assert.equal(stats.mode & 0o077, 0, `${made} is open to others: ${(stats.mode & 0o777).toString(8)}`);
+      assert.equal(stats.uid, process.getuid(), made);
+    }
+  });
+
+  // Open Code loads the plugin once for each directory it serves, all in one
+  // process, and their setups can overlap.
+  test('every instance of one install makes the same one, and instances at once leave one whole link', async (t) => {
+    const { cache, root } = await scratch(t);
+
+    const dirs = await Promise.all(Array.from({ length: 8 }, () => standIn(root, { cache })));
+
+    assert.equal(new Set(dirs).size, 1);
+    assert.deepEqual(await readdir(dirs[0]), ['pdkit'], 'a link half made, or a second one, was left behind');
+    assert.equal(await readlink(join(dirs[0], 'pdkit')), join(root, 'bin', 'pdkit'));
+  });
+
+  test('a second time, the link it already made stays as it is', async (t) => {
+    const { cache, root } = await scratch(t);
+    const dir = await standIn(root, { cache });
+    const before = await lstat(join(dir, 'pdkit'), { bigint: true });
+
+    assert.equal(await standIn(root, { cache }), dir);
+
+    assert.equal((await lstat(join(dir, 'pdkit'), { bigint: true })).ino, before.ino);
+  });
+
+  test('another install — another generation of the same tarball — gets its own', async (t) => {
+    const { cache, root, installed } = await scratch(t);
+    const later = installed(1763300099999);
+
+    const [one, two] = [await standIn(root, { cache }), await standIn(later, { cache })];
+
+    assert.notEqual(one, two);
+    assert.equal(await readlink(join(one, 'pdkit')), join(root, 'bin', 'pdkit'));
+    assert.equal(await readlink(join(two, 'pdkit')), join(later, 'bin', 'pdkit'));
+  });
+
+  test('a pdkit there that is not the link to this one is replaced by it', async (t) => {
+    const { dir: scratchDir, cache, root } = await scratch(t);
+    const dir = await standIn(root, { cache });
+
+    for (const plant of [
+      () => symlink(join(scratchDir, 'elsewhere', 'pdkit'), join(dir, 'pdkit')),
+      () => writeFile(join(dir, 'pdkit'), '#!/bin/sh\necho planted\n', { mode: 0o755 }),
+    ]) {
+      await rm(join(dir, 'pdkit'));
+      await plant();
+
+      assert.equal(await standIn(root, { cache }), dir);
+      assert.equal(await readlink(join(dir, 'pdkit')), join(root, 'bin', 'pdkit'));
+      assert.deepEqual(await readdir(dir), ['pdkit']);
+    }
+  });
+
+  describe('when none can be made safely, PATH stays as it was and the log says why, once', () => {
+    /** Register, run two commands, and return the PATH of the first and the log. */
+    async function attempt(root, cache) {
+      const { ctx, registered, plugin, lines } = host(root);
+      await registerEnvironment(ctx, plugin, { cache, windows: false });
+      const created = event({ PATH: '/usr/bin:/bin' });
+      await registered[0].callback(created);
+      await registered[0].callback(event({ PATH: '/usr/bin:/bin' }));
+      return { path: created.env.PATH, version: created.env.PDKIT_OPENCODE_VERSION, lines };
+    }
+
+    const refused = (cause) =>
+      new RegExp(
+        '^bin/ cannot go on PATH: its path holds ":", the PATH delimiter \\(.+/bin\\), and no directory to link pdkit ' +
+          `from could be made \\(.*${cause}.*\\)\\. Shell commands run without pdkit on PATH; install the plugin from ` +
+          'the registry or a directory\\.$',
+      );
+
+    test('a directory of its own that others can write to', async (t) => {
+      const { cache, root } = await scratch(t);
+      await mkdir(join(cache, 'opencode-pdkit'), { recursive: true });
+      await chmod(join(cache, 'opencode-pdkit'), 0o777);
+
+      const { path, version, lines } = await attempt(root, cache);
+
+      assert.equal(path, '/usr/bin:/bin');
+      assert.equal(version, '2.3.0', 'the version still goes in');
+      assert.equal(lines.length, 1);
+      assert.match(lines[0], refused('can be written by others'));
+      assert.deepEqual(await readdir(join(cache, 'opencode-pdkit')), [], 'something was put in it before the check');
+    });
+
+    test('a directory of its own that is a link to another', async (t) => {
+      const { dir, cache, root } = await scratch(t);
+      await mkdir(join(dir, 'theirs'));
+      await mkdir(cache);
+      await symlink(join(dir, 'theirs'), join(cache, 'opencode-pdkit'));
+
+      const { path, lines } = await attempt(root, cache);
+
+      assert.equal(path, '/usr/bin:/bin');
+      assert.equal(lines.length, 1);
+      assert.match(lines[0], refused('is not a directory'));
+      assert.deepEqual(await readdir(join(dir, 'theirs')), []);
+    });
+
+    test('a cache that is not a directory', async (t) => {
+      const { cache, root } = await scratch(t);
+      await writeFile(cache, 'not a directory\n');
+
+      const { path, lines } = await attempt(root, cache);
+
+      assert.equal(path, '/usr/bin:/bin');
+      assert.equal(lines.length, 1);
+      assert.match(lines[0], refused(''));
+    });
+
+    // The link is made under a temporary name first; when it cannot take the
+    // place of what is there, it does not stay behind as a second command.
+    test('a pdkit there it cannot replace, with nothing of its own left behind', async (t) => {
+      const { cache, root } = await scratch(t);
+      const dir = await standIn(root, { cache });
+      await rm(join(dir, 'pdkit'));
+      await mkdir(join(dir, 'pdkit', 'inside'), { recursive: true });
+
+      const { path, lines } = await attempt(root, cache);
+
+      assert.equal(path, '/usr/bin:/bin');
+      assert.equal(lines.length, 1);
+      assert.match(lines[0], refused(''));
+      assert.deepEqual(await readdir(dir), ['pdkit']);
+    });
+
+    test('a cache whose own path holds the delimiter', async (t) => {
+      const { dir, root } = await scratch(t);
+      const cache = join(dir, 'odd:cache');
+
+      const { path, lines } = await attempt(root, cache);
+
+      assert.equal(path, '/usr/bin:/bin');
+      assert.equal(lines.length, 1);
+      assert.match(lines[0], refused('the cache directory holds ":" too'));
+      assert.equal(existsSync(cache), false);
+    });
+  });
+
+  // The stand-in is only for a bin/ PATH cannot name: from the registry or a
+  // directory, nothing is written anywhere.
+  test('a bin/ PATH can name makes none', async (t) => {
+    const { cache } = await scratch(t);
+    const { ctx, registered, plugin, lines } = host(ROOT);
+
+    await registerEnvironment(ctx, plugin, { cache, windows: false });
     const created = event({ PATH: '/usr/bin' });
-    await registered[0](created);
-    await registered[0](event({ PATH: '/usr/bin' }));
+    await registered[0].callback(created);
 
-    assert.equal(created.env.PATH, '/usr/bin');
-    assert.equal(lines.length, 1);
-    assert.match(lines[0], /^bin\/ cannot go on PATH: its path holds ".", the PATH delimiter \(.+\)\. Shell commands run without pdkit on PATH;/);
+    assert.equal(created.env.PATH, `${BIN}:/usr/bin`);
+    assert.equal(existsSync(cache), false);
+    assert.deepEqual(lines, []);
+  });
+
+  test("without a cache given, it goes in the user's: XDG_CACHE_HOME", async (t) => {
+    const { cache, root } = await scratch(t);
+    const saved = process.env.XDG_CACHE_HOME;
+    process.env.XDG_CACHE_HOME = cache;
+    t.after(() => {
+      if (saved === undefined) delete process.env.XDG_CACHE_HOME;
+      else process.env.XDG_CACHE_HOME = saved;
+    });
+    const { ctx, registered, plugin } = host(root);
+
+    await registerEnvironment(ctx, plugin, { windows: false });
+    const created = event({ PATH: '/usr/bin' });
+    await registered[0].callback(created);
+
+    assert.equal(created.env.PATH.startsWith(`${cache}/opencode-pdkit/bin-`), true, created.env.PATH);
+  });
+
+  // Open Code starts the shell as `<shell> -c <command>`. bin/pdkit runs by its
+  // shebang through the link; Node resolves the link before import.meta.url,
+  // so the copy finds the lib/ beside it, in the directory with the colon.
+  test("in a real shell, `pdkit` is the plugin's, through the link, ahead of another pdkit", async (t) => {
+    const { dir, cache, root } = await scratch(t);
+    for (const part of ['bin', 'lib']) await cp(join(ROOT, part), join(root, part), { recursive: true });
+    const other = join(dir, 'other', 'bin');
+    await mkdir(other, { recursive: true });
+    await writeFile(join(other, 'pdkit'), '#!/bin/sh\necho "the other pdkit"\n', { mode: 0o755 });
+    const { ctx, registered, plugin } = host(root);
+    await registerEnvironment(ctx, plugin, { cache, windows: false });
+    const created = event({ ...process.env, PATH: `${other}:${process.env.PATH}` });
+    await registered[0].callback(created);
+    const run = promisify(execFile);
+    const shell = async (command) => (await run('/bin/sh', ['-c', command], { cwd: dir, env: created.env })).stdout.trim();
+
+    const found = await shell('command -v pdkit');
+
+    assert.equal(found, join(created.env.PATH.split(':')[0], 'pdkit'));
+    assert.equal(await realpath(found), join(root, 'bin', 'pdkit'));
+    assert.match(await shell('pdkit --help'), /^  pdkit <command> \[options\]$/m);
+  });
+});
+
+describe('the cache directory', () => {
+  const home = () => '/home/someone';
+
+  test('is XDG_CACHE_HOME when that is an absolute path', () => {
+    assert.equal(cacheHome({ XDG_CACHE_HOME: '/var/cache/someone' }, home), '/var/cache/someone');
+  });
+
+  // The XDG rule: a relative path there is to be ignored.
+  test('is ~/.cache otherwise', () => {
+    for (const XDG_CACHE_HOME of [undefined, '', 'relative/cache']) {
+      assert.equal(cacheHome({ XDG_CACHE_HOME }, home), join('/home/someone', '.cache'), JSON.stringify(XDG_CACHE_HOME));
+    }
   });
 });
 
@@ -155,6 +403,24 @@ describe('on Windows', () => {
   test('an empty or missing PATH becomes bin/ alone there too', () => {
     assert.equal(prepare({ Path: '' }, { bin: 'C:\\plugin\\bin', version: '2.3.0', ...WINDOWS }).Path, 'C:\\plugin\\bin');
     assert.equal(prepare({}, { bin: 'C:\\plugin\\bin', version: '2.3.0', ...WINDOWS }).PATH, 'C:\\plugin\\bin');
+  });
+
+  // Windows keeps what T4.4 does: PATH as it was and one line in the log. The
+  // root here holds the delimiter of the host the test runs on, so on Windows
+  // itself this is the real case.
+  test('a bin/ PATH cannot name gets no stand-in: PATH as it was, the reason in the log once', async (t) => {
+    const { cache } = await scratch(t);
+    const { ctx, registered, plugin, lines } = host(`${tmpdir()}${delimiter}odd`);
+
+    await registerEnvironment(ctx, plugin, { cache, windows: true });
+    const created = event({ PATH: '/usr/bin' });
+    await registered[0].callback(created);
+    await registered[0].callback(event({ PATH: '/usr/bin' }));
+
+    assert.equal(created.env.PATH, '/usr/bin');
+    assert.equal(existsSync(cache), false);
+    assert.equal(lines.length, 1);
+    assert.match(lines[0], /^bin\/ cannot go on PATH: its path holds ".", the PATH delimiter \(.+\)\. Shell commands run without pdkit on PATH;/);
   });
 
   test('elsewhere, `Path` is not PATH', () => {
@@ -193,16 +459,11 @@ describe("the server's version", () => {
 });
 
 describe('the create.before callback', () => {
-  /** A context with only what registerEnvironment touches. */
-  function host(app = { name: 'cli', version: '2.3.0', channel: 'latest' }) {
-    const registered = [];
-    const lines = [];
-    const ctx = { app, shell: { hook: async (name, callback) => registered.push({ name, callback }) } };
-    return { ctx, registered, plugin: { root: ROOT, log: (line) => lines.push(line) }, lines };
-  }
+  /** A context for this plugin's own root, which PATH can name. */
+  const ours = (app) => host(ROOT, app);
 
   test('is registered on shell create.before, once', async () => {
-    const { ctx, registered, plugin } = host();
+    const { ctx, registered, plugin } = ours();
 
     await registerEnvironment(ctx, plugin);
 
@@ -213,7 +474,7 @@ describe('the create.before callback', () => {
   });
 
   test("puts this plugin's bin/ first and ctx.app.version beside it", async () => {
-    const { ctx, registered, plugin } = host();
+    const { ctx, registered, plugin } = ours();
     await registerEnvironment(ctx, plugin);
     const created = event({ PATH: ['/usr/bin', '/bin'].join(delimiter), TERM: 'xterm-256color' });
 
@@ -228,7 +489,7 @@ describe('the create.before callback', () => {
   // The session is the shell tool's to set, after this hook; the plugin
   // neither sets one nor removes the one Claude Code may have left.
   test('sets no session variable of its own and leaves the others alone', async () => {
-    const { ctx, registered, plugin } = host();
+    const { ctx, registered, plugin } = ours();
     await registerEnvironment(ctx, plugin);
     const created = event({ PATH: '/usr/bin', CLAUDE_CODE_SESSION_ID: 'e7fee23a-left-over' });
 
@@ -239,7 +500,7 @@ describe('the create.before callback', () => {
 
   test('without a version from the host, still puts bin/ on PATH', async () => {
     for (const app of [{ name: 'cli' }, null]) {
-      const { ctx, registered, plugin } = host(app);
+      const { ctx, registered, plugin } = ours(app);
       await registerEnvironment(ctx, plugin);
       const created = event({ PATH: '/usr/bin' });
 
@@ -251,7 +512,7 @@ describe('the create.before callback', () => {
   });
 
   test('never throws: an event without an environment is left as it is', async () => {
-    const { ctx, registered, plugin, lines } = host();
+    const { ctx, registered, plugin, lines } = ours();
     await registerEnvironment(ctx, plugin);
 
     for (const odd of [undefined, null, {}, { env: null }, { env: 'PATH=/usr/bin' }]) {
@@ -261,7 +522,7 @@ describe('the create.before callback', () => {
   });
 
   test('nor when the environment refuses the change; it says so in the log', async () => {
-    const { ctx, registered, plugin, lines } = host();
+    const { ctx, registered, plugin, lines } = ours();
     await registerEnvironment(ctx, plugin);
 
     await registered[0].callback(event(Object.freeze({ PATH: '/usr/bin' })));

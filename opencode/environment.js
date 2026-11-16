@@ -36,8 +36,19 @@
 // does not run for a `!`cmd`` in a command template, which this plugin does not
 // use. The session a command runs in needs nothing from here: the shell tool
 // sets that variable itself, after this hook (lib/harness.js names it).
+//
+// One install puts bin/ where PATH cannot name it. Open Code installs a package
+// under a directory named after its specifier, and `file:<tarball>` — how the
+// plugin is tried before it is published — brings a colon, PATH's delimiter,
+// into every path of the plugin. There setup links `pdkit` from a directory of
+// the user's own cache whose path has no delimiter (standIn), and that
+// directory goes first on PATH instead. Node runs a linked script from the
+// file the link resolves to, so bin/pdkit still finds lib/ beside it.
 
-import { delimiter as hostDelimiter, join } from 'node:path';
+import { createHash, randomBytes } from 'node:crypto';
+import { lstat, mkdir, readlink, rename, rm, symlink } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { delimiter as hostDelimiter, isAbsolute, join, resolve } from 'node:path';
 
 import { SERVER_VERSION_VARIABLE } from '../lib/opencode-version.js';
 
@@ -90,7 +101,8 @@ export function prepare(env, { bin, version, delimiter = hostDelimiter, windows 
  * splits into two entries that name nothing. Open Code installs a package
  * under a directory named after its specifier: `opencode-pdkit@…` from the
  * registry is safe, but `file:<tarball>` puts a colon in every path of the
- * plugin. Better to leave PATH alone there than to fill it with fragments.
+ * plugin. Better to leave PATH alone there than to fill it with fragments;
+ * registerEnvironment puts a stand-in there instead when it can (standIn).
  *
  * @param {string} dir
  * @param {string} [delimiter]
@@ -101,24 +113,135 @@ export function onPath(dir, delimiter = hostDelimiter) {
 }
 
 /**
+ * The user's cache directory, by the XDG Base Directory rule: XDG_CACHE_HOME
+ * when it is an absolute path, ~/.cache otherwise. Open Code keeps its own
+ * cache, this package's install included, under the same variable.
+ *
+ * @param {Record<string, string | undefined>} [env]
+ * @param {() => string} [home]
+ * @returns {string}
+ */
+export function cacheHome(env = process.env, home = homedir) {
+  const xdg = env.XDG_CACHE_HOME;
+  return typeof xdg === 'string' && isAbsolute(xdg) ? xdg : join(home(), '.cache');
+}
+
+/**
+ * A directory PATH can name, holding one entry: `pdkit`, a symbolic link to
+ * the plugin's bin/pdkit. Returns the directory; throws when it cannot make
+ * one that is safe to put first on PATH.
+ *
+ * `<cache>/opencode-pdkit/bin-<hash of the root>/`: one directory per plugin
+ * root, so two installs never share a link, and every instance of one install
+ * (Open Code loads the plugin once for each directory it serves) makes the
+ * same one. It goes in the user's own cache and not in a shared place such as
+ * /tmp, where anyone could put their own pdkit first on this user's PATH; for
+ * the same reason a directory along the way that is a link, belongs to someone
+ * else, or that others can write to is refused rather than used.
+ *
+ * The link is made beside its final name and renamed onto it, which replaces
+ * whatever was there in one step: instances that make it at the same moment
+ * each leave a whole link, and a command never finds half of one.
+ *
+ * Nothing removes the directory. An install that Open Code has removed leaves
+ * a dangling link behind, which no PATH this module builds names any more.
+ *
+ * @param {string} root
+ * @param {{cache: string, delimiter?: string}} options
+ * @returns {Promise<string>} the directory
+ */
+export async function standIn(root, { cache, delimiter = hostDelimiter }) {
+  const own = join(cache, 'opencode-pdkit');
+  const dir = join(own, `bin-${createHash('sha256').update(resolve(root)).digest('hex').slice(0, 16)}`);
+  if (!onPath(dir, delimiter)) throw new Error(`the cache directory holds "${delimiter}" too (${dir})`);
+
+  // Each level is checked before anything goes into it.
+  await mkdir(own, { recursive: true, mode: 0o700 });
+  await assertPrivate(own);
+  await mkdir(dir, { mode: 0o700 }).catch((error) => {
+    if (error?.code !== 'EEXIST') throw error;
+  });
+  await assertPrivate(dir);
+
+  const link = join(dir, 'pdkit');
+  const target = join(root, 'bin', 'pdkit');
+  if ((await readlink(link).catch(() => undefined)) === target) return dir;
+
+  const made = join(dir, `.pdkit-${process.pid}-${randomBytes(6).toString('hex')}`);
+  await symlink(target, made);
+  try {
+    await rename(made, link);
+  } catch (error) {
+    await rm(made, { force: true });
+    throw error;
+  }
+  return dir;
+}
+
+/**
+ * Throw unless `dir` is a directory of this user's that no one else can write
+ * to. Not a link: lstat, so a link to someone else's directory is refused too.
+ *
+ * @param {string} dir
+ */
+async function assertPrivate(dir) {
+  const stats = await lstat(dir);
+  if (!stats.isDirectory()) throw new Error(`${dir} is not a directory`);
+  if (typeof process.getuid === 'function' && stats.uid !== process.getuid()) {
+    throw new Error(`${dir} belongs to another user`);
+  }
+  if ((stats.mode & 0o022) !== 0) throw new Error(`${dir} can be written by others`);
+}
+
+/**
+ * The directory to put first on PATH: bin/ itself where PATH can name it, a
+ * stand-in where it cannot. When neither works, bin/ comes back anyway, and
+ * prepare leaves PATH alone for it; the reason goes to the log once, here,
+ * rather than once per command.
+ *
+ * Not on Windows, which keeps the behavior above: its delimiter is a
+ * semicolon, not the colon of `file:`, and a symbolic link there needs a
+ * privilege most accounts lack.
+ *
+ * @param {{root: string, log: (line: string) => void}} plugin
+ * @param {{cache?: string, windows: boolean}} options
+ * @returns {Promise<string>}
+ */
+async function pathEntry(plugin, { cache, windows }) {
+  const bin = join(plugin.root, 'bin');
+  if (onPath(bin)) return bin;
+
+  const cannot = `bin/ cannot go on PATH: its path holds "${hostDelimiter}", the PATH delimiter (${bin})`;
+  const without = 'Shell commands run without pdkit on PATH; install the plugin from the registry or a directory.';
+  if (windows) {
+    plugin.log(`${cannot}. ${without}`);
+    return bin;
+  }
+  try {
+    return await standIn(plugin.root, { cache: cache ?? cacheHome() });
+  } catch (error) {
+    plugin.log(`${cannot}, and no directory to link pdkit from could be made (${reason(error)}). ${without}`);
+    return bin;
+  }
+}
+
+/**
  * Register the create.before callback.
  *
- * The callback does not throw. What Open Code does with a throw there is
+ * The callback does not throw, and a stand-in that cannot be made does not
+ * make this throw either. What Open Code does with a throw in the callback is
  * unverified; a command that runs without this plugin's bin/ on its PATH
  * fails or runs another pdkit, which is no worse than the hook missing.
  *
  * @param {object} ctx the plugin context setup() received
  * @param {{root: string, log: (line: string) => void}} plugin
+ * @param {{cache?: string, windows?: boolean}} [options]
+ *   where a stand-in goes (cacheHome when not given) and whether this is
+ *   Windows (the host's answer when not given); tests pass their own
  */
-export async function registerEnvironment(ctx, plugin) {
-  const bin = join(plugin.root, 'bin');
+export async function registerEnvironment(ctx, plugin, { cache, windows = process.platform === 'win32' } = {}) {
+  const bin = await pathEntry(plugin, { cache, windows });
   const version = ctx.app?.version;
-  if (!onPath(bin)) {
-    plugin.log(
-      `bin/ cannot go on PATH: its path holds "${hostDelimiter}", the PATH delimiter (${bin}). ` +
-        'Shell commands run without pdkit on PATH; install the plugin from the registry or a directory.',
-    );
-  }
 
   await ctx.shell.hook('create.before', (event) => {
     try {
