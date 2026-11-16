@@ -45,6 +45,7 @@
 // is seen by the model and the person; one that persists is the doctor's to
 // find.
 
+import { createReadStream } from 'node:fs';
 import { homedir } from 'node:os';
 
 import { invoke, refusal } from '../../lib/hooks/runner.js';
@@ -52,6 +53,7 @@ import { answer, combine, withText } from './answer.js';
 import {
   postBash as postBashPayloads,
   postClaim as postClaimPayloads,
+  postRead as postReadPayloads,
   postWrite as postWritePayloads,
   preBash as preBashPayload,
   preWrite as preWritePayloads,
@@ -62,6 +64,10 @@ const PRE_WRITE = 'pre-write';
 const POST_WRITE = 'post-write';
 const POST_CLAIM = 'post-claim';
 const POST_BASH = 'post-bash';
+const POST_READ = 'post-read';
+
+/** A line feed, the byte a line of a text file ends with. */
+const LF = 0x0a;
 
 /** An answer that does nothing: what a hook that had no run, or failed open, gives. */
 const NOTHING = Object.freeze({ action: Object.freeze({ kind: 'pass' }), dropped: Object.freeze([]) });
@@ -91,6 +97,26 @@ const failedOpen = (event, error) => ({ block: false, diagnostic: `pdkit: hook "
 const hostHome = () => process.env.OPENCODE_TEST_HOME ?? homedir();
 
 /**
+ * How many lines Open Code's read tool counts in a file: one for each line
+ * feed, and one more for a last line that ends without one (read-filesystem.ts
+ * textPage, F265) — so a file that ends in `\r\n`, or starts with a byte order
+ * mark, has as many as it has line feeds, and an empty one has none. Read a
+ * chunk at a time: the file is one too large for a page to hold.
+ *
+ * @param {string} file  absolute
+ * @returns {Promise<number>}
+ */
+async function linesOf(file) {
+  let count = 0;
+  let last;
+  for await (const chunk of createReadStream(file)) {
+    for (let at = chunk.indexOf(LF); at !== -1; at = chunk.indexOf(LF, at + 1)) count += 1;
+    last = chunk[chunk.length - 1];
+  }
+  return last === undefined || last === LF ? count : count + 1;
+}
+
+/**
  * The bridge for one loaded instance of the plugin. Open Code loads the plugin
  * once per project directory and calls setup() for each, so whatever the
  * bridge remembers between callbacks lives here, per instance, and goes away
@@ -104,6 +130,7 @@ const hostHome = () => process.env.OPENCODE_TEST_HOME ?? homedir();
  *   postWrite: (event: {tool?: string, sessionID?: string, status?: string, input?: unknown}) => Promise<import('./answer.js').Answer>,
  *   postClaim: (event: {tool?: string, sessionID?: string, status?: string, input?: unknown}) => Promise<import('./answer.js').Answer>,
  *   postBash: (event: {tool?: string, sessionID?: string, status?: string, input?: unknown, result?: unknown}) => Promise<import('./answer.js').Answer>,
+ *   postRead: (event: {tool?: string, sessionID?: string, status?: string, input?: unknown, result?: unknown}) => Promise<import('./answer.js').Answer>,
  *   afterTool: (event: {tool?: string, sessionID?: string, status?: string, input?: unknown, result?: unknown}) => Promise<void>,
  *   register: () => Promise<void>,
  *   cleanup: () => Promise<void>,
@@ -140,10 +167,12 @@ export function createBridge(ctx, plugin) {
    *
    * The session's directory is read when a payload needs it, which is after
    * the hook's own filter: a call a hook does not look at costs it nothing —
-   * not even a line, when the location cannot be had.
+   * not even a line, when the location cannot be had. The same for a file on
+   * disk: post-read reads one, to count its lines, only after a page that
+   * does not reach its end.
    *
    * @param {string} name  the pdkit hook event
-   * @param {(event: object, host: {directory: string|undefined, home: string}) => object[]} payloadsOf
+   * @param {(event: object, host: {directory: string|undefined, home: string, lines: (file: string) => Promise<number>}) => object[]|Promise<object[]>} payloadsOf
    * @param {object} event  execute.after's event
    * @returns {Promise<import('./answer.js').Answer>}
    */
@@ -154,8 +183,9 @@ export function createBridge(ctx, plugin) {
           return ctx.location?.directory;
         },
         home: hostHome(),
+        lines: linesOf,
       };
-      const payloads = payloadsOf(event, host);
+      const payloads = await payloadsOf(event, host);
       if (payloads.length === 0) return NOTHING;
       const decisions = await Promise.all(payloads.map((payload) => invoke(name, payload, { root: plugin.root })));
       const answered = combine(decisions.map((decision) => answer(name, decision)));
@@ -253,6 +283,17 @@ export function createBridge(ctx, plugin) {
     },
 
     /**
+     * post-read, for a call that ran: whether a read or a search that
+     * returned part of what there was ended inside a block it did not close.
+     * Gives an answer and never throws.
+     *
+     * One run for a read or a grep that went through a window (afterRuns).
+     */
+    async postRead(event) {
+      return afterRuns(POST_READ, postReadPayloads, event);
+    },
+
+    /**
      * After any call: the post hooks for it, side by side — Claude Code ran
      * the hooks a tool matched in parallel — and what they have for the model
      * added to the call's result, once.
@@ -264,9 +305,12 @@ export function createBridge(ctx, plugin) {
     async afterTool(event) {
       try {
         // In the order hooks/hooks.json lists them; their texts keep that
-        // order in the result (combine). No call is both a write and a
-        // command, so post-bash's text never shares a result with theirs.
-        const answered = combine(await Promise.all([bridge.postWrite(event), bridge.postClaim(event), bridge.postBash(event)]));
+        // order in the result (combine). A call is a write, a command or a
+        // read, never two of them, so only the writes' hooks ever share a
+        // result.
+        const answered = combine(
+          await Promise.all([bridge.postWrite(event), bridge.postClaim(event), bridge.postBash(event), bridge.postRead(event)]),
+        );
         if (answered.action.kind === 'append') event.result = withText(event.result, answered.action.text);
       } catch (error) {
         report('execute.after', [{ block: false, diagnostic: `pdkit: the hook bridge failed after a tool call (${reason(error)}); its result is as the tool left it` }], []);
@@ -280,7 +324,7 @@ export function createBridge(ctx, plugin) {
      */
     async register() {
       await ctx.tool.hook('execute.before', (event) => bridge.preWrite(event));
-      // TODO(T4.10–T4.14): the rest of pdkit's hook events.
+      // TODO(T4.11–T4.14): the rest of pdkit's hook events.
       await ctx.tool.hook('execute.after', (event) => bridge.afterTool(event));
     },
 

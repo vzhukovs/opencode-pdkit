@@ -189,6 +189,35 @@ describe('post-bash', () => {
   });
 });
 
+describe('post-read', () => {
+  const RULE = 'pdkit: this output went through a window (`Read lines 1-2000 of 4700`) and ends inside an open block: 1 `{` opened, 0 closed. …';
+
+  test('the rule adds itself to the result (HK-15)', () => {
+    assert.deepEqual(answer('post-read', { block: false, rule: 'cut-read', message: RULE }), {
+      action: { kind: 'append', text: RULE },
+      dropped: [],
+    });
+  });
+
+  test('nothing to say changes nothing', () => {
+    assert.deepEqual(answer('post-read', { block: false }), { action: { kind: 'pass' }, dropped: [] });
+  });
+
+  test('a run that gave no answer arrives as a pass, and is one', () => {
+    const decision = decide('post-read', { code: null, stdout: '', stderr: '', failure: { kind: 'deadline', detail: 'gave no answer within 10s and was stopped' } });
+    assert.equal(decision.block, false);
+    assert.match(decision.diagnostic, /^pdkit: hook "post-read" gave no answer .*; allowing$/);
+    assert.deepEqual(answer('post-read', decision), { action: { kind: 'pass' }, dropped: [] });
+  });
+
+  test('a notice has no way to the person, and is listed as dropped', () => {
+    assert.deepEqual(answer('post-read', { block: false, notice: 'for the person', message: RULE }), {
+      action: { kind: 'append', text: RULE },
+      dropped: [{ field: 'notice', text: 'for the person' }],
+    });
+  });
+});
+
 describe('combine: one answer for a call several runs decided', () => {
   const pass = { action: { kind: 'pass' }, dropped: [] };
   const refuse = (text) => ({ action: { kind: 'refuse', text }, dropped: [] });

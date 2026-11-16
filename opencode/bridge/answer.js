@@ -115,6 +115,12 @@ const ANSWERS = {
   // the rule beside the command as additionalContext; the model gets it in
   // the command's result. post-bash never blocks.
   'post-bash': afterTool,
+  // A read or a search that returned part of what there was — a page of a
+  // file, matches cut at a limit — and ended inside a block it did not close
+  // (HK-15): Claude Code placed the rule beside the Read or the Grep as
+  // additionalContext; the model gets it in the call's result. post-read never
+  // blocks.
+  'post-read': afterTool,
 };
 
 /**

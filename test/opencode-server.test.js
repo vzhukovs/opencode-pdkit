@@ -187,9 +187,9 @@ describe('on a supported Open Code', () => {
 
   // Until the rest of the bridge and the registrars are filled in, loading the
   // plugin must not change what a session does beyond the gate, pre-write,
-  // post-write, post-claim and post-bash — which have nothing to say about
-  // this command.
-  test('and none of the registrations but the gate, pre-write, post-write, post-claim and post-bash changes anything yet', async (t) => {
+  // post-write, post-claim, post-bash and post-read — which have nothing to
+  // say about this command or this read.
+  test('and none of the registrations but the gate, pre-write, post-write, post-claim, post-bash and post-read changes anything yet', async (t) => {
     logOf(t);
     const { ctx, callbacks } = host();
 
@@ -202,6 +202,17 @@ describe('on a supported Open Code', () => {
     const event = ran();
     for (const after of callbacks('tool.hook execute.after')) await after(event);
     assert.deepEqual(event, ran());
+    // A page to the end of a file, which closes what it opens: post-read runs, and has nothing to say.
+    const paged = () => ({
+      ...shell(),
+      tool: 'read',
+      input: { path: 'a.ts', offset: 5 },
+      status: 'completed',
+      result: { output: { type: 'text-page', content: 'a {\n}', mime: 'video/mp2t', offset: 5, truncated: false }, content: [{ type: 'text', text: 'Read file a.ts, lines 5-6' }] },
+    });
+    const read = paged();
+    for (const after of callbacks('tool.hook execute.after')) await after(read);
+    assert.deepEqual(read, paged());
   });
 
   // The gate's rules are test/opencode-gate.test.js's; this is that the
@@ -310,6 +321,43 @@ describe('on a supported Open Code', () => {
     await afterTool(done(write()));
     assert.equal(log().length, 2, log().join('\n'));
     assert.match(log()[1], /^opencode-pdkit: pdkit: hook "post-write" /);
+  });
+
+  // post-read's rules are test/opencode-post-read.test.js's; this is that the
+  // same callback runs it, after a read or a search through a window and not
+  // after any other call. As above, a run that is attempted says so in the log.
+  test('post-read runs through the bridge, after a read or a grep through a window only', async (t) => {
+    const log = logOf(t);
+    const { ctx, callbacks } = host();
+
+    await plugin.setup(ctx);
+
+    const [afterTool] = callbacks('tool.hook execute.after');
+    ctx.location = { ...ctx.location, directory: join(DIRECTORY, 'pdkit-no-such-directory') };
+    const page = (offset, truncated) => ({ type: 'text-page', content: 'a {', mime: 'video/mp2t', offset, truncated });
+    const read = (input, output) => ({ ...shell(), tool: 'read', input, status: 'completed', result: { output, content: [{ type: 'text', text: 'Read file a.ts' }] } });
+    const grep = (truncated) => ({
+      ...shell(),
+      tool: 'grep',
+      input: { pattern: 'a' },
+      status: 'completed',
+      result: { output: [{ entry: { path: 'a.ts', type: 'file' }, line: 1, offset: 0, text: 'a {\n', submatches: [] }], content: [{ type: 'text', text: 'Found 1 matches' }], metadata: { matches: 1, truncated } },
+    });
+
+    // A whole file, every match, a command: nothing to look at.
+    await afterTool(read({ path: 'a.ts' }, { type: 'file', uri: 'file:///a.ts', name: 'a.ts', content: 'a {', encoding: 'utf8', mime: 'video/mp2t' }));
+    await afterTool(read({ path: 'a.ts', offset: 1 }, page(1, false)));
+    await afterTool(grep(false));
+    await afterTool({ ...shell('cat a.ts'), status: 'completed', result: { output: { output: 'a {', exitCode: 1 }, content: [{ type: 'text', text: 'a {' }] } });
+    assert.deepEqual(log(), []);
+
+    // A page to the end of the file, and matches the limit cut: one run each.
+    const event = read({ path: 'a.ts', offset: 7 }, page(7, false));
+    await afterTool(event);
+    assert.deepEqual(event.result.content, [{ type: 'text', text: 'Read file a.ts' }]);
+    await afterTool(grep(true));
+    assert.equal(log().length, 2, log().join('\n'));
+    for (const line of log()) assert.match(line, /^opencode-pdkit: pdkit: hook "post-read" cannot run: its working directory does not exist: .*; allowing$/);
   });
 
   // What makes `pdkit` a bare command in a session, and tells doctor which

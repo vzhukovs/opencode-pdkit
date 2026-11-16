@@ -27,7 +27,7 @@ import assert from 'node:assert/strict';
 import { join, resolve, win32 } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { hostPath, postBash, postClaim, postWrite, preBash, preWrite } from '../opencode/bridge/payload.js';
+import { hostPath, postBash, postClaim, postRead, postWrite, preBash, preWrite } from '../opencode/bridge/payload.js';
 
 const DIRECTORY = join(tmpdir(), 'project');
 
@@ -526,6 +526,231 @@ describe('post-bash', () => {
     }
     const { result: _, ...noResult } = done({ command: 'head -5 a' });
     assert.deepEqual(postBash(noResult, host), []);
+  });
+});
+
+describe('post-read', () => {
+  /** A host whose files have the line counts given, and which says which it was asked about. */
+  const hostWith = (counts = {}) => {
+    const asked = [];
+    return {
+      asked,
+      host: {
+        directory: DIRECTORY,
+        home: '/home/someone',
+        lines: async (file) => {
+          asked.push(file);
+          if (!Object.hasOwn(counts, file)) throw new Error(`ENOENT: no such file or directory, open '${file}'`);
+          return counts[file];
+        },
+      },
+    };
+  };
+  const API = join(DIRECTORY, 'api.d.ts');
+  const { host } = hostWith({ [API]: 4700 });
+
+  /** A page of a text file, as the read tool reports one (F48). */
+  const page = (content, offset, truncated, next) => ({ type: 'text-page', content, mime: 'video/mp2t', offset, truncated, ...(next === undefined ? {} : { next }) });
+  /** execute.after's event for a read that ran, with the page as its output. */
+  const read = (input, output, { status = 'completed', tool = 'read' } = {}) => ({
+    ...call(input, tool),
+    status,
+    result: { output, content: [{ type: 'text', text: `Read file ${input?.path}` }], metadata: { truncated: output?.truncated ?? false } },
+  });
+  /** execute.after's event for a grep that ran: the matches, and whether the limit cut them. */
+  const grep = (input, texts, truncated, { status = 'completed' } = {}) => ({
+    ...call(input, 'grep'),
+    status,
+    result: {
+      output: texts.map((text, i) => ({ entry: { path: 'api.d.ts', type: 'file' }, line: i + 1, offset: 0, text, submatches: [] })),
+      content: [{ type: 'text', text: `Found ${texts.length} matches` }],
+      metadata: { matches: texts.length, truncated },
+    },
+  });
+
+  const CUT = 'export namespace env {\n  export const appName: string;';
+
+  test("a page with lines after it is Claude Code's PostToolUse on Read: the file, its text, which lines out of how many", async () => {
+    assert.deepEqual(await postRead(read({ path: 'api.d.ts', limit: 2 }, page(CUT, 1, true, 3)), host), [
+      {
+        hook_event_name: 'PostToolUse',
+        tool_name: 'Read',
+        tool_input: { file_path: API },
+        tool_response: { type: 'text', file: { filePath: API, content: CUT, startLine: 1, numLines: 2, totalLines: 4700 } },
+        cwd: DIRECTORY,
+        session_id: 'ses_test',
+      },
+    ]);
+  });
+
+  test('names no transcript', async () => {
+    assert.equal('transcript_path' in (await postRead(read({ path: 'api.d.ts', limit: 2 }, page(CUT, 1, true, 3)), host))[0], false);
+  });
+
+  // The read tool says how many lines a file has only of a page that reaches
+  // the end: the last line of that page is the file's (F48).
+  test('a page that reaches the end of the file counts its lines from the page, and reads nothing from disk', async () => {
+    const counting = hostWith();
+    const [payload] = await postRead(read({ path: 'api.d.ts', offset: 4699 }, page(`${CUT}\n}`, 4698, false)), counting.host);
+    assert.deepEqual(payload.tool_response.file, { filePath: API, content: `${CUT}\n}`, startLine: 4698, numLines: 3, totalLines: 4700 });
+    assert.deepEqual(counting.asked, []);
+  });
+
+  test('a page with lines after it counts them in the file the tool read, as the tool resolves its path', async () => {
+    const sub = join(DIRECTORY, 'packages', 'main', 'a.ts');
+    const home = join('/home/someone', 'a.ts');
+    const counting = hostWith({ [sub]: 10, [home]: 20, [API]: 30 });
+    for (const [path, file, total] of [
+      ['packages/main/a.ts', sub, 10],
+      ['~/a.ts', home, 20],
+      [API, API, 30],
+    ]) {
+      const [payload] = await postRead(read({ path, limit: 2 }, page(CUT, 1, true, 3)), counting.host);
+      assert.equal(payload.tool_input.file_path, file, path);
+      assert.equal(payload.tool_response.file.totalLines, total, path);
+    }
+    assert.deepEqual(counting.asked, [sub, home, API]);
+  });
+
+  test('the window is the page: one past the first line, or one with lines after it', async () => {
+    for (const [label, output, window] of [
+      ['the first lines of a long file', page(CUT, 1, true, 3), { startLine: 1, numLines: 2 }],
+      ['lines inside it', page(CUT, 4500, true, 4502), { startLine: 4500, numLines: 2 }],
+      ['its last lines', page(CUT, 4699, false), { startLine: 4699, numLines: 2 }],
+      ['one line', page('export namespace env {', 4600, false), { startLine: 4600, numLines: 1 }],
+    ]) {
+      const [payload] = await postRead(read({ path: 'api.d.ts' }, output), hostWith({ [API]: 4700 }).host);
+      const { startLine, numLines } = payload.tool_response.file;
+      assert.deepEqual({ startLine, numLines }, window, label);
+    }
+  });
+
+  // A file under 50 KB read with neither offset nor limit comes back whole,
+  // however many lines it has (F48); so does a page from its first line to its
+  // last. The model saw all of it.
+  test('no window, no payload: a whole file, or a page of all of it', async () => {
+    const whole = { type: 'file', uri: 'file:///x/api.d.ts', name: 'api.d.ts', content: CUT, encoding: 'utf8', mime: 'video/mp2t' };
+    assert.deepEqual(await postRead(read({ path: 'api.d.ts' }, whole), host), []);
+    assert.deepEqual(await postRead(read({ path: 'api.d.ts', offset: 1, limit: 2000 }, page(CUT, 1, false)), host), []);
+  });
+
+  test('nothing read, no payload: an empty page, a directory, an image', async () => {
+    assert.deepEqual(await postRead(read({ path: 'empty.txt', offset: 5 }, page('', 1, false)), host), []);
+    assert.deepEqual(await postRead(read({ path: 'a.txt', offset: 3 }, page('', 3, false)), host), []);
+    const listing = { type: 'list-page', entries: [{ path: 'a.ts', type: 'file' }], truncated: true, next: 2 };
+    assert.deepEqual(await postRead(read({ path: 'src', limit: 1 }, listing), host), []);
+    const image = { type: 'file', uri: 'file:///x/a.png', name: 'a.png', content: 'iVBORw0K', encoding: 'base64', mime: 'image/png' };
+    assert.deepEqual(await postRead(read({ path: 'a.png' }, image), host), []);
+  });
+
+  test('an output that is no page of the read tool is no payload', async () => {
+    for (const output of [undefined, null, 'x {', {}, { type: 'text-page' }, page(7, 2, false), page(CUT, 0, true, 3), page(CUT, 1.5, true, 3), page(CUT, 2, 'yes')]) {
+      assert.deepEqual(await postRead(read({ path: 'api.d.ts' }, output), host), [], JSON.stringify(output));
+    }
+  });
+
+  // §13 DV9: the count is never made up. A file the bridge cannot count is a
+  // failure of the bridge, which afterRuns turns into a line in the log.
+  test('a file that cannot be counted, or has fewer lines than the page showed, is a failure, not a guess', async () => {
+    await assert.rejects(postRead(read({ path: 'gone.ts', limit: 2 }, page(CUT, 1, true, 3)), host), /ENOENT/);
+    await assert.rejects(postRead(read({ path: 'skill://pd:exec/SKILL.md', limit: 2 }, page(CUT, 1, true, 3)), host), /ENOENT/);
+    const shorter = hostWith({ [API]: 2 }).host;
+    await assert.rejects(postRead(read({ path: 'api.d.ts', limit: 2 }, page(CUT, 1, true, 3)), shorter), /has 2 lines now, and the read showed it had at least 3/);
+    await assert.rejects(
+      postRead(read({ path: 'api.d.ts', limit: 2 }, page(CUT, 1, true, 3)), { ...host, directory: undefined }),
+      /cannot tell which file "api.d.ts" is: the session has no directory/,
+    );
+    // Its next line is the one the page names, or the one after its last.
+    const exact = hostWith({ [API]: 3 }).host;
+    assert.equal((await postRead(read({ path: 'api.d.ts', limit: 2 }, page(CUT, 1, true, 3)), exact))[0].tool_response.file.totalLines, 3);
+    assert.equal((await postRead(read({ path: 'api.d.ts', limit: 2 }, page(CUT, 1, true)), exact))[0].tool_response.file.totalLines, 3);
+  });
+
+  // A page that reaches the end needs no count, so needs no file.
+  test('a page that reaches the end needs no directory either', async () => {
+    const [payload] = await postRead(read({ path: 'api.d.ts', offset: 4699 }, page(CUT, 4699, false)), { ...host, directory: undefined });
+    assert.equal(payload.tool_input.file_path, 'api.d.ts');
+    assert.equal(payload.cwd, undefined);
+  });
+
+  test("matches the limit cut short are Claude Code's PostToolUse on Grep, in content mode, with the limit it applied", async () => {
+    const texts = ['export namespace env {\n', 'export namespace process {\n'];
+    assert.deepEqual(await postRead(grep({ pattern: 'export namespace', limit: 2 }, texts, true), host), [
+      {
+        hook_event_name: 'PostToolUse',
+        tool_name: 'Grep',
+        tool_input: { pattern: 'export namespace' },
+        tool_response: { mode: 'content', content: 'export namespace env {\nexport namespace process {\n', appliedLimit: 2 },
+        cwd: DIRECTORY,
+        session_id: 'ses_test',
+      },
+    ]);
+  });
+
+  // A search the tool cut returns exactly its limit of matches (F265), the
+  // default one when the model named none.
+  test('the limit applied is the number of matches a cut search returned', async () => {
+    const hundred = Array.from({ length: 100 }, () => 'x {\n');
+    assert.equal((await postRead(grep({ pattern: 'x' }, hundred, true), host))[0].tool_response.appliedLimit, 100);
+  });
+
+  test('the lines matched are what was read, not the paths and count around them in the result', async () => {
+    const event = grep({ pattern: 'env' }, ['namespace env {\n'], true);
+    event.result.content = [{ type: 'text', text: 'Found 1 matches\n/x/{weird}/api.d.ts:\n  Line 1: namespace env {\n' }];
+    assert.equal((await postRead(event, host))[0].tool_response.content, 'namespace env {\n');
+  });
+
+  // Claude Code's other window, context around a match: the grep tool has
+  // none, and Open Code strips the keys a model sends for it before any hook
+  // (F51, F265). The bridge passes the pattern alone.
+  test('every match, no payload; and no context is passed on, whatever the input holds', async () => {
+    assert.deepEqual(await postRead(grep({ pattern: 'env' }, ['namespace env {\n'], false), host), []);
+    assert.deepEqual(await postRead(grep({ pattern: 'env', '-A': 60, context: 5 }, ['namespace env {\n'], false), host), []);
+    const [payload] = await postRead(grep({ pattern: 'env', '-A': 60 }, ['namespace env {\n'], true), host);
+    assert.deepEqual(payload.tool_input, { pattern: 'env' });
+  });
+
+  test('a search with no pattern, or a result that is no list of matches, is no payload', async () => {
+    for (const input of [{}, { pattern: '' }, { pattern: 7 }]) {
+      assert.deepEqual(await postRead(grep(input, ['x {\n'], true), host), [], JSON.stringify(input));
+    }
+    const event = grep({ pattern: 'x' }, ['x {\n'], true);
+    for (const output of [undefined, null, 'x {', { text: 'x {' }]) {
+      assert.deepEqual(await postRead({ ...event, result: { ...event.result, output } }, host), [], JSON.stringify(output));
+    }
+    assert.deepEqual(await postRead({ ...event, result: { ...event.result, metadata: { matches: 1, truncated: 'yes' } } }, host), []);
+    assert.deepEqual(await postRead({ ...event, result: { ...event.result, metadata: undefined } }, host), []);
+    // A match that is no match counts for nothing.
+    const odd = { ...event, result: { ...event.result, output: [{ text: 'x {\n' }, null, { text: 7 }] } };
+    assert.equal((await postRead(odd, host))[0].tool_response.content, 'x {\n');
+  });
+
+  // A Read or a Grep that failed went to PostToolUseFailure, which pdkit never
+  // registered; Open Code reports one with status "error" and no result (F265).
+  test('only after a call that succeeded', async () => {
+    for (const status of ['error', 'running']) {
+      assert.deepEqual(await postRead(read({ path: 'api.d.ts', limit: 2 }, page(CUT, 1, true, 3), { status }), host), [], status);
+      assert.deepEqual(await postRead(grep({ pattern: 'x' }, ['x {\n'], true, { status }), host), [], status);
+    }
+    const { status: _, ...noStatus } = read({ path: 'api.d.ts', limit: 2 }, page(CUT, 1, true, 3));
+    assert.deepEqual(await postRead(noStatus, host), []);
+    const { result: __, ...noResult } = read({ path: 'api.d.ts', limit: 2 }, page(CUT, 1, true, 3));
+    assert.deepEqual(await postRead(noResult, host), []);
+  });
+
+  test('only the read and grep tools', async () => {
+    for (const tool of ['shell', 'write', 'edit', 'patch', 'glob', 'webfetch', 'Read']) {
+      assert.deepEqual(await postRead(read({ path: 'api.d.ts', limit: 2 }, page(CUT, 1, true, 3), { tool }), host), [], tool);
+    }
+    const { tool: _, ...noTool } = read({ path: 'api.d.ts', limit: 2 }, page(CUT, 1, true, 3));
+    assert.deepEqual(await postRead(noTool, host), []);
+    assert.deepEqual(await postRead(undefined, host), []);
+  });
+
+  test('a read with no path is no payload', async () => {
+    for (const input of [undefined, null, {}, { path: '' }, { path: 7 }]) {
+      assert.deepEqual(await postRead(read(input, page(CUT, 1, true, 3)), host), [], JSON.stringify(input));
+    }
   });
 });
 

@@ -44,6 +44,7 @@ import { handle as handleOwns } from '../lib/hooks/owns.js';
 import { handle as handlePostWrite } from '../lib/hooks/post-write.js';
 import { handle as handlePostClaim } from '../lib/hooks/post-claim.js';
 import { handle as handlePostBash } from '../lib/hooks/post-bash.js';
+import { handle as handlePostRead } from '../lib/hooks/post-read.js';
 import { PLUGIN_ROOT } from '../lib/commands/support.js';
 import { spdxHeader } from '../lib/upstream.js';
 import { start, stop } from '../lib/active.js';
@@ -649,6 +650,66 @@ describe('invoke agrees with handle, for post-bash', () => {
     const outcomes = new Set();
     for (const [, payloadOf] of FIXTURES) {
       const decision = await handlePostBash(payloadOf(), { event: 'post-bash', pluginRoot: PLUGIN_ROOT });
+      outcomes.add(decision.block ? 'refuse' : decision.message ? 'message' : 'pass');
+    }
+    assert.deepEqual([...outcomes].sort(), ['message', 'pass']);
+  });
+});
+
+// The same for post-read: post-read.js imported, and the same payload through
+// bin/pdkit, on each of its outcomes — the rule that runHook sends as
+// additionalContext after a tool, and silence. It never refuses, and reads no
+// repository. The fixtures are post-read.test.js's: Claude Code's Read and
+// Grep responses, the shapes the bridge builds.
+describe('invoke agrees with handle, for post-read', () => {
+  /** A namespace cut before its last member and its brace, and the same one read to it (post-read.test.js). */
+  const CUT = ['  export namespace env {', '    export const appName: string;'].join('\n');
+  const WHOLE = `${CUT}\n    export const urlProtocol: string;\n  }`;
+
+  const read = (file) => ({
+    hook_event_name: 'PostToolUse',
+    tool_name: 'Read',
+    tool_input: { file_path: join(work, 'api.d.ts') },
+    tool_response: { type: 'text', file: { filePath: join(work, 'api.d.ts'), ...file } },
+    cwd: work,
+  });
+  const grep = (input, response) => ({
+    hook_event_name: 'PostToolUse',
+    tool_name: 'Grep',
+    tool_input: { pattern: 'namespace env', ...input },
+    tool_response: { mode: 'content', ...response },
+    cwd: work,
+  });
+
+  /** What the decision says, as far as the process protocol carries it; the rule is named under PLUGIN_ROOT, as runHook passes it. */
+  const carried = (decision) => ({ block: decision.block, reason: decision.reason, message: decision.message });
+
+  const FIXTURES = [
+    ['a page that stopped inside a block', () => read({ content: CUT, startLine: 1, numLines: 2000, totalLines: 4700 })],
+    ['a page inside the file, the same', () => read({ content: CUT, startLine: 4500, numLines: 2, totalLines: 4700 })],
+    ['a whole file cut by a cap', () => read({ content: CUT, startLine: 1, numLines: 2, totalLines: 2, truncatedByTokenCap: true })],
+    ['a page that closed its block', () => read({ content: WHOLE, startLine: 4500, numLines: 4, totalLines: 4700 })],
+    ['a whole file, however open', () => read({ content: CUT, startLine: 1, numLines: 2, totalLines: 2 })],
+    ['matches cut at a limit, inside a block', () => grep({}, { content: CUT, appliedLimit: 100 })],
+    ['matches with context', () => grep({ '-A': 60 }, { content: CUT })],
+    ['every match', () => grep({}, { content: CUT })],
+    ['a search outside content mode', () => grep({ output_mode: 'files_with_matches' }, { mode: 'files_with_matches', filenames: ['a'] })],
+    ['another tool', () => ({ ...read({ content: CUT, startLine: 1, numLines: 2000, totalLines: 4700 }), tool_name: 'Bash' })],
+  ];
+
+  for (const [label, payloadOf] of FIXTURES) {
+    test(label, async () => {
+      const direct = carried(await handlePostRead(payloadOf(), { event: 'post-read', pluginRoot: PLUGIN_ROOT }));
+      const through = carried(await invoke('post-read', payloadOf(), { root: ROOT }));
+
+      assert.deepEqual(through, direct);
+    });
+  }
+
+  test('the fixtures cover every outcome: a pass, and a pass with a message', async () => {
+    const outcomes = new Set();
+    for (const [, payloadOf] of FIXTURES) {
+      const decision = await handlePostRead(payloadOf(), { event: 'post-read', pluginRoot: PLUGIN_ROOT });
       outcomes.add(decision.block ? 'refuse' : decision.message ? 'message' : 'pass');
     }
     assert.deepEqual([...outcomes].sort(), ['message', 'pass']);

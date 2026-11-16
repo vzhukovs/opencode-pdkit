@@ -22,7 +22,9 @@
 // and they stay that way: what changed is the host, not the rules. So the
 // bridge hands each handler the payload Claude Code would have sent for the
 // same moment, built here from the event Open Code passes to the plugin's
-// callback. Pure functions: whatever needs the host is passed in as data.
+// callback. Pure functions: whatever needs the host is passed in — as data,
+// and, for the one fact a payload needs that no event carries (how many lines
+// a file has, for post-read), as a function the caller gives.
 //
 // Three fields are always set. `hook_event_name`, because runHook shapes its
 // output by it. `cwd`, because a handler that is given none falls back to its
@@ -387,4 +389,152 @@ export function postClaim(event, host) {
     });
   }
   return [...payloads.values()];
+}
+
+/**
+ * A page of a text file, as the read tool reports one (F48): what it read, the
+ * line it started at, and whether lines follow it. Not a whole file (`file`,
+ * which is never a window), a directory (`list-page`), or an image or a PDF.
+ *
+ * @param {unknown} output  the read tool's result.output
+ * @returns {boolean}
+ */
+function isPage(output) {
+  return (
+    output !== null &&
+    typeof output === 'object' &&
+    output.type === 'text-page' &&
+    typeof output.content === 'string' &&
+    Number.isInteger(output.offset) &&
+    output.offset >= 1 &&
+    typeof output.truncated === 'boolean'
+  );
+}
+
+/**
+ * The payload for `pdkit hook post-read` after a read: Claude Code's
+ * PostToolUse on Read, with the part of the file it returned — which lines,
+ * out of how many. Empty for a read of a whole file.
+ *
+ * The window is the read tool's own report (F48): a page that starts past the
+ * first line, or one with lines after it. A file read with neither offset nor
+ * limit comes back whole, however many lines it has, while it is under 50 KB:
+ * no window — the model saw all of it.
+ *
+ * Claude Code's Read said how many lines the file has; the read tool says it
+ * only of a page that reaches the end, whose last line is the file's. For a
+ * page with lines after it, the bridge counts the lines of the file on disk
+ * (`host.lines`), as the tool counts them, in the file the tool read: the
+ * path as the model wrote it, worked out as the tool works it out (hostPath,
+ * F265). A file it cannot count — not on disk, gone, or shorter by now than
+ * the page says it is — is a failure of the bridge: no payload, and post-read
+ * fails open with a line in the log (§13 DV9). The count is never made up:
+ * post-read's text names it.
+ *
+ * `content` is the page's text without the line numbers the model sees beside
+ * it, as Claude Code's `file.content` was (F50).
+ *
+ * @param {{sessionID?: string, input: {path?: unknown}, result?: {output?: unknown}}} event
+ * @param {{directory: string|undefined, home: string, platform?: string, lines: (file: string) => Promise<number>}} host
+ * @returns {Promise<Array<{hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: {file_path: string}, tool_response: {type: 'text', file: {filePath: string, content: string, startLine: number, numLines: number, totalLines: number}}, cwd?: string, session_id?: string}>>}
+ */
+async function readPayloads(event, host) {
+  const { input } = event;
+  if (typeof input.path !== 'string' || input.path === '') return [];
+  const page = event.result?.output;
+  if (!isPage(page) || !(page.offset > 1 || page.truncated)) return [];
+  // As the tool counts the lines it shows the model (toModelContent): none in an empty page.
+  const numLines = page.content === '' ? 0 : page.content.split('\n').length;
+  if (numLines === 0) return [];
+
+  const resolved = hostPath(host.directory, input.path, host);
+  const file = resolved ?? input.path;
+  const end = page.offset + numLines - 1;
+  let totalLines = end;
+  if (page.truncated) {
+    if (resolved === undefined) throw new Error(`cannot tell which file "${input.path}" is: the session has no directory`);
+    totalLines = await host.lines(resolved);
+    // The page says a line follows it. A file that has none by now is not the
+    // file that was read, and its count would name a window that never was.
+    const follows = Number.isInteger(page.next) ? page.next : end + 1;
+    if (totalLines < follows) throw new Error(`${resolved} has ${totalLines} lines now, and the read showed it had at least ${follows}`);
+  }
+  return [
+    {
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Read',
+      tool_input: { file_path: file },
+      tool_response: { type: 'text', file: { filePath: file, content: page.content, startLine: page.offset, numLines, totalLines } },
+      cwd: workingDirectory(host.directory, undefined),
+      session_id: event.sessionID,
+    },
+  ];
+}
+
+/**
+ * The payload for `pdkit hook post-read` after a grep: Claude Code's
+ * PostToolUse on Grep in its content mode — the only one the grep tool has —
+ * with the cap it applied, when the cap cut the matches short. Empty for a
+ * search that returned every match.
+ *
+ * Claude Code's Grep set `appliedLimit` when there were more matches than its
+ * limit; the grep tool says so with `truncated`, and a search it cut returns
+ * exactly its limit of matches (F265). Its other window, context around a
+ * match (`-A`/`-B`/`-C`), the grep tool does not have, and Open Code strips
+ * those keys from the input before any hook (F51, F265): there is nothing to
+ * pass. A model that wants context reads it through the shell, which is
+ * post-bash's.
+ *
+ * `content` is the lines that matched, in order — what was read. Claude Code
+ * prefixed each with a file and a line number, and the result here has
+ * absolute paths and a count around them; none of it is the file's text.
+ *
+ * @param {{sessionID?: string, input: {pattern?: unknown}, result?: {output?: unknown, metadata?: unknown}}} event
+ * @param {{directory: string|undefined}} host
+ * @returns {Array<{hook_event_name: 'PostToolUse', tool_name: 'Grep', tool_input: {pattern: string}, tool_response: {mode: 'content', content: string, appliedLimit: number}, cwd?: string, session_id?: string}>}
+ */
+function grepPayloads(event, host) {
+  const { input } = event;
+  if (typeof input.pattern !== 'string' || input.pattern === '') return [];
+  const matches = event.result?.output;
+  if (!Array.isArray(matches) || event.result?.metadata?.truncated !== true) return [];
+  return [
+    {
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Grep',
+      tool_input: { pattern: input.pattern },
+      tool_response: { mode: 'content', content: matches.map((match) => (typeof match?.text === 'string' ? match.text : '')).join(''), appliedLimit: matches.length },
+      cwd: workingDirectory(host.directory, undefined),
+      session_id: event.sessionID,
+    },
+  ];
+}
+
+/**
+ * The payload for `pdkit hook post-read`: Claude Code's PostToolUse on Read or
+ * Grep, for a read or a search that returned part of what there was — a
+ * window — with what it returned. At most one: a call is one read.
+ *
+ * Only after a call that succeeded. Claude Code ran PostToolUse when a tool
+ * had done its work, and a Read or a Grep that failed — no such file, a
+ * binary one, a pattern that does not parse — went to PostToolUseFailure,
+ * which pdkit never registered. Open Code reports such a call with
+ * `status: "error"` and no result (F32, F265).
+ *
+ * Only through a window: the tool reports one, and a read without one has
+ * nothing for post-read — the bridge filters what it can before a run (D7).
+ * Whether what came back ends inside a block is the handler's to say.
+ *
+ * @param {{tool?: string, sessionID?: string, status?: string, input?: unknown, result?: unknown}} event  execute.after's event
+ * @param {{directory: string|undefined, home: string, platform?: string, lines: (file: string) => Promise<number>}} host
+ *   ctx.location.directory, the home directory Open Code expands `~` to, and
+ *   how many lines a file on disk has, counted as the read tool counts them
+ * @returns {Promise<object[]>}
+ */
+export async function postRead(event, host) {
+  if (event?.status !== 'completed') return [];
+  if (event.input === null || typeof event.input !== 'object') return [];
+  if (event.tool === 'read') return readPayloads(event, host);
+  if (event.tool === 'grep') return grepPayloads(event, host);
+  return [];
 }
