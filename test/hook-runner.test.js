@@ -45,11 +45,15 @@ import { handle as handlePostWrite } from '../lib/hooks/post-write.js';
 import { handle as handlePostClaim } from '../lib/hooks/post-claim.js';
 import { handle as handlePostBash } from '../lib/hooks/post-bash.js';
 import { handle as handlePostRead } from '../lib/hooks/post-read.js';
+import { handle as handleSubagentStop } from '../lib/hooks/task-completed.js';
+import { record as recordAttempt, unblock as unblockTask } from '../lib/attempts.js';
+import { issueDir } from '../lib/config.js';
+import { writeReceipt } from '../lib/evidence.js';
 import { PLUGIN_ROOT } from '../lib/commands/support.js';
 import { spdxHeader } from '../lib/upstream.js';
 import { start, stop } from '../lib/active.js';
 import * as gate from '../lib/gate.js';
-import { setOwns, withdrawTask } from '../lib/state.js';
+import { setOwns, transition, withdrawTask } from '../lib/state.js';
 import { BRANCH, otherRepository, podmanDesktopClone, readyIssue } from './helpers/gate-fixture.js';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -713,6 +717,113 @@ describe('invoke agrees with handle, for post-read', () => {
       outcomes.add(decision.block ? 'refuse' : decision.message ? 'message' : 'pass');
     }
     assert.deepEqual([...outcomes].sort(), ['message', 'pass']);
+  });
+});
+
+// The same for subagent-stop: task-completed.js imported, and the same payload
+// through bin/pdkit, on each of its outcomes — exit 2 with the reason that
+// holds the subagent, the message runHook writes to stdout as it lets one go,
+// and silence. Every call is a stop the handler counts, and the stall limit
+// counts a run's stops: so the run handed to handle() and the one handed to
+// invoke() are two, each with the same stops before it. The task is arranged
+// once for both: the text at the ceiling names when its count started.
+describe('invoke agrees with handle, for subagent-stop', () => {
+  const ISSUE = 18248;
+  let home;
+  let repo;
+  let previousHome;
+
+  before(async () => {
+    home = await realpath(await mkdtemp(join(tmpdir(), 'pdkit-runner-stop-home-')));
+    previousHome = process.env.PDKIT_HOME;
+    process.env.PDKIT_HOME = home;
+    repo = await realpath(await mkdtemp(join(tmpdir(), 'pdkit-runner-stop-repo-')));
+    await execFileAsync('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    await transition(ISSUE, 'triaged', { home });
+    await setOwns(ISSUE, 'T1', ['src/owned.ts'], { home });
+  });
+
+  after(async () => {
+    await stop({ worktree: repo, home });
+    if (previousHome === undefined) delete process.env.PDKIT_HOME;
+    else process.env.PDKIT_HOME = previousHome;
+    for (const dir of [home, repo]) await rm(dir, { recursive: true, force: true });
+  });
+
+  const receipt = () => join(issueDir(home, ISSUE), 'receipts', 'T1.md');
+  const captured = (exitCode) => ({ command: 'pnpm test', exitCode, stdout: 'ok\n', stderr: '', durationMs: 10, at: '2026-07-31T10:00:00.000Z', complete: true });
+
+  /** The payload Open Code's bridge builds (opencode/bridge/payload.js), for a run. */
+  const stopped = (agentId, fields = {}) => ({
+    hook_event_name: 'SubagentStop',
+    agent_id: agentId,
+    agent_type: 'pd-implementer',
+    session_id: 'ses_person',
+    cwd: repo,
+    stop_hook_active: false,
+    ...fields,
+  });
+
+  /** What the decision says, as far as the process protocol carries it. */
+  const carried = (decision) => ({ block: decision.block, reason: decision.reason, message: decision.message });
+
+  /** The tree's task, its receipt and its attempts, from scratch: `exitCode` null for no receipt. */
+  const task = ({ exitCode = null, failed = 0, edited = false, running = true } = {}) => async () => {
+    await stop({ worktree: repo, home });
+    await rm(receipt(), { force: true });
+    await unblockTask({ issue: ISSUE, taskId: 'T1', reason: 'a fixture of its own', home });
+    if (exitCode !== null) await writeReceipt({ issue: ISSUE, taskId: 'T1', run: captured(exitCode), home });
+    if (edited) await writeFile(receipt(), (await readFile(receipt(), 'utf8')).replace('ok', 'fine'));
+    for (let i = 0; i < failed; i += 1) await recordAttempt({ issue: ISSUE, taskId: 'T1', exitCode: 1, home });
+    if (running) await start({ issue: ISSUE, taskId: 'T1', worktree: repo, session: 'ses_person', home });
+  };
+
+  /** Stops of a run before the one compared, with nothing captured between. */
+  const stalled = (count) => async (agentId) => {
+    for (let i = 0; i < count; i += 1) await handleSubagentStop(stopped(agentId), { event: 'subagent-stop', pluginRoot: ROOT });
+  };
+
+  const FIXTURES = [
+    ['no receipt', (id) => stopped(id), task()],
+    ['an edited receipt', (id) => stopped(id), task({ exitCode: 0, edited: true })],
+    ['a receipt of a failed command', (id) => stopped(id), task({ exitCode: 1 })],
+    ['a receipt that passes', (id) => stopped(id), task({ exitCode: 0 })],
+    ['the third stop with nothing captured', (id) => stopped(id), task(), stalled(2)],
+    ['the fourth', (id) => stopped(id), task(), stalled(3)],
+    ['the attempts ceiling', (id) => stopped(id), task({ exitCode: 1, failed: 3 })],
+    ['the ceiling, already told', (id) => stopped(id, { stop_hook_active: true }), task({ exitCode: 1, failed: 3 })],
+    ['another agent', (id) => stopped(id, { agent_type: 'pd-scout' }), task()],
+    ["an agent the host does not name", (id) => stopped(id, { agent_type: undefined }), task()],
+    ["another session's agent", (id) => stopped(id, { session_id: 'ses_elsewhere' }), task()],
+    ['no task running', (id) => stopped(id), task({ running: false })],
+  ];
+
+  let runs = 0;
+  for (const [label, payloadOf, arrange, before = async () => {}] of FIXTURES) {
+    test(label, async () => {
+      const direct = `ses_direct${(runs += 1)}`;
+      await arrange();
+      await before(direct);
+      const expected = carried(await handleSubagentStop(payloadOf(direct), { event: 'subagent-stop', pluginRoot: ROOT }));
+
+      const through = `ses_through${runs}`;
+      await before(through);
+      const actual = carried(await invoke('subagent-stop', payloadOf(through), { root: ROOT }));
+
+      assert.deepEqual(actual, expected);
+    });
+  }
+
+  test('the fixtures cover every outcome: a hold, a pass, and a pass with a message', async () => {
+    const outcomes = new Set();
+    for (const [, payloadOf, arrange, before = async () => {}] of FIXTURES) {
+      const id = `ses_cover${(runs += 1)}`;
+      await arrange();
+      await before(id);
+      const decision = await handleSubagentStop(payloadOf(id), { event: 'subagent-stop', pluginRoot: ROOT });
+      outcomes.add(decision.block ? 'refuse' : decision.message ? 'message' : 'pass');
+    }
+    assert.deepEqual([...outcomes].sort(), ['message', 'pass', 'refuse']);
   });
 });
 

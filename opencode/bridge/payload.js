@@ -538,3 +538,56 @@ export async function postRead(event, host) {
   if (event.tool === 'grep') return grepPayloads(event, host);
   return [];
 }
+
+/**
+ * The payload for `pdkit hook subagent-stop`: Claude Code's SubagentStop, for
+ * a child session that has finished its model work and is about to go idle —
+ * experimental.idle, which Open Code calls for every session, top-level ones
+ * included (F57). At most one: a session that has no parent is no subagent,
+ * and gets none, so no process is started for it.
+ *
+ * Each field from where Open Code keeps it (F54, F57, F58):
+ *
+ * - `agent_id` is the child session's ID. It names the run, and stays the same
+ *   across every stop of it, held or not, and across later rounds: the stall
+ *   limit counts a run's stops by it, and the doctor tells this harness's
+ *   entries in the journal from Claude Code's by its shape (D10).
+ * - `agent_type` is the agent the child runs, by the ID it was registered
+ *   under. A child with none — never seen: Open Code records the agent of
+ *   every child — gets no field, which task-completed.js reads as a host that
+ *   stopped saying, and holds to the receipt: the gate's default. Not the
+ *   empty string, which is Claude Code saying "one of the host's own" and is
+ *   let through uncounted.
+ * - `session_id` is the session at the top of the chain of parents, the one a
+ *   person drives: the caller resolves it (`root`). What started the task is
+ *   that session's shell command.
+ * - `cwd` is the child's directory, which is its parent's when it was made.
+ * - `stop_hook_active` is the bridge's to say (`held`): Open Code does not
+ *   tell a plugin whether it held a session before.
+ *
+ * `transcript_path`, `agent_transcript_path` and `last_assistant_message` are
+ * not set: Open Code keeps no transcript file, and task-completed.js reads
+ * none of them.
+ *
+ * @param {{sessionID?: string}} event  experimental.idle's event
+ * @param {{session: {parentID?: unknown, agent?: unknown, location?: {directory?: unknown}}|undefined, root: string|undefined, held: boolean}} host
+ *   the session's record (ctx.session.get), the session at the top of its
+ *   chain, and whether the bridge held this session's last stop
+ * @returns {Array<{hook_event_name: 'SubagentStop', agent_id: string, agent_type?: string, session_id: string, cwd?: string, stop_hook_active: boolean}>}
+ */
+export function subagentStop(event, host) {
+  const { session } = host;
+  if (typeof event?.sessionID !== 'string' || event.sessionID === '') return [];
+  if (typeof session?.parentID !== 'string' || session.parentID === '') return [];
+  const directory = session.location?.directory;
+  return [
+    {
+      hook_event_name: 'SubagentStop',
+      agent_id: event.sessionID,
+      ...(typeof session.agent === 'string' && session.agent !== '' ? { agent_type: session.agent } : {}),
+      session_id: typeof host.root === 'string' && host.root !== '' ? host.root : session.parentID,
+      cwd: typeof directory === 'string' && directory !== '' ? directory : undefined,
+      stop_hook_active: host.held === true,
+    },
+  ];
+}

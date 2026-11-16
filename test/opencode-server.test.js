@@ -48,6 +48,8 @@ const FULL = [
   // pre-write's, which the bridge registers on the same point.
   'tool.hook execute.before',
   'tool.hook execute.after',
+  // subagent-stop's, on the point a session reaches before it goes idle.
+  'session.hook experimental.idle',
   'shell.hook create.before',
   'agent.transform',
   'command.transform',
@@ -98,6 +100,7 @@ function host({ app = RELEASE, options, fail = [] } = {}) {
     location: { directory: DIRECTORY, project: { id: 'global', directory: DIRECTORY, canonical: DIRECTORY } },
     tool: hooks('tool'),
     session: hooks('session'),
+    event: { subscribe: async function* () {} },
     shell: hooks('shell'),
     permission: hooks('permission'),
     agent: transform('agent'),
@@ -187,9 +190,9 @@ describe('on a supported Open Code', () => {
 
   // Until the rest of the bridge and the registrars are filled in, loading the
   // plugin must not change what a session does beyond the gate, pre-write,
-  // post-write, post-claim, post-bash and post-read — which have nothing to
-  // say about this command or this read.
-  test('and none of the registrations but the gate, pre-write, post-write, post-claim, post-bash and post-read changes anything yet', async (t) => {
+  // post-write, post-claim, post-bash, post-read and subagent-stop — which
+  // have nothing to say about this command or this read.
+  test('and none of the registrations but the gate, pre-write, post-write, post-claim, post-bash, post-read and subagent-stop changes anything yet', async (t) => {
     logOf(t);
     const { ctx, callbacks } = host();
 
@@ -570,6 +573,7 @@ describe('a registration that fails', () => {
     ['agents', 'agent.transform'],
     ['commands and skills', 'command.transform'],
     ['hooks', 'tool.hook execute.after'],
+    ['hooks', 'session.hook experimental.idle'],
     ['shell environment', 'shell.hook create.before'],
   ]) {
     test(`leaves the gate and the rest in place: ${failing}`, async (t) => {

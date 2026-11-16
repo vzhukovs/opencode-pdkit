@@ -218,6 +218,48 @@ describe('post-read', () => {
   });
 });
 
+// exit 2 when a subagent stops kept it running under Claude Code, with the
+// reason as its next instruction: a hold, not a refusal of anything.
+describe('subagent-stop', () => {
+  const REASON = 'pdkit: T1 of issue 18248 cannot be completed — there is no receipt.\n  Run: pdkit receipt write --issue 18248 --task T1';
+
+  test('a refusal holds the subagent, with the reason as what it does next (HK-18)', () => {
+    assert.deepEqual(answer('subagent-stop', { block: true, rule: 'receipt', reason: REASON }), {
+      action: { kind: 'hold', text: REASON },
+      dropped: [],
+    });
+  });
+
+  test('anything else lets it go', () => {
+    assert.deepEqual(answer('subagent-stop', { block: false }), { action: { kind: 'pass' }, dropped: [] });
+  });
+
+  // subagent-stop fails open: a handler that cannot run must not keep a
+  // subagent running, nor stop the work.
+  test('a run that gave no answer arrives as a pass, and is one', () => {
+    const decision = decide('subagent-stop', { code: null, stdout: '', stderr: '', failure: { kind: 'deadline', detail: 'gave no answer within 10s and was stopped' } });
+    assert.equal(decision.block, false);
+    assert.match(decision.diagnostic, /^pdkit: hook "subagent-stop" gave no answer .*; allowing$/);
+    assert.deepEqual(answer('subagent-stop', decision), { action: { kind: 'pass' }, dropped: [] });
+  });
+
+  // A receipt accepted (HK-35), a run let go stalled (HK-20) or blocked
+  // (HK-21): Claude Code wrote these to its debug log, as an exit 0's stdout.
+  test('what it says while it lets the subagent go is listed as dropped', () => {
+    assert.deepEqual(answer('subagent-stop', { block: false, message: 'pdkit: T1 has a receipt for `pnpm test`' }), {
+      action: { kind: 'pass' },
+      dropped: [{ field: 'message', text: 'pdkit: T1 has a receipt for `pnpm test`' }],
+    });
+  });
+
+  test('so is a notice', () => {
+    assert.deepEqual(answer('subagent-stop', { block: true, reason: REASON, notice: 'for the person' }), {
+      action: { kind: 'hold', text: REASON },
+      dropped: [{ field: 'notice', text: 'for the person' }],
+    });
+  });
+});
+
 describe('combine: one answer for a call several runs decided', () => {
   const pass = { action: { kind: 'pass' }, dropped: [] };
   const refuse = (text) => ({ action: { kind: 'refuse', text }, dropped: [] });

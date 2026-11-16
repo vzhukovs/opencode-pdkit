@@ -124,6 +124,7 @@ function host(directory = repo) {
     location: { directory, project: { id: 'global', directory, canonical: directory } },
     tool: hooks,
     session: { hook: async () => registered },
+    event: { subscribe: async function* () {} },
     shell: { hook: async () => registered },
     permission: { hook: async () => registered },
     agent: transforms,

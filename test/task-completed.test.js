@@ -252,9 +252,39 @@ describe('who the gate is for', () => {
   test('the name matches the agent this plugin ships', async () => {
     const definition = await readFile(join(process.cwd(), 'agents', 'pd-implementer.md'), 'utf8');
     const name = /^name:\s*(\S+)\s*$/m.exec(definition)?.[1];
-    const plugin = JSON.parse(await readFile(join(process.cwd(), '.claude-plugin', 'plugin.json'), 'utf8')).name;
 
-    assert.equal(IMPLEMENTER, `${plugin}:${name}`);
+    assert.equal(IMPLEMENTER, name);
+  });
+
+  // Open Code reports an agent by its bare ID; Claude Code reported a plugin's
+  // agent as `<plugin>:<name>`. Compared with one spelling only, the gate would
+  // let the implementer through under the other host, and say nothing.
+  describe('the implementer is held whichever host names it', () => {
+    // A run of its own for each, so that no case counts toward another's stall limit.
+    const finishAs = (agentId, agentType) =>
+      taskCompleted({ agent_id: agentId, agent_type: agentType, cwd: WORKTREE }, { event: 'subagent-stop', pluginRoot: '' });
+
+    for (const [host, agentId, agentType] of [
+      ['Open Code', 'ses_named-bare', 'pd-implementer'],
+      ['Claude Code', 'a-named-prefixed', 'pd:pd-implementer'],
+    ]) {
+      test(`as ${host} reports it: ${agentType}`, async () => {
+        const decision = await finishAs(agentId, agentType);
+
+        assert.equal(decision.block, true);
+        assert.match(decision.reason, /there is no receipt/);
+        const last = (await readJournal({ issue: ISSUE, event: 'agent-done' }, { home })).at(-1);
+        assert.equal(last.detail, `agent task ${agentId}; ${agentType}; while T1 was active`);
+      });
+    }
+
+    // The whole name, not a part of it.
+    for (const agentType of ['pd-implementer-helper', 'my-pd-implementer', 'pd:pd-implementer:review', 'PD-IMPLEMENTER']) {
+      test(`and no other agent is: ${agentType}`, async () => {
+        const decision = await finishAs(`a-other-${agentType}`, agentType);
+        assert.equal(decision.block, false);
+      });
+    }
   });
 });
 

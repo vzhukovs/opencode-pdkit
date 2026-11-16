@@ -27,6 +27,11 @@
 // its decision back into what Open Code understands (./answer.js) — a throw,
 // text added to a tool result, a message to the session.
 //
+// Most hooks are a run for an event and an answer to it. subagent-stop also
+// remembers: whether it held a subagent's last stop, which Claude Code told
+// its handler and Open Code does not (D11). That memory is the bridge's, per
+// loaded instance of the plugin, and goes with cleanup().
+//
 // It is the one module of the bridge the entry point loads, and it loads the
 // rest itself. The entry point registers the gate's callback before loading
 // anything, and hands it to preBash() once this module has loaded; if it fails
@@ -57,6 +62,7 @@ import {
   postWrite as postWritePayloads,
   preBash as preBashPayload,
   preWrite as preWritePayloads,
+  subagentStop as subagentStopPayloads,
 } from './payload.js';
 
 const PRE_BASH = 'pre-bash';
@@ -65,6 +71,36 @@ const POST_WRITE = 'post-write';
 const POST_CLAIM = 'post-claim';
 const POST_BASH = 'post-bash';
 const POST_READ = 'post-read';
+const SUBAGENT_STOP = 'subagent-stop';
+
+/** Who added a message to a session: the plugin, by its ID, as Open Code's own plugins sign theirs. */
+const SOURCE = 'opencode-pdkit';
+
+/**
+ * How many stops in a row of one round of a subagent the bridge holds before
+ * it lets the subagent go, whatever the hook says. Not a rule of pdkit's but
+ * Claude Code's, which the handler was written against: "Claude Code
+ * overrides the hook and ends the turn after 8 consecutive blocks" (its hooks
+ * reference, Stop input; CLAUDE_CODE_STOP_HOOK_BLOCK_CAP, default 8, counts
+ * Stop and SubagentStop alike). Open Code has no such limit — a plugin that
+ * keeps adding input "must bound its own loop" (F57) — and without one,
+ * `exec.max_attempts: 0` would hold an implementer whose capture stays red for
+ * ever, where Claude Code let it go after eight.
+ */
+export const HOLD_LIMIT = 8;
+
+/**
+ * How far up a chain of parents the bridge looks for the session at its top.
+ * Open Code nests subagents one deep unless configured otherwise
+ * (`experimental.subagent_depth`); this is only a bound on the walk.
+ */
+const DEPTH_LIMIT = 16;
+
+/**
+ * The ends of a run that no stop follows: experimental.idle is not called
+ * after a run fails or is interrupted (F57).
+ */
+const ENDED = ['session.execution.failed', 'session.execution.interrupted'];
 
 /** A line feed, the byte a line of a text file ends with. */
 const LF = 0x0a;
@@ -87,6 +123,15 @@ const reason = (error) => (error instanceof Error ? error.message : String(error
  * @returns {import('../../lib/hooks/runner.js').Decision}
  */
 const failedOpen = (event, error) => ({ block: false, diagnostic: `pdkit: hook "${event}" failed in the hook bridge (${reason(error)}); allowing` });
+
+/**
+ * The first line of a text: what a person sees of a message the bridge adds
+ * to a session, above it (F86).
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+const firstLine = (text) => text.split('\n', 1)[0].trim();
 
 /**
  * The home directory Open Code expands `~` in a path to (Global.Path.home): its
@@ -132,6 +177,7 @@ async function linesOf(file) {
  *   postBash: (event: {tool?: string, sessionID?: string, status?: string, input?: unknown, result?: unknown}) => Promise<import('./answer.js').Answer>,
  *   postRead: (event: {tool?: string, sessionID?: string, status?: string, input?: unknown, result?: unknown}) => Promise<import('./answer.js').Answer>,
  *   afterTool: (event: {tool?: string, sessionID?: string, status?: string, input?: unknown, result?: unknown}) => Promise<void>,
+ *   subagentStop: (event: {sessionID?: string}) => Promise<void>,
  *   register: () => Promise<void>,
  *   cleanup: () => Promise<void>,
  * }}
@@ -156,6 +202,69 @@ export function createBridge(ctx, plugin) {
     } catch {
       // Nowhere else to say it.
     }
+  };
+
+  /**
+   * The subagents whose last stop the bridge held, each with how many stops
+   * in a row of the current round it has held. Whether one is here is what
+   * Claude Code told the handler as `stop_hook_active`, and the count is what
+   * its limit is on (HOLD_LIMIT); Open Code tells a plugin neither (F58).
+   *
+   * A session goes in when a stop is held, and comes out when one is let go,
+   * for whatever reason, or when its run fails or is interrupted: no stop of
+   * that round comes after either (F57). So the first stop of a round —
+   * the first ever, or one after a follow-up — is never taken for a stop the
+   * bridge already held, as Claude Code did not take it. Each subagent is its
+   * own key: subagents run side by side and are held each on its own (F66).
+   *
+   * In memory, for this instance: a reload of the plugin in the middle of a
+   * round forgets it (§13 DV3).
+   *
+   * @type {Map<string, number>}
+   */
+  const held = new Map();
+
+  /** Ends the watch on runs that fail or are interrupted, at cleanup. */
+  const watching = new AbortController();
+
+  /**
+   * Forget a held subagent whose run ended without a stop. Never throws;
+   * a watch that cannot be had, or breaks, says so once.
+   */
+  const watch = async () => {
+    try {
+      for await (const event of ctx.event.subscribe({ types: ENDED, signal: watching.signal })) {
+        if (ENDED.includes(event?.type)) held.delete(event.data?.sessionID);
+      }
+    } catch (error) {
+      if (watching.signal.aborted) return;
+      report(SUBAGENT_STOP, [
+        {
+          block: false,
+          diagnostic:
+            `pdkit: the hook bridge cannot follow the runs of subagents that fail or are interrupted (${reason(error)}); ` +
+            'one held when that happens is taken, at its next stop, for one already told',
+        },
+      ], []);
+    }
+  };
+
+  /**
+   * The session at the top of a session's chain of parents: the one a person
+   * drives, and whose shell commands started the task. Undefined for a
+   * session that has no parent, without a lookup.
+   *
+   * @param {{parentID?: unknown}|undefined} session
+   * @returns {Promise<string|undefined>}
+   */
+  const rootOf = async (session) => {
+    let root = session?.parentID;
+    for (let step = 0; step < DEPTH_LIMIT && typeof root === 'string' && root !== ''; step += 1) {
+      const above = (await ctx.session.get({ sessionID: root }))?.parentID;
+      if (typeof above !== 'string' || above === '') return root;
+      root = above;
+    }
+    return typeof root === 'string' && root !== '' ? root : undefined;
   };
 
   /**
@@ -318,17 +427,93 @@ export function createBridge(ctx, plugin) {
     },
 
     /**
-     * Register every hook but the gate, which the entry point owns and
-     * registers first. pre-write is on the same point as the gate, after it;
-     * the post hooks share one callback after a tool (afterTool).
+     * subagent-stop, for a session about to go idle: count the stop of a
+     * subagent, and hold the implementer until its task has a receipt that
+     * passes. Open Code asks this of every session, a person's included; one
+     * that has no parent is no subagent, and costs a lookup and no process.
+     *
+     * A hold is the reason added to the child session as a message: Open Code
+     * then runs it in the same execution instead of letting the child go idle,
+     * and the parent hears nothing until a stop is let go — one report, with
+     * the last answer (F58). The model reads the reason as its next
+     * instruction, as it read it under Claude Code; the person sees its first
+     * line, in the child's session (F86).
+     *
+     * Nothing leaves this callback as an exception: one would fail the child's
+     * run, lose its answer, and hand the parent the exception's text instead
+     * (F59). Whatever fails — the session that cannot be looked up, the run
+     * that gives no answer, the message that cannot be added — lets the
+     * subagent go, and says why in the log. A run that hangs is stopped at the
+     * runner's deadline (F59: Open Code would wait on it without end).
      */
-    async register() {
-      await ctx.tool.hook('execute.before', (event) => bridge.preWrite(event));
-      // TODO(T4.11–T4.14): the rest of pdkit's hook events.
-      await ctx.tool.hook('execute.after', (event) => bridge.afterTool(event));
+    async subagentStop(event) {
+      const child = event?.sessionID;
+      try {
+        if (typeof child !== 'string' || child === '') return;
+        const session = await ctx.session.get({ sessionID: child });
+        const payloads = subagentStopPayloads(event, { session, root: await rootOf(session), held: held.has(child) });
+        if (payloads.length === 0) return;
+
+        const decision = await invoke(SUBAGENT_STOP, payloads[0], { root: plugin.root });
+        const answered = answer(SUBAGENT_STOP, decision);
+        report(SUBAGENT_STOP, [decision], answered.dropped);
+        if (answered.action.kind !== 'hold') {
+          held.delete(child);
+          return;
+        }
+
+        const holds = (held.get(child) ?? 0) + 1;
+        if (holds > HOLD_LIMIT) {
+          held.delete(child);
+          report(SUBAGENT_STOP, [{ block: false, diagnostic: `pdkit: hook "subagent-stop" held ${child} ${HOLD_LIMIT} times in a row, as many as Claude Code allowed; letting it go` }], []);
+          return;
+        }
+        const text = answered.action.text;
+        await ctx.session.synthetic({ sessionID: child, text, description: firstLine(text), metadata: { source: SOURCE, hook: SUBAGENT_STOP } });
+        held.set(child, holds);
+      } catch (error) {
+        held.delete(child);
+        report(SUBAGENT_STOP, [failedOpen(SUBAGENT_STOP, error)], []);
+      }
     },
 
-    async cleanup() {},
+    /**
+     * Register every hook but the gate, which the entry point owns and
+     * registers first. pre-write is on the same point as the gate, after it;
+     * the post hooks share one callback after a tool (afterTool);
+     * subagent-stop is on the point a session reaches before it goes idle.
+     *
+     * Each on its own: a point the host does not have — experimental.idle may
+     * be renamed in a later Open Code (F57) — leaves the others registered.
+     * What failed is thrown after the rest, for the entry point to report.
+     */
+    async register() {
+      const failures = [];
+      const attempt = async (registration) => {
+        try {
+          await registration();
+        } catch (error) {
+          failures.push(reason(error));
+        }
+      };
+      await attempt(() => ctx.tool.hook('execute.before', (event) => bridge.preWrite(event)));
+      await attempt(() => ctx.tool.hook('execute.after', (event) => bridge.afterTool(event)));
+      await attempt(async () => {
+        await ctx.session.hook('experimental.idle', (event) => bridge.subagentStop(event));
+        void watch();
+      });
+      // TODO(T4.12–T4.14): the rest of pdkit's hook events.
+      if (failures.length > 0) throw new Error(failures.join('; '));
+    },
+
+    /**
+     * What this instance remembers goes: the subagents it held, and the watch
+     * on their runs. The host removes the registrations itself (F250).
+     */
+    async cleanup() {
+      watching.abort();
+      held.clear();
+    },
   };
   return bridge;
 }

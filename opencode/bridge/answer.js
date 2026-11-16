@@ -39,11 +39,19 @@
 // call has run, and stays a call that succeeded, as it did under Claude Code;
 // the model reads the text in the result rather than in a block of its own,
 // and the person sees it where Open Code shows a result's text (§13 DV8).
+//
+// When a subagent stops, exit 2 is not a refusal but an instruction: Claude
+// Code kept the subagent running with the reason as what it does next. Open
+// Code does the same for a message a plugin adds to the child session before
+// it goes idle (F58), so a refusal there is a hold, and the bridge adds the
+// message. What a handler says while it lets the subagent go — a receipt
+// accepted, a run let go stalled — went to Claude Code's debug log, and is
+// `dropped` here.
 
 /** @typedef {import('../../lib/hooks/runner.js').Decision} Decision */
 
 /**
- * @typedef {{kind: 'refuse', text: string} | {kind: 'append', text: string} | {kind: 'pass'}} Action
+ * @typedef {{kind: 'refuse', text: string} | {kind: 'append', text: string} | {kind: 'hold', text: string} | {kind: 'pass'}} Action
  * @typedef {{field: 'message'|'notice', text: string}} Dropped
  * @typedef {{action: Action, dropped: Dropped[]}} Answer
  */
@@ -94,6 +102,20 @@ const afterTool = (decision) => {
   };
 };
 
+/**
+ * When a subagent stops: a refusal holds it, with the reason as its next
+ * instruction; anything else lets it go. What a run that gave no answer means,
+ * runner.decide has already said: a pass — subagent-stop fails open. One run
+ * for each stop, so a hold is never one of several answers to combine.
+ *
+ * @param {Decision} decision
+ * @returns {Answer}
+ */
+const whenStopping = (decision) => ({
+  action: decision.block ? { kind: 'hold', text: decision.reason } : PASS,
+  dropped: unheard(decision, ['message', 'notice']),
+});
+
 /** @type {Record<string, (decision: Decision) => Answer>} */
 const ANSWERS = {
   'pre-bash': beforeTool,
@@ -121,6 +143,11 @@ const ANSWERS = {
   // additionalContext; the model gets it in the call's result. post-read never
   // blocks.
   'post-read': afterTool,
+  // The implementer stopping before its task has a receipt that passes
+  // (HK-18–HK-21): held, with the reason as its next instruction. Letting it
+  // go says why only in what reaches no one: the receipt accepted (HK-35), a
+  // run let go stalled (HK-20) or blocked (HK-21).
+  'subagent-stop': whenStopping,
 };
 
 /**

@@ -27,7 +27,7 @@ import assert from 'node:assert/strict';
 import { join, resolve, win32 } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { hostPath, postBash, postClaim, postRead, postWrite, preBash, preWrite } from '../opencode/bridge/payload.js';
+import { hostPath, postBash, postClaim, postRead, postWrite, preBash, preWrite, subagentStop } from '../opencode/bridge/payload.js';
 
 const DIRECTORY = join(tmpdir(), 'project');
 
@@ -750,6 +750,79 @@ describe('post-read', () => {
   test('a read with no path is no payload', async () => {
     for (const input of [undefined, null, {}, { path: '' }, { path: 7 }]) {
       assert.deepEqual(await postRead(read(input, page(CUT, 1, true, 3)), host), [], JSON.stringify(input));
+    }
+  });
+});
+
+// experimental.idle's event carries the session and nothing else (F57); the
+// rest comes from the session's record (F54) and from the bridge.
+describe('subagent-stop', () => {
+  const idle = (sessionID = 'ses_child') => ({ sessionID, background: [] });
+  const record = (fields = {}) => ({
+    id: 'ses_child',
+    parentID: 'ses_parent',
+    projectID: 'global',
+    agent: 'pd-implementer',
+    title: 'Implement T1',
+    location: { directory: DIRECTORY },
+    ...fields,
+  });
+
+  test("is Claude Code's SubagentStop: the run, its agent, the session at the top, the directory, and whether it was held", () => {
+    assert.deepEqual(subagentStop(idle(), { session: record(), root: 'ses_root', held: true }), [
+      {
+        hook_event_name: 'SubagentStop',
+        agent_id: 'ses_child',
+        agent_type: 'pd-implementer',
+        session_id: 'ses_root',
+        cwd: DIRECTORY,
+        stop_hook_active: true,
+      },
+    ]);
+  });
+
+  // The ID task-completed.js names the run by, and counts its stops by: the
+  // child session's, which is one for every stop of it (F58).
+  test('the run is the child session, as Open Code names it', () => {
+    assert.equal(subagentStop(idle('ses_e2183eb1affeClZK6uyktKPxSZ'), { session: record(), root: 'ses_root', held: false })[0].agent_id, 'ses_e2183eb1affeClZK6uyktKPxSZ');
+  });
+
+  test('not held before is false, as Claude Code sent it', () => {
+    assert.equal(subagentStop(idle(), { session: record(), root: 'ses_root', held: false })[0].stop_hook_active, false);
+  });
+
+  test('with no root found, the session is its parent', () => {
+    assert.equal(subagentStop(idle(), { session: record(), root: undefined, held: false })[0].session_id, 'ses_parent');
+  });
+
+  // Every session goes idle, a person's included: no parent, no subagent.
+  test('a session with no parent is no subagent, and no payload', () => {
+    for (const parentID of [undefined, null, '', 7]) {
+      assert.deepEqual(subagentStop(idle(), { session: record({ parentID }), root: undefined, held: false }), [], String(parentID));
+    }
+    assert.deepEqual(subagentStop(idle(), { session: undefined, root: undefined, held: false }), []);
+  });
+
+  test('an event with no session is no payload', () => {
+    for (const event of [undefined, {}, { sessionID: '' }, { sessionID: 7 }]) {
+      assert.deepEqual(subagentStop(event, { session: record(), root: 'ses_root', held: false }), [], JSON.stringify(event));
+    }
+  });
+
+  // No field is what task-completed.js reads as a host that stopped saying,
+  // and gates. The empty string would say "one of the host's own", and be let
+  // through uncounted.
+  test('an agent the record does not name is no field at all, never an empty one', () => {
+    for (const agent of [undefined, null, '', 7]) {
+      const [payload] = subagentStop(idle(), { session: record({ agent }), root: 'ses_root', held: false });
+      assert.ok(!Object.hasOwn(payload, 'agent_type'), String(agent));
+    }
+  });
+
+  // The runner refuses to guess at a directory it is not given.
+  test('a record with no directory gives no cwd', () => {
+    for (const location of [undefined, {}, { directory: '' }, { directory: 7 }]) {
+      assert.equal(subagentStop(idle(), { session: record({ location }), root: 'ses_root', held: false })[0].cwd, undefined, JSON.stringify(location));
     }
   });
 });
