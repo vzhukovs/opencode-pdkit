@@ -186,9 +186,9 @@ describe('on a supported Open Code', () => {
   });
 
   // Until the rest of the bridge and the registrars are filled in, loading the
-  // plugin must not change what a session does beyond the gate, pre-write and
-  // post-write — which has nothing to say about a command.
-  test('and none of the registrations but the gate, pre-write and post-write changes anything yet', async (t) => {
+  // plugin must not change what a session does beyond the gate, pre-write,
+  // post-write and post-claim — which have nothing to say about a command.
+  test('and none of the registrations but the gate, pre-write, post-write and post-claim changes anything yet', async (t) => {
     logOf(t);
     const { ctx, callbacks } = host();
 
@@ -255,6 +255,31 @@ describe('on a supported Open Code', () => {
     assert.deepEqual(event.result, { content: [{ type: 'text', text: 'ok' }] });
     assert.equal(log().length, 1, log().join('\n'));
     assert.match(log()[0], /^opencode-pdkit: pdkit: hook "post-write" cannot run: its working directory does not exist: .*; allowing$/);
+  });
+
+  // post-claim's rules are test/opencode-post-claim.test.js's; this is that
+  // the same callback runs it, after a write of markdown and not of anything
+  // else. As above, a run that is attempted says so in the log.
+  test('post-claim runs through the bridge, after writes of markdown only', async (t) => {
+    const log = logOf(t);
+    const { ctx, callbacks } = host();
+
+    await plugin.setup(ctx);
+
+    const [afterTool] = callbacks('tool.hook execute.after');
+    ctx.location = { ...ctx.location, directory: join(DIRECTORY, 'pdkit-no-such-directory') };
+    const done = (event) => ({ ...event, status: 'completed', result: { content: [{ type: 'text', text: 'ok' }] } });
+
+    const event = done({ ...write(), input: { path: 'notes.md', content: 'There is no `env.uriScheme`.' } });
+    await afterTool(event);
+    assert.deepEqual(event.result, { content: [{ type: 'text', text: 'ok' }] });
+    // Each hook writes its line when its run ends: in no set order.
+    assert.deepEqual(
+      log()
+        .map((line) => line.replace(/ does not exist: .*; allowing$/, ' does not exist; allowing'))
+        .sort(),
+      ['post-claim', 'post-write'].map((hook) => `opencode-pdkit: pdkit: hook "${hook}" cannot run: its working directory does not exist; allowing`),
+    );
   });
 
   // What makes `pdkit` a bare command in a session, and tells doctor which

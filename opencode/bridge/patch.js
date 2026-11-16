@@ -36,6 +36,12 @@
 // writes nothing.
 //
 // Only the reading. Applying the hunks to a file is the tool's business.
+//
+// One field is this module's own: the lines a chunk adds (`addedLines`). The
+// tool's reading puts a line of context in both oldLines and newLines and
+// keeps no mark of which lines of newLines began with `+`; a hook that reads
+// what a patch wrote needs that mark. The field is added beside the tool's
+// and changes nothing else the reading gives, accepts or refuses.
 
 const BEGIN = '*** Begin Patch';
 const END = '*** End Patch';
@@ -47,7 +53,9 @@ const MOVE = '*** Move to: ';
 const END_OF_FILE = '*** End of File';
 
 /**
- * @typedef {{oldLines: string[], newLines: string[], changeContext?: string, endOfFile?: boolean}} Chunk
+ * @typedef {{oldLines: string[], newLines: string[], addedLines: string[], changeContext?: string, endOfFile?: boolean}} Chunk
+ *   `addedLines`: the lines of newLines that begin with `+` in the patch, in
+ *   order — newLines less the context. Not the tool's (see above).
  * @typedef {{type: 'add', path: string, contents: string}
  *   | {type: 'delete', path: string}
  *   | {type: 'update', path: string, movePath: string|undefined, chunks: Chunk[]}} Hunk
@@ -214,12 +222,12 @@ function parseUpdate(lines, start, end, path, hunk) {
       if (previous && previous.oldLines.length === 0 && previous.newLines.length === 0) {
         return invalid(index, `unexpected line found in update hunk: '${line}'`);
       }
-      chunks.push({ oldLines: [], newLines: [], changeContext: updateLine === '@@' ? undefined : updateLine.slice('@@ '.length) });
+      chunks.push({ oldLines: [], newLines: [], addedLines: [], changeContext: updateLine === '@@' ? undefined : updateLine.slice('@@ '.length) });
       index++;
       continue;
     }
 
-    if (chunks.length === 0) chunks.push({ oldLines: [], newLines: [] });
+    if (chunks.length === 0) chunks.push({ oldLines: [], newLines: [], addedLines: [] });
     const chunk = chunks.at(-1);
     if (line === '') {
       chunk.oldLines.push('');
@@ -231,6 +239,7 @@ function parseUpdate(lines, start, end, path, hunk) {
       chunk.oldLines.push(line.slice(1));
     } else if (line.startsWith('+')) {
       chunk.newLines.push(line.slice(1));
+      chunk.addedLines.push(line.slice(1));
     } else {
       return invalid(index, `unexpected line found in update hunk: '${line}'`);
     }

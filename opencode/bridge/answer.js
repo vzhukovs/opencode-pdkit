@@ -104,6 +104,12 @@ const ANSWERS = {
   // (HK-12); a schema file allows with a reminder (HK-13). The model gets
   // either in the write's result.
   'post-write': afterTool,
+  // A markdown file that calls a backticked name missing, asks whether it is
+  // needed, or proposes adding a dotted one, when the name matches nothing in
+  // podman-desktop outside that file (HK-16): Claude Code placed the reminder
+  // beside the write as additionalContext; the model gets it in the write's
+  // result. post-claim never blocks.
+  'post-claim': afterTool,
 };
 
 /**
@@ -120,11 +126,12 @@ export function answer(event, decision) {
 /**
  * One answer for a call that took several runs to decide — a patch, which
  * pre-write checks once for each file it changes and post-write once for each
- * file it leaves. Any refusal refuses the call: the host has no way to apply
- * part of one. Otherwise every distinct text for the model goes into the one
- * result, in the order of the runs, as Claude Code would have placed one
- * beside each of as many separate writes. The text of a refusal is every
- * distinct reason, the same way; what reaches no one is listed once.
+ * file it leaves; or any write, which post-write and post-claim both look at.
+ * Any refusal refuses the call: the host has no way to apply part of one.
+ * Otherwise every distinct text for the model goes into the one result, in
+ * the order of the runs, as Claude Code would have placed one beside each of
+ * as many separate writes. The text of a refusal is every distinct reason, the
+ * same way; what reaches no one is listed once.
  *
  * @param {Answer[]} answers
  * @returns {Answer}

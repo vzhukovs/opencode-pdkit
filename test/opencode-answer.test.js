@@ -131,6 +131,35 @@ describe('post-write', () => {
   });
 });
 
+describe('post-claim', () => {
+  const REMINDER = 'pdkit: this text proposes or calls missing `env.uriScheme`, and that name matches nothing in podman-desktop outside this file. …';
+
+  test('the reminder adds itself to the result (HK-16)', () => {
+    assert.deepEqual(answer('post-claim', { block: false, rule: 'name-claim', message: REMINDER }), {
+      action: { kind: 'append', text: REMINDER },
+      dropped: [],
+    });
+  });
+
+  test('nothing to say changes nothing', () => {
+    assert.deepEqual(answer('post-claim', { block: false }), { action: { kind: 'pass' }, dropped: [] });
+  });
+
+  test('a run that gave no answer arrives as a pass, and is one', () => {
+    const decision = decide('post-claim', { code: null, stdout: '', stderr: '', failure: { kind: 'deadline', detail: 'gave no answer within 10s and was stopped' } });
+    assert.equal(decision.block, false);
+    assert.match(decision.diagnostic, /^pdkit: hook "post-claim" gave no answer within 10s and was stopped; allowing$/);
+    assert.deepEqual(answer('post-claim', decision), { action: { kind: 'pass' }, dropped: [] });
+  });
+
+  test('a notice has no way to the person, and is listed as dropped', () => {
+    assert.deepEqual(answer('post-claim', { block: false, notice: 'for the person', message: REMINDER }), {
+      action: { kind: 'append', text: REMINDER },
+      dropped: [{ field: 'notice', text: 'for the person' }],
+    });
+  });
+});
+
 describe('combine: one answer for a call several runs decided', () => {
   const pass = { action: { kind: 'pass' }, dropped: [] };
   const refuse = (text) => ({ action: { kind: 'refuse', text }, dropped: [] });

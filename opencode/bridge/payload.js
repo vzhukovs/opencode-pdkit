@@ -251,3 +251,91 @@ export function postWrite(event, host) {
   if (event?.status !== 'completed') return [];
   return payloadsFor('PostToolUse', changes(event, written), event, host);
 }
+
+/** Where a handler reads the text a call wrote: a Write's whole file, an Edit's new text. */
+const TEXT_FIELD = { Write: 'content', Edit: 'new_string' };
+
+/**
+ * The text one call of a write tool wrote, file by file, as the model named
+ * the files, each with the Claude Code tool whose payload carries it: Write
+ * for the whole of a file, Edit for new text in one. Empty for any other tool,
+ * and for a call whose input names nothing the tool would accept.
+ *
+ * write writes its `content`, whole. edit writes its `newString`, Edit's
+ * `new_string` (F38). A patch writes, for a file it adds, its contents, and
+ * for a file it updates — where it moves it to, when it moves it — the lines
+ * its chunks add (`addedLines`): not a line of context, which was there
+ * before, and not a line it removes. A file it deletes it writes nothing in.
+ *
+ * @param {{tool?: string, input?: unknown}|undefined} event
+ * @returns {{path: string, tool_name: 'Write'|'Edit', text: string}[]}
+ */
+function texts(event) {
+  const input = event?.input;
+  if (input === null || typeof input !== 'object') return [];
+  const text = (value) => (typeof value === 'string' ? value : '');
+
+  if (Object.hasOwn(ONE_FILE, event?.tool)) {
+    if (typeof input.path !== 'string' || input.path === '') return [];
+    return [{ path: input.path, tool_name: ONE_FILE[event.tool], text: text(event.tool === 'write' ? input.content : input.newString) }];
+  }
+
+  if (event.tool === 'patch' && typeof input.patchText === 'string') {
+    const parsed = parsePatch(input.patchText);
+    if ('error' in parsed) return [];
+    return parsed.hunks.flatMap((hunk) => {
+      if (hunk.type === 'add') return [{ path: hunk.path, tool_name: 'Write', text: hunk.contents }];
+      if (hunk.type === 'update') return [{ path: hunk.movePath ?? hunk.path, tool_name: 'Edit', text: hunk.chunks.flatMap((chunk) => chunk.addedLines).join('\n') }];
+      return [];
+    });
+  }
+
+  return [];
+}
+
+/**
+ * The payloads for `pdkit hook post-claim`: Claude Code's PostToolUse on Write
+ * or Edit, one for each markdown file a call of a write tool wrote text in,
+ * with that text — a Write's `content`, an Edit's `new_string` — which is
+ * where post-claim reads the claims it checks.
+ *
+ * Only after a call that succeeded, as post-write. Only markdown: post-claim's
+ * own first test is a `file_path` ending in `.md`, and a run for any other
+ * file would be a process that says nothing — the bridge filters what it can
+ * before a run (D7). The test is the handler's, on the same path, so the two
+ * cannot disagree; the handler still makes it.
+ *
+ * `file_path` is absolute (hostPath), and that matters here: post-claim leaves
+ * the file it was given out of its search, and takes a relative path for one
+ * from the repository's root, not from `cwd` — wrong for a session in a
+ * subdirectory (T1.4). A file a patch names twice is one payload, with the
+ * text of each hunk in the order of the patch.
+ *
+ * @param {{tool?: string, sessionID?: string, status?: string, input?: unknown}} event  execute.after's event
+ * @param {{directory: string|undefined, home: string, platform?: string}} host
+ *   ctx.location.directory, and the home directory Open Code expands `~` to
+ * @returns {Array<{hook_event_name: 'PostToolUse', tool_name: 'Write'|'Edit', tool_input: {file_path: string, content?: string, new_string?: string}, cwd?: string, session_id?: string}>}
+ */
+export function postClaim(event, host) {
+  if (event?.status !== 'completed') return [];
+  /** @type {Map<string, ReturnType<typeof postClaim>[number]>} */
+  const payloads = new Map();
+  for (const { path, tool_name, text } of texts(event)) {
+    const file = hostPath(host.directory, path, host) ?? path;
+    if (!file.endsWith('.md')) continue;
+    const known = payloads.get(file);
+    if (known) {
+      const field = TEXT_FIELD[known.tool_name];
+      known.tool_input[field] = `${known.tool_input[field]}\n${text}`;
+      continue;
+    }
+    payloads.set(file, {
+      hook_event_name: 'PostToolUse',
+      tool_name,
+      tool_input: { file_path: file, [TEXT_FIELD[tool_name]]: text },
+      cwd: workingDirectory(host.directory, undefined),
+      session_id: event?.sessionID,
+    });
+  }
+  return [...payloads.values()];
+}

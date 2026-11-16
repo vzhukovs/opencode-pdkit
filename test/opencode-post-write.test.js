@@ -542,7 +542,13 @@ describe('no answer leaves the result as the tool gave it, and says why', () => 
     });
 
     await unchanged(hooks);
-    allowing(log, 'failed in the hook bridge \\(no location today\\)');
+    // post-claim, which runs beside post-write after every call, reads the
+    // location too, and says so in a line of its own; the two hooks run side
+    // by side, so in no set order.
+    assert.deepEqual(
+      [...log()].sort(),
+      ['post-claim', 'post-write'].map((event) => `opencode-pdkit: pdkit: hook "${event}" failed in the hook bridge (no location today); allowing`),
+    );
   });
 
   // The text was ready; the result would not take it. The call still stands.

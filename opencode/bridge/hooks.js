@@ -49,11 +49,12 @@ import { homedir } from 'node:os';
 
 import { invoke, refusal } from '../../lib/hooks/runner.js';
 import { answer, combine, withText } from './answer.js';
-import { postWrite as postWritePayloads, preBash as preBashPayload, preWrite as preWritePayloads } from './payload.js';
+import { postClaim as postClaimPayloads, postWrite as postWritePayloads, preBash as preBashPayload, preWrite as preWritePayloads } from './payload.js';
 
 const PRE_BASH = 'pre-bash';
 const PRE_WRITE = 'pre-write';
 const POST_WRITE = 'post-write';
+const POST_CLAIM = 'post-claim';
 
 /** An answer that does nothing: what a hook that had no run, or failed open, gives. */
 const NOTHING = Object.freeze({ action: Object.freeze({ kind: 'pass' }), dropped: Object.freeze([]) });
@@ -94,6 +95,7 @@ const hostHome = () => process.env.OPENCODE_TEST_HOME ?? homedir();
  *   preBash: (event: {tool?: string, sessionID?: string, input: {command: string, workdir?: unknown}}) => Promise<void>,
  *   preWrite: (event: {tool?: string, sessionID?: string, input?: unknown}) => Promise<void>,
  *   postWrite: (event: {tool?: string, sessionID?: string, status?: string, input?: unknown}) => Promise<import('./answer.js').Answer>,
+ *   postClaim: (event: {tool?: string, sessionID?: string, status?: string, input?: unknown}) => Promise<import('./answer.js').Answer>,
  *   afterTool: (event: {tool?: string, sessionID?: string, status?: string, input?: unknown, result?: unknown}) => Promise<void>,
  *   register: () => Promise<void>,
  *   cleanup: () => Promise<void>,
@@ -118,6 +120,32 @@ export function createBridge(ctx, plugin) {
       for (const line of new Set(lines)) plugin.log(line);
     } catch {
       // Nowhere else to say it.
+    }
+  };
+
+  /**
+   * One post hook, for a call that ran: a run for each payload the call gives
+   * it, side by side, and one answer for the call. Never throws. A run that
+   * gave no answer is a pass already (runner.decide); a failure here — an
+   * event that cannot be read, a location that cannot be had — is a pass that
+   * says why in the log.
+   *
+   * @param {string} name  the pdkit hook event
+   * @param {(event: object, host: {directory: string|undefined, home: string}) => object[]} payloadsOf
+   * @param {object} event  execute.after's event
+   * @returns {Promise<import('./answer.js').Answer>}
+   */
+  const afterRuns = async (name, payloadsOf, event) => {
+    try {
+      const payloads = payloadsOf(event, { directory: ctx.location?.directory, home: hostHome() });
+      if (payloads.length === 0) return NOTHING;
+      const decisions = await Promise.all(payloads.map((payload) => invoke(name, payload, { root: plugin.root })));
+      const answered = combine(decisions.map((decision) => answer(name, decision)));
+      report(name, decisions, answered.dropped);
+      return answered;
+    } catch (error) {
+      report(name, [failedOpen(name, error)], []);
+      return NOTHING;
     }
   };
 
@@ -178,22 +206,21 @@ export function createBridge(ctx, plugin) {
      * call left in podman-desktop lacks its license header, or is a schema
      * source. Gives an answer and never throws.
      *
-     * One run for each file the call left, side by side, and one answer for
-     * the call. A run that gave no answer is a pass already (runner.decide);
-     * a failure here is a pass that says why in the log.
+     * One run for each file the call left (afterRuns).
      */
     async postWrite(event) {
-      try {
-        const payloads = postWritePayloads(event, { directory: ctx.location?.directory, home: hostHome() });
-        if (payloads.length === 0) return NOTHING;
-        const decisions = await Promise.all(payloads.map((payload) => invoke(POST_WRITE, payload, { root: plugin.root })));
-        const answered = combine(decisions.map((decision) => answer(POST_WRITE, decision)));
-        report(POST_WRITE, decisions, answered.dropped);
-        return answered;
-      } catch (error) {
-        report(POST_WRITE, [failedOpen(POST_WRITE, error)], []);
-        return NOTHING;
-      }
+      return afterRuns(POST_WRITE, postWritePayloads, event);
+    },
+
+    /**
+     * post-claim, for a call that ran: whether the text a write, edit or patch
+     * call wrote in a markdown file calls a name missing that matches nothing
+     * in podman-desktop. Gives an answer and never throws.
+     *
+     * One run for each markdown file the call wrote text in (afterRuns).
+     */
+    async postClaim(event) {
+      return afterRuns(POST_CLAIM, postClaimPayloads, event);
     },
 
     /**
@@ -207,11 +234,12 @@ export function createBridge(ctx, plugin) {
      */
     async afterTool(event) {
       try {
-        // TODO(T4.8): post-claim beside post-write.
-        const answered = combine(await Promise.all([bridge.postWrite(event)]));
+        // In the order hooks/hooks.json lists them; their texts keep that
+        // order in the result (combine).
+        const answered = combine(await Promise.all([bridge.postWrite(event), bridge.postClaim(event)]));
         if (answered.action.kind === 'append') event.result = withText(event.result, answered.action.text);
       } catch (error) {
-        report(POST_WRITE, [{ block: false, diagnostic: `pdkit: the hook bridge failed after a tool call (${reason(error)}); its result is as the tool left it` }], []);
+        report('execute.after', [{ block: false, diagnostic: `pdkit: the hook bridge failed after a tool call (${reason(error)}); its result is as the tool left it` }], []);
       }
     },
 

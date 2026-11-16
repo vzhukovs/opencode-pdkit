@@ -23,7 +23,9 @@
 // same text: a file this reading missed would be written past pre-write, and
 // one it invented would refuse an honest patch. Both directions are asserted —
 // what is a file, what only looks like one, and what the tool gives up on
-// (and then writes nothing).
+// (and then writes nothing). The one exception is the module's own field, the
+// lines a chunk adds (`addedLines`), which the tool's reading does not keep:
+// what post-claim reads as the text a patch wrote.
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -54,7 +56,7 @@ describe('the files a patch changes', () => {
         type: 'update',
         path: 'notes/update.txt',
         movePath: undefined,
-        chunks: [{ oldLines: ['first', 'old middle', 'last'], newLines: ['first', 'new middle', 'last'], changeContext: undefined }],
+        chunks: [{ oldLines: ['first', 'old middle', 'last'], newLines: ['first', 'new middle', 'last'], addedLines: ['new middle'], changeContext: undefined }],
       },
     ]);
   });
@@ -94,6 +96,30 @@ describe('the files a patch changes', () => {
       parse(text).hunks[0].chunks.map((chunk) => chunk.changeContext),
       ['function x()', undefined],
     );
+  });
+});
+
+// The tool's reading folds a line of context into newLines beside the lines a
+// chunk adds, with nothing to tell them apart; the text a patch wrote is the
+// added lines alone.
+describe('the lines a chunk adds', () => {
+  const chunks = (...lines) => parse(patch('*** Begin Patch', '*** Update File: u.md', ...lines, '*** End Patch')).hunks[0].chunks;
+
+  test('are the lines that begin with +, in order, and no line of context or removal', () => {
+    const [chunk] = chunks('@@', ' context before', '-removed', '+added one', ' context between', '+added two', '', '-removed again');
+    assert.deepEqual(chunk.addedLines, ['added one', 'added two']);
+    assert.deepEqual(chunk.newLines, ['context before', 'added one', 'context between', 'added two', '']);
+  });
+
+  test('are kept per chunk, and a chunk that only removes adds nothing', () => {
+    assert.deepEqual(
+      chunks('@@ one', '+a', '@@ two', ' x', '-y', '@@', '+b', '+', '*** End of File').map((chunk) => chunk.addedLines),
+      [['a'], [], ['b', '']],
+    );
+  });
+
+  test('an added line shaped like a header or a marker is an added line', () => {
+    assert.deepEqual(chunks('@@', '+*** Add File: x.md', '+@@', '+ indented').at(0).addedLines, ['*** Add File: x.md', '@@', ' indented']);
   });
 });
 

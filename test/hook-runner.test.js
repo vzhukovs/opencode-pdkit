@@ -42,6 +42,8 @@ import { FAIL_CLOSED } from '../lib/hooks/events.js';
 import { handle } from '../lib/hooks/dispatch.js';
 import { handle as handleOwns } from '../lib/hooks/owns.js';
 import { handle as handlePostWrite } from '../lib/hooks/post-write.js';
+import { handle as handlePostClaim } from '../lib/hooks/post-claim.js';
+import { PLUGIN_ROOT } from '../lib/commands/support.js';
 import { spdxHeader } from '../lib/upstream.js';
 import { start, stop } from '../lib/active.js';
 import * as gate from '../lib/gate.js';
@@ -531,6 +533,78 @@ describe('invoke agrees with handle, for post-write', () => {
       outcomes.add(decision.block ? 'refuse' : decision.message ? 'message' : 'pass');
     }
     assert.deepEqual([...outcomes].sort(), ['message', 'pass', 'refuse']);
+  });
+});
+
+// The same for post-claim: post-claim.js imported, and the same payload through
+// bin/pdkit, on each of its outcomes — the reminder that runHook sends as
+// additionalContext after a tool, and silence. It never refuses.
+describe('invoke agrees with handle, for post-claim', () => {
+  let home;
+  let repo;
+  let other;
+  let previousHome;
+
+  before(async () => {
+    home = await realpath(await mkdtemp(join(tmpdir(), 'pdkit-runner-claim-home-')));
+    previousHome = process.env.PDKIT_HOME;
+    process.env.PDKIT_HOME = home;
+    // The clone the configuration names: post-claim searches no other.
+    await writeFile(join(home, 'config.yaml'), 'repo:\n  fork: someone/podman-desktop\n');
+    repo = await realpath(await podmanDesktopClone('pdkit-runner-claim-repo-'));
+    await execFileAsync('git', ['remote', 'add', 'origin', 'git@github.com:someone/podman-desktop.git'], { cwd: repo });
+    other = await realpath(await otherRepository('pdkit-runner-claim-other-'));
+    // The local name is there; the borrowed one is only in the document that
+    // proposes it, which the search leaves out (post-claim.test.js).
+    await mkdir(join(repo, 'docs'), { recursive: true });
+    await writeFile(join(repo, 'api.d.ts'), 'export namespace env {\n  export const urlProtocol: string;\n}\n');
+    await writeFile(join(repo, 'docs', 'design.md'), 'Add `env.uriScheme` here.\n');
+    await execFileAsync('git', ['add', '.'], { cwd: repo });
+  });
+
+  after(async () => {
+    if (previousHome === undefined) delete process.env.PDKIT_HOME;
+    else process.env.PDKIT_HOME = previousHome;
+    for (const dir of [home, repo, other]) await rm(dir, { recursive: true, force: true });
+  });
+
+  const wrote = (file, content, cwd = repo) => ({ hook_event_name: 'PostToolUse', tool_name: 'Write', tool_input: { file_path: file, content }, cwd });
+
+  /**
+   * What the decision says, as far as the process protocol carries it. The
+   * reminder names the rule under the plugin's root as runHook passes it
+   * (PLUGIN_ROOT), which is what the direct call is given too.
+   */
+  const carried = (decision) => ({ block: decision.block, reason: decision.reason, message: decision.message });
+
+  const FIXTURES = [
+    ['a proposed member that matches nothing outside the document', () => wrote(join(repo, 'docs/design.md'), 'Add `env.uriScheme` here.')],
+    ['a name said to be missing that is there', () => wrote(join(repo, 'docs/notes.md'), 'There is no `urlProtocol` yet.')],
+    ['the new text of an edit', () => ({ ...wrote(join(repo, 'docs/notes.md')), tool_name: 'Edit', tool_input: { file_path: join(repo, 'docs/notes.md'), old_string: 'x', new_string: 'Do we need `env.uriScheme`?' } })],
+    ['a claim that names its search', () => wrote(join(repo, 'docs/design.md'), 'Add `env.uriScheme`; searched: git grep -i "scheme|protocol" -- api -> 0.')],
+    ['a search that names nothing', () => wrote(join(repo, 'docs/design.md'), 'The API has no `uriScheme`; searched: yes.')],
+    ['not markdown', () => wrote(join(repo, 'docs/a.ts'), 'Add `env.uriScheme` here.')],
+    ['outside podman-desktop', () => wrote(join(other, 'design.md'), 'Add `env.uriScheme` here.', other)],
+    ['a session in a subdirectory', () => wrote(join(repo, 'docs/design.md'), 'Add `env.uriScheme` here.', join(repo, 'docs'))],
+    ['no file', () => ({ ...wrote(join(repo, 'docs/design.md'), 'Add `env.uriScheme` here.'), tool_input: {} })],
+  ];
+
+  for (const [label, payloadOf] of FIXTURES) {
+    test(label, async () => {
+      const direct = carried(await handlePostClaim(payloadOf(), { event: 'post-claim', pluginRoot: PLUGIN_ROOT }));
+      const through = carried(await invoke('post-claim', payloadOf(), { root: ROOT }));
+
+      assert.deepEqual(through, direct);
+    });
+  }
+
+  test('the fixtures cover every outcome: a pass, and a pass with a message', async () => {
+    const outcomes = new Set();
+    for (const [, payloadOf] of FIXTURES) {
+      const decision = await handlePostClaim(payloadOf(), { event: 'post-claim', pluginRoot: PLUGIN_ROOT });
+      outcomes.add(decision.block ? 'refuse' : decision.message ? 'message' : 'pass');
+    }
+    assert.deepEqual([...outcomes].sort(), ['message', 'pass']);
   });
 });
 

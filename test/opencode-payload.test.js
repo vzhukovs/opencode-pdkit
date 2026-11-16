@@ -27,7 +27,7 @@ import assert from 'node:assert/strict';
 import { join, resolve, win32 } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { hostPath, postWrite, preBash, preWrite } from '../opencode/bridge/payload.js';
+import { hostPath, postClaim, postWrite, preBash, preWrite } from '../opencode/bridge/payload.js';
 
 const DIRECTORY = join(tmpdir(), 'project');
 
@@ -301,6 +301,123 @@ describe('post-write', () => {
 
     test('a patch the tool cannot read is no payload', () => {
       assert.deepEqual(postWrite(patch('*** Delete File: a.ts', '-body'), host), []);
+    });
+  });
+});
+
+// post-claim reads the text a call wrote — a Write's content, an Edit's
+// new_string (post-claim.js) — so its payload carries that text, and only for
+// markdown, which is all post-claim reads.
+describe('post-claim', () => {
+  const HOME = join(tmpdir(), 'home');
+  const host = { directory: DIRECTORY, home: HOME };
+  /** execute.after's event for a call that ran. */
+  const done = (input, tool, status = 'completed') => ({ ...call(input, tool), status, result: { content: [{ type: 'text', text: 'ok' }] } });
+  const patch = (...lines) => done({ patchText: ['*** Begin Patch', ...lines, '*** End Patch'].join('\n') }, 'patch');
+
+  /** The payload for one file, with the text written in it. */
+  const wrote = (file, content) => ({
+    hook_event_name: 'PostToolUse',
+    tool_name: 'Write',
+    tool_input: { file_path: file, content },
+    cwd: DIRECTORY,
+    session_id: 'ses_test',
+  });
+  const edited = (file, new_string) => ({ ...wrote(file), tool_name: 'Edit', tool_input: { file_path: file, new_string } });
+
+  test("write is Claude Code's PostToolUse on Write, with the file whole, the text it wrote, the directory and the session", () => {
+    assert.deepEqual(postClaim(done({ path: 'docs/a.md', content: 'Add `env.uriScheme`.' }, 'write'), host), [wrote(join(DIRECTORY, 'docs/a.md'), 'Add `env.uriScheme`.')]);
+  });
+
+  // newString is Edit's new_string (F38); the text it replaces is not written.
+  test('edit is Edit, with its new text and not the old', () => {
+    assert.deepEqual(postClaim(done({ path: 'a.md', oldString: 'old `x.y`', newString: 'new `a.b`', replaceAll: true }, 'edit'), host), [edited(join(DIRECTORY, 'a.md'), 'new `a.b`')]);
+  });
+
+  test('carries no tool_response and no transcript', () => {
+    const [one] = postClaim(done({ path: 'a.md', content: 'x' }, 'write'), host);
+    assert.equal('tool_response' in one, false);
+    assert.equal('transcript_path' in one, false);
+  });
+
+  // post-claim leaves the file it is given out of its search, and takes a
+  // relative one from the repository's root, not from cwd (T1.4).
+  test('the file is the one the tool wrote, whole, as pre-write takes it', () => {
+    assert.equal(postClaim(done({ path: '~/a.md', content: '' }, 'write'), host)[0].tool_input.file_path, join(HOME, 'a.md'));
+    assert.equal(postClaim(done({ path: '../b.md', content: '' }, 'write'), host)[0].tool_input.file_path, resolve(DIRECTORY, '../b.md'));
+  });
+
+  test('only markdown: a file of any other kind is no payload, as post-claim reads none', () => {
+    for (const path of ['a.ts', 'a.mdx', 'a.MD', 'a.md.bak', 'README', 'docs.md/a.txt']) {
+      assert.deepEqual(postClaim(done({ path, content: 'Add `env.uriScheme`.' }, 'write'), host), [], path);
+    }
+  });
+
+  test('a text that is not a string is no text', () => {
+    assert.deepEqual(postClaim(done({ path: 'a.md' }, 'write'), host), [wrote(join(DIRECTORY, 'a.md'), '')]);
+    assert.deepEqual(postClaim(done({ path: 'a.md', oldString: 'a', newString: 7 }, 'edit'), host), [edited(join(DIRECTORY, 'a.md'), '')]);
+  });
+
+  test('only after a call that succeeded', () => {
+    for (const status of ['error', 'running']) {
+      assert.deepEqual(postClaim(done({ path: 'a.md', content: 'x' }, 'write', status), host), [], status);
+    }
+    const { status: _, ...noStatus } = done({ path: 'a.md', content: 'x' }, 'write');
+    assert.deepEqual(postClaim(noStatus, host), []);
+  });
+
+  test('any other tool, or an input that names no file, is no payload', () => {
+    for (const tool of ['shell', 'read', 'grep', 'experimental_image_generate', undefined]) {
+      assert.deepEqual(postClaim(done({ path: 'a.md', content: 'x' }, tool), host), [], String(tool));
+    }
+    for (const input of [undefined, {}, { path: '', content: 'x' }, { path: 7, content: 'x' }]) {
+      assert.deepEqual(postClaim(done(input, 'write'), host), [], JSON.stringify(input));
+    }
+    assert.deepEqual(postClaim(undefined, host), []);
+  });
+
+  describe('patch', () => {
+    test('an added file is Write with its contents; an updated one is Edit with the lines it adds, not its context or what it removes', () => {
+      const event = patch(
+        '*** Add File: docs/added.md',
+        '+# Added',
+        '+Add `env.uriScheme`.',
+        '*** Update File: docs/update.md',
+        '@@ ## Section',
+        ' There is no `context.line` here.',
+        '-There is no `removed.line` here.',
+        '+There is no `added.line` here.',
+        '@@',
+        '+A second chunk.',
+      );
+
+      assert.deepEqual(postClaim(event, host), [
+        wrote(join(DIRECTORY, 'docs/added.md'), '# Added\nAdd `env.uriScheme`.'),
+        edited(join(DIRECTORY, 'docs/update.md'), 'There is no `added.line` here.\nA second chunk.'),
+      ]);
+    });
+
+    test('a file it moved is where it went, with the lines it adds; one it deleted writes nothing', () => {
+      const event = patch('*** Update File: docs/move.md', '*** Move to: ~/moved.md', '@@', '-a', '+b', '*** Delete File: /work/gone.md');
+      assert.deepEqual(postClaim(event, host), [edited(join(HOME, 'moved.md'), 'b')]);
+    });
+
+    test('markdown only, whatever else the patch writes', () => {
+      const event = patch('*** Add File: a.ts', '+x', '*** Update File: b.md', '@@', '+y', '*** Add File: c.txt', '+z');
+      assert.deepEqual(postClaim(event, host), [edited(join(DIRECTORY, 'b.md'), 'y')]);
+    });
+
+    test('a file named twice is one payload, with what each hunk wrote, in order', () => {
+      const event = patch('*** Update File: a.md', '@@', '-a', '+first', '*** Update File: ./a.md', '@@', '-c', '+second');
+      assert.deepEqual(postClaim(event, host), [edited(join(DIRECTORY, 'a.md'), 'first\nsecond')]);
+    });
+
+    test('a patch that only removes writes no text, but still names the file', () => {
+      assert.deepEqual(postClaim(patch('*** Update File: a.md', '@@', ' kept', '-gone'), host), [edited(join(DIRECTORY, 'a.md'), '')]);
+    });
+
+    test('a patch the tool cannot read is no payload', () => {
+      assert.deepEqual(postClaim(patch('*** Delete File: a.md', '-body'), host), []);
     });
   });
 });
