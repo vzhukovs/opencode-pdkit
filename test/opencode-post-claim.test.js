@@ -484,9 +484,10 @@ describe('patch: every markdown file it writes, and one text for the call', () =
   });
 });
 
-// post-write and post-claim both look at every write (hooks/hooks.json): a
-// call they both have something to say about gets both texts, in one part,
-// post-write's first — the order the manifest lists them in.
+// post-write and post-claim both look at every write (WIRING in
+// opencode/bridge/hooks.js): a call they both have something to say about
+// gets both texts, in one part, post-write's first — the order the table in
+// lib/hooks/events.js lists them in, as Claude Code's manifest did.
 describe('beside post-write', () => {
   /** The reminder post-write adds for a schema path (post-write.js). */
   const SCHEMA_REMINDER = (file) => `pdkit: ${file} affects the generated schemas — run \`pnpm generate:schemas\` and commit the result`;

@@ -29,13 +29,14 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { access, cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, cp, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { cleanup, commitAll, initRepo } from './helpers/repo-fixture.js';
-import { GATE_PROBES, RETIRED_KEYS, checkAgentRuns, checkSessionModel, diagnose, gateSelftest, mcpServers, playwrightCdp } from '../lib/doctor.js';
+import { GATE_PROBES, RETIRED_KEYS, checkAgentRuns, checkHooks, checkSessionModel, diagnose, gateSelftest, mcpServers, playwrightCdp } from '../lib/doctor.js';
+import { HOOK_HANDLERS } from '../lib/hooks/events.js';
 import { append as appendJournal } from '../lib/journal.js';
 import { sessionModel } from '../lib/session-model.js';
 import { WRAPPERS } from '../lib/hooks/command-parse.js';
@@ -165,6 +166,54 @@ describe('the self-test', () => {
       assert.match(find(checks, 'gate:allows').detail, /git status/);
     } finally {
       await writeFile(file, original);
+    }
+  });
+});
+
+// Every event pdkit has a hook for runs a module, and a partial install can
+// lack one. Which events the plugin registers is no longer a file of the
+// install's, beside the table, but the plugin's own doing, by the table
+// (test/opencode-wiring.test.js holds it to that).
+describe('the hook table', () => {
+  test('passes on an intact plugin, counting the events of the table', async () => {
+    const [entry] = await checkHooks(plugin);
+
+    assert.equal(entry.id, 'hooks');
+    assert.equal(entry.status, 'ok');
+    assert.equal(entry.detail, `${Object.keys(HOOK_HANDLERS).length} events, every one has a handler`);
+  });
+
+  test('names each event whose module is missing, and fails', async () => {
+    const moved = [];
+    for (const handler of ['post-read.js', 'session-start.js']) {
+      await rename(join(plugin, 'lib', 'hooks', handler), join(plugin, `${handler}.away`));
+      moved.push(handler);
+    }
+
+    try {
+      const [entry] = await checkHooks(plugin);
+
+      assert.equal(entry.status, 'fail');
+      assert.equal(entry.level, 'required');
+      assert.equal(
+        entry.detail,
+        'post-read -> lib/hooks/post-read.js is missing; session-start -> lib/hooks/session-start.js is missing; ' +
+          'pre-compact -> lib/hooks/session-start.js is missing',
+      );
+    } finally {
+      for (const handler of moved) await rename(join(plugin, `${handler}.away`), join(plugin, 'lib', 'hooks', handler));
+    }
+  });
+
+  // Claude Code's manifest, which the self-tests still read, says nothing of
+  // what the plugin registers in Open Code.
+  test('reads no hooks/hooks.json', async () => {
+    await rename(join(plugin, 'hooks'), join(plugin, 'hooks.away'));
+
+    try {
+      assert.equal((await checkHooks(plugin))[0].status, 'ok');
+    } finally {
+      await rename(join(plugin, 'hooks.away'), join(plugin, 'hooks'));
     }
   });
 });

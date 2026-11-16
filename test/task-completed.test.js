@@ -42,6 +42,8 @@ import { IMPLEMENTER, STALL_LIMIT, handle as taskCompleted } from '../lib/hooks/
 import { escapeRegExp as esc } from '../lib/globs.js';
 import { read as readJournal } from '../lib/journal.js';
 import { TRANSITIONS, setOwns, transition } from '../lib/state.js';
+import { WIRING } from '../opencode/bridge/hooks.js';
+import { subagentStop as subagentStopPayloads } from '../opencode/bridge/payload.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -118,41 +120,47 @@ const complete = () =>
 // the host ever runs it or not — which is how a receipt gate wired to
 // `TaskCompleted` stayed green for four months while subagents, which raise
 // `SubagentStop`, never reached it. What can be pinned here is the wiring
-// itself: the manifest names the event subagents raise, and the map sends that
-// event to this module. Whether the host keeps its side of it is what
-// `pdkit doctor` watches, through `agent-done` in the journal.
+// itself: the plugin stands the event on the point a subagent's session
+// reaches before it goes idle (opencode/bridge/hooks.js, WIRING), and the
+// table sends that event to this module. test/opencode-wiring.test.js runs
+// it from that point to this module; whether the host keeps its side of it
+// is what `pdkit doctor` watches, through `agent-done` in the journal.
 describe('the hook is registered where subagents finish', () => {
-  const manifest = async () => JSON.parse(await readFile(join(process.cwd(), 'hooks', 'hooks.json'), 'utf8'));
-  const eventsRouting = (hooks, hostEvent) =>
-    (hooks[hostEvent] ?? []).flatMap((entry) => entry.hooks ?? []).map((hook) => hook.args?.[1]);
+  /** Each point of Open Code the plugin stands an event of this module's on, once for each such event. */
+  const points = () =>
+    Object.entries(WIRING)
+      .filter(([event]) => HOOK_HANDLERS[event] === 'task-completed.js')
+      .flatMap(([, rows]) => rows.map((row) => row.point));
 
-  test('SubagentStop runs this module', async () => {
-    const { hooks } = await manifest();
-    const routed = eventsRouting(hooks, 'SubagentStop').filter((event) => HOOK_HANDLERS[event] === 'task-completed.js');
-
-    assert.equal(routed.length, 1, 'exactly one SubagentStop entry reaches lib/hooks/task-completed.js');
+  test('experimental.idle runs this module', () => {
+    assert.equal(
+      points().filter((point) => point === 'session experimental.idle').length,
+      1,
+      'exactly one event on experimental.idle reaches lib/hooks/task-completed.js',
+    );
   });
 
-  // No matcher: SubagentStop matches on agent type, and the count is only worth
-  // anything if every type is in it.
-  test('for every agent type', async () => {
-    const { hooks } = await manifest();
-    for (const entry of hooks.SubagentStop) {
-      assert.ok([undefined, '', '*'].includes(entry.matcher), `SubagentStop is narrowed to "${entry.matcher}"`);
+  // No matcher: Open Code calls the point for every session, and the bridge
+  // looks at a subagent's whatever its agent. The count is only worth anything
+  // if every agent is in it.
+  test('for every agent', () => {
+    for (const agent of ['pd-implementer', 'pd-scout', 'general', 'explore', 'another-plugins-agent']) {
+      const session = { parentID: 'ses_parent', agent, location: { directory: WORKTREE } };
+      const payloads = subagentStopPayloads({ sessionID: 'ses_child' }, { session, root: 'ses_parent', held: false });
+
+      assert.equal(payloads.length, 1, `the stop of ${agent} is not looked at`);
+      assert.equal(payloads[0].agent_type, agent);
     }
   });
 
-  // TaskCompleted fires on TaskUpdate and on agent-team teammates, neither of
-  // which this plugin uses. A handler there would count task-list ticks as
-  // subagents, and — the original defect — looks like coverage while being none.
-  test('and no other host event does', async () => {
-    const { hooks } = await manifest();
-    const elsewhere = Object.keys(hooks)
-      .filter((hostEvent) => hostEvent !== 'SubagentStop')
-      .filter((hostEvent) => eventsRouting(hooks, hostEvent).some((event) => HOOK_HANDLERS[event] === 'task-completed.js'));
-
-    assert.deepEqual(elsewhere, []);
-    assert.equal(hooks.TaskCompleted, undefined, 'TaskCompleted is not an event subagents raise');
+  // Under Claude Code, TaskCompleted fired on TaskUpdate and on agent-team
+  // teammates, neither of which this plugin uses: a handler there counted
+  // task-list ticks as subagents, and — the original defect — looked like
+  // coverage while being none. The point that looks like the right one here is
+  // the end of a subagent's run, and by then the parent has its report: a gate
+  // there gates nothing.
+  test('and no other point does', () => {
+    assert.deepEqual(points(), ['session experimental.idle']);
   });
 });
 

@@ -160,6 +160,33 @@ describe('the hook table has one owner', () => {
       assert.ok(event in HOOK_HANDLERS, `FAIL_CLOSED names "${event}", which is not a registered event`);
     }
   });
+
+  // The plugin registers the events of the table: its own table says only
+  // where in Open Code each one stands. An event there and not in the table
+  // is never run; one in the table and not there is never registered.
+  // test/opencode-wiring.test.js runs each from its points to its module.
+  test('the plugin stands every event of the table somewhere in Open Code, and no other', async () => {
+    const { HOOK_HANDLERS } = await import('../lib/hooks/events.js');
+    const { WIRING } = await import('../opencode/bridge/hooks.js');
+
+    assert.deepEqual(Object.keys(WIRING).sort(), Object.keys(HOOK_HANDLERS).sort());
+    for (const [event, rows] of Object.entries(WIRING)) assert.ok(rows.length > 0, `${event} stands nowhere`);
+  });
+
+  // A second map from an event to a module is how Claude Code's hooks.json
+  // and the table had to be held to each other by a check: the plugin keeps
+  // none, and runs every event by the table's.
+  test('and keeps no map of its own from an event to a module', async () => {
+    const { HOOK_HANDLERS } = await import('../lib/hooks/events.js');
+    const offenders = [];
+    for (const module of await modules(join(ROOT, 'opencode'), 'opencode')) {
+      for (const handler of new Set(Object.values(HOOK_HANDLERS))) {
+        if (module.code.includes(handler)) offenders.push(`${module.name} names ${handler}`);
+      }
+    }
+
+    assert.deepEqual(offenders, [], `the server part names handler modules:\n  ${offenders.join('\n  ')}`);
+  });
 });
 
 // The other half of the same failure, and the half that actually happened.

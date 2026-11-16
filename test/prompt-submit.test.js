@@ -31,12 +31,14 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import plugin from '../opencode/server.js';
+import { WIRING } from '../opencode/bridge/hooks.js';
+import { LABEL_SOURCE, promptSubmit as promptSubmitPayloads } from '../opencode/bridge/payload.js';
 import { PLUGIN_ROOT, issueDir } from '../lib/config.js';
 import { FAIL_CLOSED, HOOK_HANDLERS } from '../lib/hooks/events.js';
 import { argumentKind, handle, parseCommand } from '../lib/hooks/prompt-submit.js';
@@ -566,15 +568,31 @@ describe('the model the phase runs on', () => {
 });
 
 // The wiring, which a direct call to handle() cannot prove — the lesson of the
-// receipt gate that sat on an event subagents never raise.
+// receipt gate that sat on an event subagents never raise. The plugin stands
+// the event on Open Code's prompt hook (opencode/bridge/hooks.js, WIRING), and
+// test/opencode-wiring.test.js runs it from there to this module.
 describe('the hook is registered on the prompt', () => {
-  test('UserPromptSubmit runs this module, for every prompt', async () => {
-    const { hooks } = JSON.parse(await readFile(join(PLUGIN_ROOT, 'hooks', 'hooks.json'), 'utf8'));
-    const entries = hooks.UserPromptSubmit ?? [];
-    const routed = entries.flatMap((entry) => entry.hooks ?? []).filter((hook) => HOOK_HANDLERS[hook.args?.[1]] === 'prompt-submit.js');
+  test('the prompt hook runs this module, and nothing else does', () => {
+    const points = Object.entries(WIRING)
+      .filter(([event]) => HOOK_HANDLERS[event] === 'prompt-submit.js')
+      .flatMap(([, rows]) => rows.map((row) => row.point));
 
-    assert.equal(routed.length, 1);
-    for (const entry of entries) assert.ok([undefined, '', '*'].includes(entry.matcher));
+    assert.deepEqual(points, ['session prompt']);
+  });
+
+  // No matcher: Open Code calls the hook on every prompt, and the bridge
+  // narrows it to a pdkit command's by the label the command puts on it (D6),
+  // never to some of the commands.
+  test('for the prompt of any pdkit command', async () => {
+    const skills = (await readdir(join(PLUGIN_ROOT, 'skills'), { withFileTypes: true })).filter((entry) => entry.isDirectory());
+    assert.ok(skills.length > 0);
+    for (const { name } of skills) {
+      const metadata = { source: LABEL_SOURCE, command: `pd:${name}`, arguments: `${AWAY}` };
+      const payloads = promptSubmitPayloads({ sessionID: 'ses_1', metadata }, { directory: MAIN });
+
+      assert.equal(payloads.length, 1, `the prompt of /pd:${name} is not looked at`);
+      assert.equal(payloads[0].prompt, `/pd:${name} ${AWAY}`);
+    }
   });
 
   // A block on this event discards what the person typed.

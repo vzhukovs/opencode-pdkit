@@ -157,6 +157,10 @@ export default {
     // matched on its Bash tool alone, never saw those. Checking them is
     // stricter than it was, and harmless where the command is not one the gate
     // has a rule for.
+    //
+    // pre-bash's row in the bridge's table of points (WIRING in
+    // bridge/hooks.js) names this callback as the entry point's; the bridge
+    // registers every other event.
     await ctx.tool.hook('execute.before', async (event) => {
       if (typeof event?.input?.command !== 'string') return;
       const loaded = await loading;

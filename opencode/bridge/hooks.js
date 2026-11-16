@@ -27,6 +27,11 @@
 // its decision back into what Open Code understands (./answer.js) — a throw,
 // text added to a tool result, a message to the session.
 //
+// Which events there are, and which module runs each, is lib/hooks/events.js's
+// to say (HOOK_HANDLERS): the one list of them, which lib/cli.js runs a hook
+// by. This module says only where each one stands in Open Code (WIRING), and
+// registers every event of that list, and no other.
+//
 // Most hooks are a run for an event and an answer to it. subagent-stop also
 // remembers: whether it held a subagent's last stop, which Claude Code told
 // its handler and Open Code does not (D11). That memory is the bridge's, per
@@ -75,6 +80,7 @@
 import { createReadStream } from 'node:fs';
 import { homedir } from 'node:os';
 
+import { HOOK_HANDLERS } from '../../lib/hooks/events.js';
 import { invoke, refusal } from '../../lib/hooks/runner.js';
 import { answer, combine, withAttachment, withText } from './answer.js';
 import {
@@ -139,6 +145,75 @@ const ENDED = ['session.execution.failed', 'session.execution.interrupted'];
 
 /** A session's compaction that succeeded: where Claude Code ran SessionStart with `compact`. */
 const COMPACTED = 'session.compaction.ended';
+
+/**
+ * The points of Open Code the bridge stands on: a hook of the plugin
+ * context's (`<domain> <hook>`), or a stream of the host's events
+ * (`event <type>`).
+ */
+const BEFORE_TOOL = 'tool execute.before';
+const AFTER_TOOL = 'tool execute.after';
+const IDLE = 'session experimental.idle';
+const PROMPT = 'session prompt';
+const FORK = 'session fork';
+const COMPACTION = 'session compaction';
+const COMPACTED_STREAM = `event ${COMPACTED}`;
+
+/**
+ * The rows of one event in WIRING, frozen with it.
+ *
+ * @param {...{point: string, run: string, entry?: true}} list
+ * @returns {ReadonlyArray<Readonly<{point: string, run: string, entry?: true}>>}
+ */
+const rows = (...list) => Object.freeze(list.map((row) => Object.freeze(row)));
+
+/**
+ * Where each of pdkit's hook events stands in Open Code: the points it runs
+ * on, each with the bridge's callback for it there (`run`, a method of the
+ * bridge).
+ *
+ * The events are HOOK_HANDLERS's (lib/hooks/events.js), which also says what
+ * module runs each; this table says only where, and keeps no map of its own
+ * from an event to a module. register() goes through HOOK_HANDLERS, not
+ * through this table: an event added there and not here is a hook that fails
+ * to register, and says so, not one that is quietly never run. A test holds
+ * the two to the same events, and runs each event from its points to the
+ * module HOOK_HANDLERS names (test/opencode-wiring.test.js).
+ *
+ * One event can stand on several points, and several on one:
+ *
+ * - pre-bash is the entry point's (`entry`). It registers the gate on
+ *   execute.before itself, first, before it loads this module, and calls
+ *   preBash for every call that carries a command — not only the shell
+ *   tool's (§13 DV5; opencode/server.js). An event that fails closed has to
+ *   be registered where nothing can fail before it; register() leaves it be.
+ * - pre-write stands on the same point, after the gate.
+ * - the four post hooks share one callback after a tool, which adds what they
+ *   have for the model to the call's result once, in the order of
+ *   HOOK_HANDLERS (afterTool).
+ * - session-start stands on a session's first prompt, on a fork, and on the
+ *   stream of compactions that ended; prompt-submit shares the prompt, in the
+ *   same callback.
+ *
+ * Which of the calls a point sees each event looks at is the payload's to
+ * say (./payload.js): a point calls every callback on it for every call.
+ */
+export const WIRING = Object.freeze({
+  'pre-bash': rows({ point: BEFORE_TOOL, run: 'preBash', entry: true }),
+  'pre-write': rows({ point: BEFORE_TOOL, run: 'preWrite' }),
+  'post-write': rows({ point: AFTER_TOOL, run: 'postWrite' }),
+  'post-bash': rows({ point: AFTER_TOOL, run: 'postBash' }),
+  'post-read': rows({ point: AFTER_TOOL, run: 'postRead' }),
+  'post-claim': rows({ point: AFTER_TOOL, run: 'postClaim' }),
+  'subagent-stop': rows({ point: IDLE, run: 'subagentStop' }),
+  'session-start': rows(
+    { point: PROMPT, run: 'startOnPrompt' },
+    { point: FORK, run: 'startOnFork' },
+    { point: COMPACTED_STREAM, run: 'startOnCompaction' },
+  ),
+  'pre-compact': rows({ point: COMPACTION, run: 'preCompact' }),
+  'prompt-submit': rows({ point: PROMPT, run: 'promptSubmit' }),
+});
 
 /** A line feed, the byte a line of a text file ends with. */
 const LF = 0x0a;
@@ -214,14 +289,12 @@ async function linesOf(file) {
  *   postClaim: (event: {tool?: string, sessionID?: string, status?: string, input?: unknown}) => Promise<import('./answer.js').Answer>,
  *   postBash: (event: {tool?: string, sessionID?: string, status?: string, input?: unknown, result?: unknown}) => Promise<import('./answer.js').Answer>,
  *   postRead: (event: {tool?: string, sessionID?: string, status?: string, input?: unknown, result?: unknown}) => Promise<import('./answer.js').Answer>,
- *   afterTool: (event: {tool?: string, sessionID?: string, status?: string, input?: unknown, result?: unknown}) => Promise<void>,
  *   subagentStop: (event: {sessionID?: string}) => Promise<void>,
  *   startOnPrompt: (event: {sessionID?: string}) => Promise<void>,
  *   startOnFork: (event: {sessionID?: string}) => Promise<void>,
  *   startOnCompaction: (event: {type?: string, data?: {sessionID?: string}}) => Promise<void>,
  *   preCompact: (event: {sessionID?: string, result?: unknown}) => Promise<void>,
  *   promptSubmit: (event: {sessionID?: string, prompt?: {files?: unknown}, metadata?: unknown}) => Promise<void>,
- *   onPrompt: (event: {sessionID?: string, prompt?: {files?: unknown}, metadata?: unknown}) => Promise<void>,
  *   register: () => Promise<void>,
  *   cleanup: () => Promise<void>,
  * }}
@@ -350,16 +423,19 @@ export function createBridge(ctx, plugin) {
   };
 
   /**
-   * Run session-start after each compaction of a session of this instance's
-   * directory. Every loaded instance sees every session's events (F137), so
+   * Run what stands on the stream of compactions that ended — session-start
+   * (startOnCompaction), for a session of this instance's directory — after
+   * each one. Every loaded instance sees every session's events (F137), so
    * one that is not the session's own leaves it to that one. A compaction is
    * not waited on: each is summarized on its own. Never throws; a watch that
    * cannot be had, or breaks, says so once.
+   *
+   * @param {(event: object) => Promise<void>} callback  never throws
    */
-  const watchCompactions = async () => {
+  const watchCompactions = async (callback) => {
     try {
       for await (const event of ctx.event.subscribe({ types: [COMPACTED], signal: watching.signal })) {
-        void bridge.startOnCompaction(event);
+        void callback(event);
       }
     } catch (error) {
       if (watching.signal.aborted) return;
@@ -409,6 +485,77 @@ export function createBridge(ctx, plugin) {
       report(name, [failedOpen(name, error)], []);
       return NOTHING;
     }
+  };
+
+  /**
+   * The callback before a tool, for the pre hooks but the gate: one after
+   * another. A pre hook refuses the call by throwing, and the first refusal
+   * is the call's answer.
+   *
+   * @param {Array<(event: object) => Promise<unknown>>} runs
+   * @returns {(event: object) => Promise<void>}
+   */
+  const inTurn = (runs) => async (event) => {
+    for (const run of runs) await run(event);
+  };
+
+  /**
+   * The callback after a tool, for the post hooks: their runs side by side —
+   * Claude Code ran the hooks a tool matched in parallel — and what they have
+   * for the model added to the call's result, once. Their texts keep the
+   * order of the runs (combine). A call is a write, a command or a read,
+   * never two of them, so only the writes' hooks ever share a result.
+   *
+   * Nothing leaves this callback as an exception. The call has already run;
+   * an exception here would turn its result into an error, and the model
+   * would take a write that happened for one that failed (F33).
+   *
+   * @param {Array<(event: object) => Promise<import('./answer.js').Answer>>} runs
+   * @returns {(event: {result?: unknown}) => Promise<void>}
+   */
+  const afterTool = (runs) => async (event) => {
+    try {
+      const answered = combine(await Promise.all(runs.map((run) => run(event))));
+      if (answered.action.kind === 'append') event.result = withText(event.result, answered.action.text);
+    } catch (error) {
+      report('execute.after', [{ block: false, diagnostic: `pdkit: the hook bridge failed after a tool call (${reason(error)}); its result is as the tool left it` }], []);
+    }
+  };
+
+  /**
+   * The callback on any other point: the runs side by side. None needs
+   * another, so the order of two on one point is nothing the bridge relies
+   * on — session-start's and prompt-submit's on a prompt; none throws, so
+   * neither does this; and the host is given nothing back.
+   *
+   * @param {Array<(event: object) => Promise<unknown>>} runs
+   * @returns {(event: object) => Promise<void>}
+   */
+  const alongside = (runs) => async (event) => {
+    await Promise.all(runs.map((run) => run(event)));
+  };
+
+  /**
+   * How the bridge stands on each point WIRING names: the callback, from the
+   * runs of the events that stand there, and how it is registered.
+   *
+   * @type {Record<string, {callback: (runs: Array<(event: object) => Promise<any>>) => (event: object) => Promise<void>, register: (callback: (event: object) => Promise<void>) => unknown}>}
+   */
+  const points = {
+    [BEFORE_TOOL]: { callback: inTurn, register: (callback) => ctx.tool.hook('execute.before', callback) },
+    [AFTER_TOOL]: { callback: afterTool, register: (callback) => ctx.tool.hook('execute.after', callback) },
+    [IDLE]: {
+      callback: alongside,
+      // A held subagent's run can end with no stop after it (watch): followed once its stops are.
+      register: async (callback) => {
+        await ctx.session.hook('experimental.idle', callback);
+        void watch();
+      },
+    },
+    [PROMPT]: { callback: alongside, register: (callback) => ctx.session.hook('prompt', callback) },
+    [FORK]: { callback: alongside, register: (callback) => ctx.session.hook('fork', callback) },
+    [COMPACTED_STREAM]: { callback: alongside, register: (callback) => void watchCompactions(callback) },
+    [COMPACTION]: { callback: alongside, register: (callback) => ctx.session.hook('compaction', callback) },
   };
 
   const bridge = {
@@ -505,30 +652,6 @@ export function createBridge(ctx, plugin) {
      */
     async postRead(event) {
       return afterRuns(POST_READ, postReadPayloads, event);
-    },
-
-    /**
-     * After any call: the post hooks for it, side by side — Claude Code ran
-     * the hooks a tool matched in parallel — and what they have for the model
-     * added to the call's result, once.
-     *
-     * Nothing leaves this callback as an exception. The call has already run;
-     * an exception here would turn its result into an error, and the model
-     * would take a write that happened for one that failed (F33).
-     */
-    async afterTool(event) {
-      try {
-        // In the order hooks/hooks.json lists them; their texts keep that
-        // order in the result (combine). A call is a write, a command or a
-        // read, never two of them, so only the writes' hooks ever share a
-        // result.
-        const answered = combine(
-          await Promise.all([bridge.postWrite(event), bridge.postClaim(event), bridge.postBash(event), bridge.postRead(event)]),
-        );
-        if (answered.action.kind === 'append') event.result = withText(event.result, answered.action.text);
-      } catch (error) {
-        report('execute.after', [{ block: false, diagnostic: `pdkit: the hook bridge failed after a tool call (${reason(error)}); its result is as the tool left it` }], []);
-      }
     },
 
     /**
@@ -706,47 +829,39 @@ export function createBridge(ctx, plugin) {
     },
 
     /**
-     * The prompt hook: session-start on a session's first prompt, and
-     * prompt-submit on a pdkit command's — side by side, as neither needs the
-     * other. One callback for the point, so the order of two on one point is
-     * nothing the bridge relies on. Neither throws, so this does not.
-     */
-    async onPrompt(event) {
-      await Promise.all([bridge.startOnPrompt(event), bridge.promptSubmit(event)]);
-    },
-
-    /**
-     * Register every hook but the gate, which the entry point owns and
-     * registers first. pre-write is on the same point as the gate, after it;
-     * the post hooks share one callback after a tool (afterTool);
-     * subagent-stop is on the point a session reaches before it goes idle;
-     * session-start on a prompt, on a fork, and on the stream of compactions;
-     * pre-compact on the compaction itself; prompt-submit on a prompt, in the
-     * same callback as session-start (onPrompt).
+     * Register every event of HOOK_HANDLERS where WIRING stands it — all but
+     * the gate, which the entry point owns and registers first. One callback
+     * on each point, which runs every event that stands there, in the order
+     * of HOOK_HANDLERS; the points in the order the events first name them.
      *
-     * Each on its own: a point the host does not have — experimental.idle may
-     * be renamed in a later Open Code (F57) — leaves the others registered.
-     * What failed is thrown after the rest, for the entry point to report.
+     * Each point on its own: a point the host does not have — experimental.idle
+     * may be renamed in a later Open Code (F57) — leaves the others
+     * registered, and so does an event that has no point here. What failed is
+     * thrown after the rest, for the entry point to report.
      */
     async register() {
       const failures = [];
-      const attempt = async (registration) => {
+      /** @type {Map<string, Array<(event: object) => Promise<unknown>>>} */
+      const standing = new Map();
+      for (const name of Object.keys(HOOK_HANDLERS)) {
+        const where = Object.hasOwn(WIRING, name) ? WIRING[name] : [];
+        if (where.length === 0) failures.push(`the "${name}" hook has no point in Open Code`);
+        for (const { point, run, entry } of where) {
+          if (entry) continue;
+          if (!Object.hasOwn(points, point) || typeof bridge[run] !== 'function') {
+            failures.push(`the "${name}" hook cannot stand on ${point}`);
+            continue;
+          }
+          standing.set(point, [...(standing.get(point) ?? []), (event) => bridge[run](event)]);
+        }
+      }
+      for (const [point, runs] of standing) {
         try {
-          await registration();
+          await points[point].register(points[point].callback(runs));
         } catch (error) {
           failures.push(reason(error));
         }
-      };
-      await attempt(() => ctx.tool.hook('execute.before', (event) => bridge.preWrite(event)));
-      await attempt(() => ctx.tool.hook('execute.after', (event) => bridge.afterTool(event)));
-      await attempt(async () => {
-        await ctx.session.hook('experimental.idle', (event) => bridge.subagentStop(event));
-        void watch();
-      });
-      await attempt(() => ctx.session.hook('prompt', (event) => bridge.onPrompt(event)));
-      await attempt(() => ctx.session.hook('fork', (event) => bridge.startOnFork(event)));
-      void watchCompactions();
-      await attempt(() => ctx.session.hook('compaction', (event) => bridge.preCompact(event)));
+      }
       if (failures.length > 0) throw new Error(failures.join('; '));
     },
 
