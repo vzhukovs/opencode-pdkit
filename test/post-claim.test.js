@@ -27,11 +27,15 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { claims, handle, occurring } from '../lib/hooks/post-claim.js';
+
+/** Where the rule is, as the message names it: the plugin's own directory, absolute. */
+const RULE = `${dirname(dirname(fileURLToPath(import.meta.url)))}/knowledge/pitfalls.md`;
 
 let repo;
 
@@ -126,6 +130,15 @@ describe('handle', () => {
     assert.match(decision.message, /`env\.uriScheme`/);
     assert.match(decision.message, /not yet evidence/);
     assert.match(decision.message, /\/plugin\/knowledge\/pitfalls\.md/);
+  });
+
+  // Open Code has no variable for the plugin directory and expands no
+  // placeholder in what a hook says: with no root passed, the path must still
+  // be one the model can open.
+  test('names the rule under its own directory when no root is passed', async () => {
+    const decision = await handle(write(join(repo, 'design.md'), 'Add `env.uriScheme` here.'), context({ pluginRoot: undefined }));
+    assert.ok(decision.message.endsWith(`See "A name from another project" in ${RULE}.`), decision.message);
+    assert.match(await readFile(RULE, 'utf8'), /^## A name from another project$/m);
   });
 
   test('stays quiet when the name is there', async () => {

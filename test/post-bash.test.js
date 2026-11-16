@@ -27,6 +27,8 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -35,6 +37,9 @@ import { handle, windows } from '../lib/hooks/post-bash.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const BIN = join(ROOT, 'bin', 'pdkit');
+
+/** Where the rule is, as the message names it: the plugin's own directory, absolute. */
+const RULE = `${ROOT}/knowledge/pitfalls.md`;
 
 /** A namespace cut by the window before its last members and its brace. */
 const CUT_NAMESPACE = [
@@ -133,6 +138,15 @@ describe('handle', () => {
     assert.deepEqual(await handle({ tool_name: 'Read', tool_input: {} }, context), { block: false });
     assert.deepEqual(await handle(null, context), { block: false });
   });
+
+  // Open Code has no variable for the plugin directory and expands no
+  // placeholder in what a hook says, so a caller that passes no root must
+  // still get a path the model can open — not a placeholder it cannot.
+  test('names the rule under its own directory when no root is passed', async () => {
+    const decision = await handle(payload('grep -n "namespace env" -A60 api.d.ts', CUT_NAMESPACE), { event: 'post-bash' });
+    assert.ok(decision.message.endsWith(`See "A window that ends inside a block" in ${RULE}.`), decision.message);
+    assert.match(await readFile(RULE, 'utf8'), /^## A window that ends inside a block$/m);
+  });
 });
 
 describe('through bin/pdkit', () => {
@@ -148,5 +162,18 @@ describe('through bin/pdkit', () => {
     const output = JSON.parse(run.stdout);
     assert.equal(output.hookSpecificOutput.hookEventName, 'PostToolUse');
     assert.match(output.hookSpecificOutput.additionalContext, /`sed -n 1555,1600p`/);
+  });
+
+  // Run from elsewhere, as the host runs it: from the session's directory,
+  // which is a fork or a worktree and never the plugin.
+  test('and names the rule by the absolute path of the plugin it runs from', () => {
+    const run = spawnSync('node', [BIN, 'hook', 'post-bash'], {
+      input: JSON.stringify(payload('sed -n 1555,1600p loader.ts', CUT_NAMESPACE)),
+      encoding: 'utf8',
+      cwd: tmpdir(),
+    });
+    assert.equal(run.status, 0, run.stderr);
+    const message = JSON.parse(run.stdout).hookSpecificOutput.additionalContext;
+    assert.ok(message.endsWith(` in ${RULE}.`), message);
   });
 });

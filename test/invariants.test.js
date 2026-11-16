@@ -933,6 +933,43 @@ describe('the server part and lib/', () => {
   });
 });
 
+// Open Code names no plugin directory: no variable holds it, and nothing a hook
+// or the CLI prints is expanded on the way to the model. The code finds its own
+// directory from import.meta.url (PLUGIN_ROOT in lib/config.js) and names a
+// plugin file by that absolute path. Comments count too: one that says the path
+// comes from the variable is how the variable comes back.
+describe('the plugin directory comes from import.meta.url', () => {
+  /**
+   * What may still name the variable, and how many times. doctor's self-tests
+   * run the hooks hooks/hooks.json registers, whose commands are written under
+   * the variable, and expand it to run them. An exact count, so the exception
+   * cannot outlive its reason.
+   * TODO(T7.7): empty once the self-tests no longer read hooks/hooks.json.
+   */
+  const STILL_NAMED = new Map([['lib/doctor.js', 2]]);
+
+  test('lib/ and bin/ do not name CLAUDE_PLUGIN_ROOT', async () => {
+    const files = (await libModules()).map(({ name, source }) => ({ name, source }));
+    for (const entry of await readdir(join(ROOT, 'bin'))) {
+      files.push({ name: `bin/${entry}`, source: await readFile(join(ROOT, 'bin', entry), 'utf8') });
+    }
+
+    const named = new Map();
+    for (const { name, source } of files) {
+      const count = source.split('CLAUDE_PLUGIN_ROOT').length - 1;
+      if (count > 0) named.set(name, count);
+    }
+
+    assert.deepEqual(
+      named,
+      STILL_NAMED,
+      `CLAUDE_PLUGIN_ROOT named in: ${JSON.stringify([...named])}, allowed: ${JSON.stringify([...STILL_NAMED])}.\n` +
+        'Open Code sets no such variable and expands it nowhere; take the directory from PLUGIN_ROOT in lib/config.js. ' +
+        'If a file in STILL_NAMED stopped naming it, drop it from the list.',
+    );
+  });
+});
+
 describe('licensing', () => {
   // The house format, stated here in full rather than sampled from a file that
   // happens to carry it. knowledge/upstream-rules.md tells contributors that a

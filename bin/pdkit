@@ -20,10 +20,11 @@
 // Entry point for the pdkit CLI.
 //
 // This file is deliberately thin. It resolves lib/ relative to its own
-// location via import.meta.url — not the working directory, and not
-// ${CLAUDE_PLUGIN_ROOT}, which changes on every plugin update. The Bash tool
-// puts this directory on PATH, so `pdkit` is callable as a bare command from
-// any working directory, including a worktree.
+// location via import.meta.url — not the working directory, and not a
+// variable naming the plugin directory: Open Code sets none. With this
+// directory on PATH, `pdkit` is callable as a bare command from any working
+// directory, including a worktree.
+// TODO(T4.4): say what puts it there — the server part, first on PATH for the shell tool.
 //
 // Keep bin/ to this one file: everything here becomes a bare command.
 

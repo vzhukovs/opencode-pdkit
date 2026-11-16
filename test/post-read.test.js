@@ -34,6 +34,9 @@ import { grepWindows, handle, readWindow } from '../lib/hooks/post-read.js';
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const BIN = join(ROOT, 'bin', 'pdkit');
 
+/** Where the rule is, as the message names it: the plugin's own directory, absolute. */
+const RULE = `${ROOT}/knowledge/pitfalls.md`;
+
 const CUT = ['  export namespace env {', '    export const appName: string;'].join('\n');
 const WHOLE = `${CUT}\n    export const urlProtocol: string;\n  }`;
 
@@ -108,6 +111,11 @@ describe('handle', () => {
     assert.deepEqual(await handle({ tool_name: 'Bash', tool_input: {} }, context), { block: false });
     assert.deepEqual(await handle(null, context), { block: false });
   });
+
+  test('names the rule under its own directory when no root is passed', async () => {
+    const decision = await handle(read({ content: CUT, startLine: 1, numLines: 2000, totalLines: 4700 }), { event: 'post-read' });
+    assert.ok(decision.message.endsWith(` in ${RULE}.`), decision.message);
+  });
 });
 
 describe('through bin/pdkit', () => {
@@ -120,5 +128,6 @@ describe('through bin/pdkit', () => {
     const output = JSON.parse(run.stdout);
     assert.equal(output.hookSpecificOutput.hookEventName, 'PostToolUse');
     assert.match(output.hookSpecificOutput.additionalContext, /`Read lines 1-2000 of 4700`/);
+    assert.ok(output.hookSpecificOutput.additionalContext.endsWith(` in ${RULE}.`), output.hookSpecificOutput.additionalContext);
   });
 });
