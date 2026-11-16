@@ -907,8 +907,10 @@ describe('the server part and lib/', () => {
 
   test('and each of those leaves stays one', async () => {
     const offenders = [];
+    const found = new Set();
     for (const module of await libModules()) {
       if (!LEAVES.has(module.name)) continue;
+      found.add(module.name);
       const { static: statics, dynamic } = importsOf(module);
       for (const target of [...statics, ...dynamic]) {
         if (!LEAVES.get(module.name).includes(target)) offenders.push(`${module.name} imports ${target}`);
@@ -916,6 +918,8 @@ describe('the server part and lib/', () => {
     }
 
     assert.deepEqual(offenders, [], `a module the server part loads imports more of lib/:\n  ${offenders.join('\n  ')}`);
+    // A leaf that is not there is checked by nothing above.
+    assert.deepEqual([...LEAVES.keys()].filter((name) => !found.has(name)), [], 'LEAVES names a module that does not exist');
   });
 
   // Open Code reloads a plugin when a module it imports changes, and it finds
@@ -990,11 +994,13 @@ describe('harness identifiers have one owner', () => {
   /**
    * What may still name one outside the owner, and how many times: the chain of
    * transcripts prompt-submit follows by Claude Code's process ID, which goes
-   * with the session-model check (D12). An exact count, as above.
+   * with the session-model check (D12), and the hook runner, which keeps that
+   * variable from the hook's process until then. An exact count, as above.
    * TODO(T7.4): empty once the check and the chain are gone.
    */
   const STILL_NAMED = new Map([
     ['lib/hooks/prompt-submit.js: CLAUDE_PID', 1],
+    ['lib/hooks/runner.js: CLAUDE_PID', 1],
     ['lib/session-model.js: CLAUDE_PID', 1],
   ]);
 

@@ -32,8 +32,8 @@
 //      fail, so that from then on there is a callback to refuse with;
 //   2. loads the rest — the hook bridge, the registrars, the settings, the
 //      version check — inside one try. If any of it fails, the gate refuses
-//      every shell command, in text written here: the module a shared text
-//      would come from may be the one that failed. Every other hook is left
+//      every command, in text written here: the module a shared text would
+//      come from may be the one that failed. Every other hook is left
 //      unregistered, which is how the other hooks fail: open;
 //   3. compares the running Open Code with engines.opencode in package.json,
 //      the one place the minimum is written (Open Code ignores the field);
@@ -85,7 +85,7 @@ function log(line) {
 /**
  * What the gate says when the plugin could not load. Worded like the refusal
  * `pdkit hook pre-bash` gives when its handler cannot run, since it is the
- * same failure one step earlier.
+ * same failure one step earlier; a test holds the two to the same advice.
  *
  * @param {string} cause
  * @returns {string}
@@ -149,8 +149,16 @@ export default {
 
     // Step 1. Open Code waits for setup() to finish before it runs a tool, so
     // the wait on `loading` is for safety, not for a race seen in practice.
+    //
+    // Every call that carries a command, not only the shell tool's. The shell
+    // tool is what runs commands here, and a call to `bash` reaches this
+    // callback already renamed to `shell`; but a tool from an MCP server or
+    // another plugin can take a command too, and Claude Code's gate, which
+    // matched on its Bash tool alone, never saw those. Checking them is
+    // stricter than it was, and harmless where the command is not one the gate
+    // has a rule for.
     await ctx.tool.hook('execute.before', async (event) => {
-      if (event?.tool !== 'shell') return;
+      if (typeof event?.input?.command !== 'string') return;
       const loaded = await loading;
       if (loaded.failure !== undefined) throw new Error(refusal(loaded.failure));
       await loaded.bridge.preBash(event);
@@ -178,7 +186,7 @@ export default {
     };
 
     if (loaded.failure !== undefined) {
-      log(`failed to load (${loaded.failure}); every shell command is refused until it loads`);
+      log(`failed to load (${loaded.failure}); every command is refused until it loads`);
       return cleanup;
     }
     cleanups.push(() => loaded.bridge.cleanup());

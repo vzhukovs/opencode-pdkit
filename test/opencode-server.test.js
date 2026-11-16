@@ -29,7 +29,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -51,15 +51,24 @@ const FULL = [
   'skill.transform',
 ];
 
-/** A shell event as execute.before receives it (input as the model wrote it). */
-const shell = () => ({
+/**
+ * A shell event as execute.before receives it (input as the model wrote it).
+ * The bridge runs the real gate on it, in the stand-in's directory — a plain
+ * temporary directory, not a repository — where `git status` matches no rule
+ * and `git add -A` is refused: nothing proves the directory is not
+ * podman-desktop (lib/hooks/scope.js).
+ */
+const shell = (command = 'git status') => ({
   tool: 'shell',
   sessionID: 'ses_test',
   agent: 'build',
   messageID: 'msg_test',
   id: 'call_test',
-  input: { command: 'git push origin HEAD' },
+  input: { command },
 });
+
+/** The directory the stand-in's location names. */
+const DIRECTORY = tmpdir();
 
 const write = () => ({ ...shell(), tool: 'write', input: { path: 'a.txt', content: 'a' } });
 
@@ -83,7 +92,7 @@ function host({ app = RELEASE, options, fail = [] } = {}) {
   const ctx = {
     app,
     options,
-    location: { directory: '/work/project', project: { id: 'global', directory: '/work/project', canonical: '/work/project' } },
+    location: { directory: DIRECTORY, project: { id: 'global', directory: DIRECTORY, canonical: DIRECTORY } },
     tool: hooks('tool'),
     session: hooks('session'),
     shell: hooks('shell'),
@@ -115,16 +124,16 @@ function logOf(t) {
 }
 
 /**
- * A copy of the plugin's entry point and what it loads, with some files
- * replaced (a string) or removed (null). Returns the copy's default export.
+ * A copy of the plugin — the entry point, what it loads, and what the gate's
+ * child process runs — with some files replaced (a string) or removed (null).
+ * Returns the copy's default export.
  */
 async function copy(t, files) {
   const dir = await mkdtemp(join(tmpdir(), 'pdkit-entry-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
-  await cp(join(ROOT, 'opencode'), join(dir, 'opencode'), { recursive: true });
-  await mkdir(join(dir, 'lib'));
-  await cp(join(ROOT, 'lib', 'opencode-version.js'), join(dir, 'lib', 'opencode-version.js'));
-  await cp(join(ROOT, 'package.json'), join(dir, 'package.json'));
+  for (const entry of ['opencode', 'lib', 'bin', 'defaults', 'package.json']) {
+    await cp(join(ROOT, entry), join(dir, entry), { recursive: true });
+  }
   for (const [path, content] of Object.entries(files)) {
     if (content === null) await rm(join(dir, path));
     else await writeFile(join(dir, path), content);
@@ -170,11 +179,11 @@ describe('on a supported Open Code', () => {
     assert.deepEqual(order, FULL);
   });
 
-  // Until the bridge and the registrars are filled in, loading the plugin must
-  // not change what a session does.
-  test('and none of the registrations changes anything yet', async (t) => {
+  // Until the rest of the bridge and the registrars are filled in, loading the
+  // plugin must not change what a session does beyond the gate.
+  test('and none of the registrations but the gate changes anything yet', async (t) => {
     logOf(t);
-    const { ctx, gate, callbacks } = host();
+    const { ctx, callbacks } = host();
 
     await plugin.setup(ctx);
 
@@ -184,8 +193,19 @@ describe('on a supported Open Code', () => {
     const event = { ...shell(), result: { content: [{ type: 'text', text: 'ok' }] } };
     for (const after of callbacks('tool.hook execute.after')) await after(event);
     assert.deepEqual(event, { ...shell(), result: { content: [{ type: 'text', text: 'ok' }] } });
-    await gate(shell());
+  });
+
+  // The gate's rules are test/opencode-gate.test.js's; this is that the
+  // callback the entry point registered reaches them.
+  test('the gate decides through the bridge', async (t) => {
+    logOf(t);
+    const { ctx, gate } = host();
+
+    await plugin.setup(ctx);
+
+    await gate(shell('git status'));
     await gate(write());
+    await assert.rejects(gate(shell('git add -A')), /List the paths explicitly/);
   });
 
   // What makes `pdkit` a bare command in a session, and tells doctor which
@@ -286,7 +306,8 @@ describe('below the minimum Open Code version', () => {
 
     await plugin.setup(ctx);
 
-    await gate(shell());
+    await gate(shell('git status'));
+    await assert.rejects(gate(shell('git add -A')), /List the paths explicitly/);
   });
 
   test('one line goes to the log', async (t) => {
@@ -332,7 +353,7 @@ describe('a version it cannot read', () => {
   });
 });
 
-describe('a plugin that cannot load refuses every shell command', () => {
+describe('a plugin that cannot load refuses every command', () => {
   const BROKEN = {
     'a bridge that throws on import': { 'opencode/bridge/hooks.js': "throw new Error('the bridge is broken');\n" },
     'a bridge that is missing': { 'opencode/bridge/hooks.js': null },
@@ -357,9 +378,10 @@ describe('a plugin that cannot load refuses every shell command', () => {
         assert.match(error.message, /refuses rather than allows/);
         return true;
       });
+      await assert.rejects(gate({ ...shell(), tool: 'terminal_run' }), /cannot run: the opencode-pdkit plugin failed to load/);
       await gate(write());
       assert.equal(log().length, 1);
-      assert.match(log()[0], /failed to load .*every shell command is refused/);
+      assert.match(log()[0], /failed to load .*every command is refused/);
       assert.equal(typeof cleanup, 'function');
       await cleanup();
     });
