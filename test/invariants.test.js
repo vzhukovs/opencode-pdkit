@@ -970,6 +970,62 @@ describe('the plugin directory comes from import.meta.url', () => {
   });
 });
 
+// The names and formats of the identifiers a harness gives — the variable that
+// names a session, the shape of a run's ID — belong to the harness, and they
+// changed when the harness did. lib/harness.js holds them and the rest of lib/
+// reads them from there, so that the next change is one file and not a search.
+// Comments count, as above: a comment that names the variable is where a second
+// reading of it starts.
+describe('harness identifiers have one owner', () => {
+  const OWNER = 'lib/harness.js';
+
+  /** Names and formats of harness identifiers, the ones Claude Code gave included. */
+  const IDENTIFIERS = [
+    ['OPENCODE_SESSION_ID', /\bOPENCODE_SESSION_ID\b/g],
+    ['CLAUDE_CODE_SESSION_ID', /\bCLAUDE_CODE_SESSION_ID\b/g],
+    ['CLAUDE_PID', /\bCLAUDE_PID\b/g],
+    ['ses_ (an Open Code session ID)', /\bses_/g],
+  ];
+
+  /**
+   * What may still name one outside the owner, and how many times: the chain of
+   * transcripts prompt-submit follows by Claude Code's process ID, which goes
+   * with the session-model check (D12). An exact count, as above.
+   * TODO(T7.4): empty once the check and the chain are gone.
+   */
+  const STILL_NAMED = new Map([
+    ['lib/hooks/prompt-submit.js: CLAUDE_PID', 1],
+    ['lib/session-model.js: CLAUDE_PID', 1],
+  ]);
+
+  test(`no module of lib/ but ${OWNER} names one`, async () => {
+    const named = new Map();
+    for (const { name, source } of await libModules()) {
+      if (name === OWNER) continue;
+      for (const [label, pattern] of IDENTIFIERS) {
+        const count = source.match(pattern)?.length ?? 0;
+        if (count > 0) named.set(`${name}: ${label}`, count);
+      }
+    }
+
+    assert.deepEqual(
+      named,
+      STILL_NAMED,
+      `harness identifiers named outside ${OWNER}: ${JSON.stringify([...named])}, allowed: ${JSON.stringify([...STILL_NAMED])}.\n` +
+        `Export the name or the format from ${OWNER} and read it from there. ` +
+        'If an entry in STILL_NAMED stopped naming it, drop it from the list.',
+    );
+  });
+
+  test('and the owner is a leaf, so any module can read from it', async () => {
+    const owner = (await libModules()).find((module) => module.name === OWNER);
+    assert.ok(owner, `${OWNER} is missing`);
+
+    const { static: statics, dynamic } = importsOf(owner);
+    assert.deepEqual([...statics, ...dynamic], []);
+  });
+});
+
 describe('licensing', () => {
   // The house format, stated here in full rather than sampled from a file that
   // happens to carry it. knowledge/upstream-rules.md tells contributors that a

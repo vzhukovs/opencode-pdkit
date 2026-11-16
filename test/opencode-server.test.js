@@ -31,7 +31,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import plugin from '../opencode/server.js';
@@ -45,6 +45,7 @@ const OLD = Object.freeze({ name: 'cli', version: '2.2.7', channel: 'latest' });
 const FULL = [
   'tool.hook execute.before',
   'tool.hook execute.after',
+  'shell.hook create.before',
   'agent.transform',
   'command.transform',
   'skill.transform',
@@ -187,6 +188,20 @@ describe('on a supported Open Code', () => {
     await gate(write());
   });
 
+  // What makes `pdkit` a bare command in a session, and tells doctor which
+  // server runs the plugin (opencode/environment.js has the cases).
+  test("every shell command gets the plugin's bin/ first on PATH and the server's version", async (t) => {
+    logOf(t);
+    const { ctx, callbacks } = host();
+
+    await plugin.setup(ctx);
+
+    const created = { command: 'pdkit --help', cwd: '/work/project', timeout: 120000, shell: '/bin/zsh', env: { PATH: '/usr/bin' } };
+    for (const before of callbacks('shell.hook create.before')) await before(created);
+    assert.equal(created.env.PATH, [join(ROOT, 'bin'), '/usr/bin'].join(delimiter));
+    assert.equal(created.env.PDKIT_OPENCODE_VERSION, RELEASE.version);
+  });
+
   test('nothing is written to the log', async (t) => {
     const log = logOf(t);
 
@@ -230,6 +245,18 @@ describe('below the minimum Open Code version', () => {
     await plugin.setup(ctx);
 
     assert.deepEqual(order, ['tool.hook execute.before', 'command.transform']);
+  });
+
+  // Decided with the minimum (D9): nothing but the gate and the refusals. So
+  // `pdkit` is not on PATH there either, and no variable names the server's
+  // version — doctor run by its full path falls back to the CLI's.
+  test('so no shell command gets bin/ on PATH or the version', async (t) => {
+    logOf(t);
+    const { ctx, callbacks } = host({ app: OLD });
+
+    await plugin.setup(ctx);
+
+    assert.deepEqual(callbacks('shell.hook create.before'), []);
   });
 
   test('every skill is a /pd: command that refuses and names the version to install', async (t) => {
@@ -369,6 +396,7 @@ describe('a registration that fails', () => {
     ['agents', 'agent.transform'],
     ['commands and skills', 'command.transform'],
     ['hooks', 'tool.hook execute.after'],
+    ['shell environment', 'shell.hook create.before'],
   ]) {
     test(`leaves the gate and the rest in place: ${failing}`, async (t) => {
       const log = logOf(t);

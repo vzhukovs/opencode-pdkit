@@ -47,6 +47,25 @@ after(async () => {
   await rm(home, { recursive: true, force: true });
 });
 
+/**
+ * Set (a string) or unset (undefined) environment variables for one test, and
+ * put back what was there when it ends.
+ *
+ * @param {import('node:test').TestContext} t
+ * @param {Record<string, string | undefined>} values
+ */
+function withEnv(t, values) {
+  const saved = Object.fromEntries(Object.keys(values).map((name) => [name, process.env[name]]));
+  const apply = (entries) => {
+    for (const [name, value] of Object.entries(entries)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  };
+  t.after(() => apply(saved));
+  apply(values);
+}
+
 describe('the pointer', () => {
   test('records what is running and reads it back', async () => {
     await start({ issue: 18248, taskId: 'T1', worktree: '/work/fork', home });
@@ -61,20 +80,33 @@ describe('the pointer', () => {
     assert.ok(Date.parse(found.startedAt) > 0);
   });
 
-  test('records the session that started it, from the shell Claude Code runs it in', async () => {
-    const saved = process.env.CLAUDE_CODE_SESSION_ID;
-    process.env.CLAUDE_CODE_SESSION_ID = 'session-from-env';
-    try {
-      await start({ issue: 18248, taskId: 'T1', worktree: '/work/fork', home });
-      assert.equal((await current({ worktree: '/work/fork', home })).session, 'session-from-env');
+  // The variable is named here literally, not imported from lib/harness.js:
+  // the name is Open Code's, and a test that read it from the module under
+  // test would pass with any name the module chose.
+  test('records the session that started it, from the shell Open Code runs it in', async (t) => {
+    withEnv(t, { OPENCODE_SESSION_ID: 'ses_from_env', CLAUDE_CODE_SESSION_ID: undefined });
 
-      delete process.env.CLAUDE_CODE_SESSION_ID;
-      await start({ issue: 18248, taskId: 'T1', worktree: '/work/fork', home });
-      assert.equal('session' in (await current({ worktree: '/work/fork', home })), false, 'no session is recorded rather than an empty one');
-    } finally {
-      if (saved === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
-      else process.env.CLAUDE_CODE_SESSION_ID = saved;
-    }
+    await start({ issue: 18248, taskId: 'T1', worktree: '/work/fork', home });
+    assert.equal((await current({ worktree: '/work/fork', home })).session, 'ses_from_env');
+
+    // A person's `!pdkit …` in the TUI: Open Code sets no session there.
+    delete process.env.OPENCODE_SESSION_ID;
+    await start({ issue: 18248, taskId: 'T1', worktree: '/work/fork', home });
+    assert.equal('session' in (await current({ worktree: '/work/fork', home })), false, 'no session is recorded rather than an empty one');
+  });
+
+  // Left over in the environment when the client or the server was started
+  // from a Claude Code session, and naming that session. Recording it would
+  // make this session's own agents look like another session's.
+  test("does not take Claude Code's session variable for one", async (t) => {
+    withEnv(t, { OPENCODE_SESSION_ID: undefined, CLAUDE_CODE_SESSION_ID: 'e7fee23a-left-over' });
+
+    await start({ issue: 18248, taskId: 'T1', worktree: '/work/fork', home });
+    assert.equal('session' in (await current({ worktree: '/work/fork', home })), false);
+
+    process.env.OPENCODE_SESSION_ID = 'ses_this_one';
+    await start({ issue: 18248, taskId: 'T1', worktree: '/work/fork', home });
+    assert.equal((await current({ worktree: '/work/fork', home })).session, 'ses_this_one');
   });
 
   test('a tree with nothing running has no pointer', async () => {
