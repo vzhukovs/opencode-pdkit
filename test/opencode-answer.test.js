@@ -160,6 +160,35 @@ describe('post-claim', () => {
   });
 });
 
+describe('post-bash', () => {
+  const RULE = 'pdkit: this output went through a window (`grep -A60`) and ends inside an open block: 1 `{` opened, 0 closed. …';
+
+  test('the rule adds itself to the result (HK-14)', () => {
+    assert.deepEqual(answer('post-bash', { block: false, rule: 'cut-read', message: RULE }), {
+      action: { kind: 'append', text: RULE },
+      dropped: [],
+    });
+  });
+
+  test('nothing to say changes nothing', () => {
+    assert.deepEqual(answer('post-bash', { block: false }), { action: { kind: 'pass' }, dropped: [] });
+  });
+
+  test('a run that gave no answer arrives as a pass, and is one', () => {
+    const decision = decide('post-bash', { code: null, stdout: '', stderr: '', failure: { kind: 'spawn', detail: 'cannot run: "node" was not found on the PATH of the process that runs hooks (ENOENT)' } });
+    assert.equal(decision.block, false);
+    assert.match(decision.diagnostic, /^pdkit: hook "post-bash" cannot run: .*; allowing$/);
+    assert.deepEqual(answer('post-bash', decision), { action: { kind: 'pass' }, dropped: [] });
+  });
+
+  test('a notice has no way to the person, and is listed as dropped', () => {
+    assert.deepEqual(answer('post-bash', { block: false, notice: 'for the person', message: RULE }), {
+      action: { kind: 'append', text: RULE },
+      dropped: [{ field: 'notice', text: 'for the person' }],
+    });
+  });
+});
+
 describe('combine: one answer for a call several runs decided', () => {
   const pass = { action: { kind: 'pass' }, dropped: [] };
   const refuse = (text) => ({ action: { kind: 'refuse', text }, dropped: [] });

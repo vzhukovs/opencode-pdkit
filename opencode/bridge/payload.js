@@ -252,6 +252,55 @@ export function postWrite(event, host) {
   return payloadsFor('PostToolUse', changes(event, written), event, host);
 }
 
+/**
+ * The payload for `pdkit hook post-bash`: Claude Code's PostToolUse on Bash,
+ * for a command the shell tool ran to an exit of 0, with what it printed. At
+ * most one: a call is one command.
+ *
+ * Only the shell tool, as the matcher was Bash alone. Not every call that
+ * carries a command, as the gate reads (§13 DV5): that is where a write
+ * upstream could hide, and post-bash guards none.
+ *
+ * Only a command that exited 0. Claude Code ran PostToolUse when a tool
+ * succeeded, and a Bash command that exited otherwise was a tool that failed
+ * — PostToolUseFailure, which pdkit never registered. Open Code reports such a
+ * command as a call that completed, with its exit code in the output (F264),
+ * so the bridge reads the code where Claude Code read the outcome. A command
+ * moved to the background has no code yet, and is not looked at either.
+ *
+ * `tool_response.stdout` is the shell tool's own output, where post-bash reads
+ * it: the command's stdout and stderr in one stream, as Claude Code's Bash put
+ * them in its `stdout` (F264); its `stderr` held notices of the tool's own,
+ * which have no counterpart here. Not the result's text parts: those are the
+ * output as well, for a command that exited 0, and whatever another plugin
+ * added to it. What Open Code puts there for a command that printed nothing,
+ * `(no output)`, is passed on as it is: no block opens in it.
+ *
+ * `cwd` is where the command ran, as pre-bash takes it; post-bash itself
+ * reads no path.
+ *
+ * @param {{tool?: string, sessionID?: string, status?: string, input?: unknown, result?: unknown}} event  execute.after's event
+ * @param {{directory: string|undefined}} host  ctx.location.directory
+ * @returns {Array<{hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: {command: string}, tool_response: {stdout: string}, cwd?: string, session_id?: string}>}
+ */
+export function postBash(event, host) {
+  if (event?.tool !== 'shell' || event.status !== 'completed') return [];
+  const input = event.input;
+  if (input === null || typeof input !== 'object' || typeof input.command !== 'string' || input.command === '') return [];
+  const output = event.result?.output;
+  if (output === null || typeof output !== 'object' || output.exitCode !== 0 || typeof output.output !== 'string') return [];
+  return [
+    {
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: input.command },
+      tool_response: { stdout: output.output },
+      cwd: workingDirectory(host.directory, input.workdir),
+      session_id: event.sessionID,
+    },
+  ];
+}
+
 /** Where a handler reads the text a call wrote: a Write's whole file, an Edit's new text. */
 const TEXT_FIELD = { Write: 'content', Edit: 'new_string' };
 

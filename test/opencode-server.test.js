@@ -187,8 +187,9 @@ describe('on a supported Open Code', () => {
 
   // Until the rest of the bridge and the registrars are filled in, loading the
   // plugin must not change what a session does beyond the gate, pre-write,
-  // post-write and post-claim — which have nothing to say about a command.
-  test('and none of the registrations but the gate, pre-write, post-write and post-claim changes anything yet', async (t) => {
+  // post-write, post-claim and post-bash — which have nothing to say about
+  // this command.
+  test('and none of the registrations but the gate, pre-write, post-write, post-claim and post-bash changes anything yet', async (t) => {
     logOf(t);
     const { ctx, callbacks } = host();
 
@@ -197,9 +198,10 @@ describe('on a supported Open Code', () => {
     for (const domain of ['agent', 'command', 'skill']) {
       assert.deepEqual(edits(callbacks(`${domain}.transform`)), [], `${domain}.transform edits something`);
     }
-    const event = { ...shell(), result: { content: [{ type: 'text', text: 'ok' }] } };
+    const ran = () => ({ ...shell(), status: 'completed', result: { output: { output: 'ok {\n', exitCode: 0 }, content: [{ type: 'text', text: 'ok {\n' }] } });
+    const event = ran();
     for (const after of callbacks('tool.hook execute.after')) await after(event);
-    assert.deepEqual(event, { ...shell(), result: { content: [{ type: 'text', text: 'ok' }] } });
+    assert.deepEqual(event, ran());
   });
 
   // The gate's rules are test/opencode-gate.test.js's; this is that the
@@ -280,6 +282,34 @@ describe('on a supported Open Code', () => {
         .sort(),
       ['post-claim', 'post-write'].map((hook) => `opencode-pdkit: pdkit: hook "${hook}" cannot run: its working directory does not exist; allowing`),
     );
+  });
+
+  // post-bash's rules are test/opencode-post-bash.test.js's; this is that the
+  // same callback runs it, after a command that exited 0 and not after a
+  // write. As above, a run that is attempted says so in the log.
+  test('post-bash runs through the bridge, after a shell command only', async (t) => {
+    const log = logOf(t);
+    const { ctx, callbacks } = host();
+
+    await plugin.setup(ctx);
+
+    const [afterTool] = callbacks('tool.hook execute.after');
+    ctx.location = { ...ctx.location, directory: join(DIRECTORY, 'pdkit-no-such-directory') };
+    const done = (event, exitCode = 0) => ({ ...event, status: 'completed', result: { output: { output: 'ok', exitCode }, content: [{ type: 'text', text: 'ok' }] } });
+
+    await afterTool(done(shell('git status'), 1));
+    assert.deepEqual(log(), []);
+
+    const event = done(shell('head -5 a.ts'));
+    await afterTool(event);
+    assert.deepEqual(event.result, done(shell()).result);
+    assert.equal(log().length, 1, log().join('\n'));
+    assert.match(log()[0], /^opencode-pdkit: pdkit: hook "post-bash" cannot run: its working directory does not exist: .*; allowing$/);
+
+    // A write is post-write's, and not a command: one line, and not post-bash's.
+    await afterTool(done(write()));
+    assert.equal(log().length, 2, log().join('\n'));
+    assert.match(log()[1], /^opencode-pdkit: pdkit: hook "post-write" /);
   });
 
   // What makes `pdkit` a bare command in a session, and tells doctor which

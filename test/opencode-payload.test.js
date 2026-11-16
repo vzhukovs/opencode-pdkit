@@ -27,7 +27,7 @@ import assert from 'node:assert/strict';
 import { join, resolve, win32 } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { hostPath, postClaim, postWrite, preBash, preWrite } from '../opencode/bridge/payload.js';
+import { hostPath, postBash, postClaim, postWrite, preBash, preWrite } from '../opencode/bridge/payload.js';
 
 const DIRECTORY = join(tmpdir(), 'project');
 
@@ -419,6 +419,113 @@ describe('post-claim', () => {
     test('a patch the tool cannot read is no payload', () => {
       assert.deepEqual(postClaim(patch('*** Delete File: a.md', '-body'), host), []);
     });
+  });
+});
+
+// post-bash reads the command and what it printed (post-bash.js), so its
+// payload carries both — for a command that the shell tool ran and that exited
+// 0, which is what Claude Code ran PostToolUse on. The result is shaped as the
+// shell tool reports it to execute.after (F264).
+describe('post-bash', () => {
+  const host = { directory: DIRECTORY };
+  /** What the shell tool reports for a command that ran in the foreground and exited `exitCode`. */
+  const shellResult = (output, exitCode) => ({
+    output: { output, exitCode, wallTimeSeconds: 0.02 },
+    content: [{ type: 'text', text: output }, ...(exitCode === 0 ? [] : [{ type: 'text', text: `Exit code: ${exitCode}` }])],
+    metadata: { status: 'completed', truncated: false, exit: exitCode },
+  });
+  /** A block left open, as a command that exited 0 printed it. */
+  const OPEN = shellResult('namespace env {\n', 0);
+  /** execute.after's event for a call that ran. */
+  const done = (input, { result = OPEN, tool = 'shell', status = 'completed' } = {}) => ({ ...call(input, tool), status, result });
+
+  test("is Claude Code's PostToolUse on Bash, with the command, what it printed, the directory and the session", () => {
+    assert.deepEqual(postBash(done({ command: 'sed -n 1,40p api.d.ts' }), host), [
+      {
+        hook_event_name: 'PostToolUse',
+        tool_name: 'Bash',
+        tool_input: { command: 'sed -n 1,40p api.d.ts' },
+        tool_response: { stdout: 'namespace env {\n' },
+        cwd: DIRECTORY,
+        session_id: 'ses_test',
+      },
+    ]);
+  });
+
+  test('names no transcript', () => {
+    assert.equal('transcript_path' in postBash(done({ command: 'head -5 a' }), host)[0], false);
+  });
+
+  // The shell tool's one stream is stdout and stderr together, as Claude
+  // Code's Bash stdout was; post-bash counts the braces of all of it.
+  test("what it printed is the shell tool's output, stderr in it, and not the result's text parts", () => {
+    const result = shellResult('OUT {\nERR {\n', 0);
+    result.content = [...result.content, { type: 'text', text: '} added by someone else' }];
+    assert.equal(postBash(done({ command: 'head -5 a' }, { result }), host)[0].tool_response.stdout, 'OUT {\nERR {\n');
+  });
+
+  // What the shell tool cut itself, before the hook, is what the model read (F34).
+  test('a long output is as the shell tool cut it, with its note', () => {
+    const cut = '501 {\n502 {\n\n[showing lines 501-502 of 502; full output saved to /tmp/sh_x.out]';
+    const result = { ...shellResult(cut, 0), metadata: { status: 'completed', truncated: true, exit: 0 } };
+    result.output.outputPath = '/tmp/sh_x.out';
+    assert.equal(postBash(done({ command: 'head -502 a' }, { result }), host)[0].tool_response.stdout, cut);
+  });
+
+  test("the shell tool's workdir is where the command ran, as pre-bash takes it", () => {
+    const elsewhere = join(tmpdir(), 'elsewhere');
+    assert.equal(postBash(done({ command: 'head -5 a', workdir: elsewhere }), host)[0].cwd, elsewhere);
+    assert.equal(postBash(done({ command: 'head -5 a', workdir: 'packages/main' }), host)[0].cwd, resolve(DIRECTORY, 'packages/main'));
+    assert.equal(postBash(done({ command: 'head -5 a', workdir: 7 }), host)[0].cwd, DIRECTORY);
+    assert.equal(postBash(done({ command: 'head -5 a', workdir: 'relative' }), { directory: undefined })[0].cwd, undefined);
+  });
+
+  // Claude Code ran PostToolUse when a tool succeeded; a Bash command that
+  // exited otherwise was a failure, PostToolUseFailure, which pdkit never
+  // registered. Open Code calls it completed, with the code (F264).
+  test('only a command that exited 0', () => {
+    for (const exitCode of [1, 2, 127, -1, '0', null, undefined]) {
+      assert.deepEqual(postBash(done({ command: 'sed -n 1,40p a' }, { result: shellResult('namespace env {\n', exitCode) }), host), [], String(exitCode));
+    }
+  });
+
+  // A command moved to the background has no exit code yet (F264).
+  test('not a command moved to the background', () => {
+    const result = {
+      output: { output: 'Command moved to the background (shell ID: sh_x).', exitCode: null, wallTimeSeconds: 0.001, shellID: 'sh_x', pid: 1 },
+      content: [{ type: 'text', text: 'Command moved to the background (shell ID: sh_x).' }],
+      metadata: { status: 'running', truncated: false, shellID: 'sh_x', pid: 1 },
+    };
+    assert.deepEqual(postBash(done({ command: 'tail -40 a.ts', background: true }, { result }), host), []);
+  });
+
+  test('only after a call that succeeded', () => {
+    for (const status of ['error', 'running']) {
+      assert.deepEqual(postBash(done({ command: 'head -5 a' }, { status }), host), [], status);
+    }
+    const { status: _, ...noStatus } = done({ command: 'head -5 a' });
+    assert.deepEqual(postBash(noStatus, host), []);
+  });
+
+  // Unlike the gate (§13 DV5): the matcher was Bash, and post-bash guards nothing.
+  test('only the shell tool, whatever else carries a command', () => {
+    for (const tool of ['terminal_run', 'bash', 'read', 'grep', 'write']) {
+      assert.deepEqual(postBash(done({ command: 'head -5 a' }, { tool }), host), [], tool);
+    }
+    const { tool: _, ...noTool } = done({ command: 'head -5 a' });
+    assert.deepEqual(postBash(noTool, host), []);
+    assert.deepEqual(postBash(undefined, host), []);
+  });
+
+  test('no command, or a result with no output of the shell tool, is no payload', () => {
+    for (const input of [undefined, null, {}, { command: '' }, { command: 7 }]) {
+      assert.deepEqual(postBash(done(input), host), [], JSON.stringify(input));
+    }
+    for (const result of [null, {}, { content: [{ type: 'text', text: 'x {' }] }, { output: 'x {' }, { output: null }, { output: { output: 7, exitCode: 0 } }]) {
+      assert.deepEqual(postBash(done({ command: 'head -5 a' }, { result }), host), [], JSON.stringify(result));
+    }
+    const { result: _, ...noResult } = done({ command: 'head -5 a' });
+    assert.deepEqual(postBash(noResult, host), []);
   });
 });
 

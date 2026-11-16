@@ -49,12 +49,19 @@ import { homedir } from 'node:os';
 
 import { invoke, refusal } from '../../lib/hooks/runner.js';
 import { answer, combine, withText } from './answer.js';
-import { postClaim as postClaimPayloads, postWrite as postWritePayloads, preBash as preBashPayload, preWrite as preWritePayloads } from './payload.js';
+import {
+  postBash as postBashPayloads,
+  postClaim as postClaimPayloads,
+  postWrite as postWritePayloads,
+  preBash as preBashPayload,
+  preWrite as preWritePayloads,
+} from './payload.js';
 
 const PRE_BASH = 'pre-bash';
 const PRE_WRITE = 'pre-write';
 const POST_WRITE = 'post-write';
 const POST_CLAIM = 'post-claim';
+const POST_BASH = 'post-bash';
 
 /** An answer that does nothing: what a hook that had no run, or failed open, gives. */
 const NOTHING = Object.freeze({ action: Object.freeze({ kind: 'pass' }), dropped: Object.freeze([]) });
@@ -96,6 +103,7 @@ const hostHome = () => process.env.OPENCODE_TEST_HOME ?? homedir();
  *   preWrite: (event: {tool?: string, sessionID?: string, input?: unknown}) => Promise<void>,
  *   postWrite: (event: {tool?: string, sessionID?: string, status?: string, input?: unknown}) => Promise<import('./answer.js').Answer>,
  *   postClaim: (event: {tool?: string, sessionID?: string, status?: string, input?: unknown}) => Promise<import('./answer.js').Answer>,
+ *   postBash: (event: {tool?: string, sessionID?: string, status?: string, input?: unknown, result?: unknown}) => Promise<import('./answer.js').Answer>,
  *   afterTool: (event: {tool?: string, sessionID?: string, status?: string, input?: unknown, result?: unknown}) => Promise<void>,
  *   register: () => Promise<void>,
  *   cleanup: () => Promise<void>,
@@ -130,6 +138,10 @@ export function createBridge(ctx, plugin) {
    * event that cannot be read, a location that cannot be had — is a pass that
    * says why in the log.
    *
+   * The session's directory is read when a payload needs it, which is after
+   * the hook's own filter: a call a hook does not look at costs it nothing —
+   * not even a line, when the location cannot be had.
+   *
    * @param {string} name  the pdkit hook event
    * @param {(event: object, host: {directory: string|undefined, home: string}) => object[]} payloadsOf
    * @param {object} event  execute.after's event
@@ -137,7 +149,13 @@ export function createBridge(ctx, plugin) {
    */
   const afterRuns = async (name, payloadsOf, event) => {
     try {
-      const payloads = payloadsOf(event, { directory: ctx.location?.directory, home: hostHome() });
+      const host = {
+        get directory() {
+          return ctx.location?.directory;
+        },
+        home: hostHome(),
+      };
+      const payloads = payloadsOf(event, host);
       if (payloads.length === 0) return NOTHING;
       const decisions = await Promise.all(payloads.map((payload) => invoke(name, payload, { root: plugin.root })));
       const answered = combine(decisions.map((decision) => answer(name, decision)));
@@ -224,6 +242,17 @@ export function createBridge(ctx, plugin) {
     },
 
     /**
+     * post-bash, for a call that ran: whether a shell command that read
+     * through a window, and exited 0, printed a block it did not close. Gives
+     * an answer and never throws.
+     *
+     * One run for the command (afterRuns).
+     */
+    async postBash(event) {
+      return afterRuns(POST_BASH, postBashPayloads, event);
+    },
+
+    /**
      * After any call: the post hooks for it, side by side — Claude Code ran
      * the hooks a tool matched in parallel — and what they have for the model
      * added to the call's result, once.
@@ -235,8 +264,9 @@ export function createBridge(ctx, plugin) {
     async afterTool(event) {
       try {
         // In the order hooks/hooks.json lists them; their texts keep that
-        // order in the result (combine).
-        const answered = combine(await Promise.all([bridge.postWrite(event), bridge.postClaim(event)]));
+        // order in the result (combine). No call is both a write and a
+        // command, so post-bash's text never shares a result with theirs.
+        const answered = combine(await Promise.all([bridge.postWrite(event), bridge.postClaim(event), bridge.postBash(event)]));
         if (answered.action.kind === 'append') event.result = withText(event.result, answered.action.text);
       } catch (error) {
         report('execute.after', [{ block: false, diagnostic: `pdkit: the hook bridge failed after a tool call (${reason(error)}); its result is as the tool left it` }], []);
@@ -250,7 +280,7 @@ export function createBridge(ctx, plugin) {
      */
     async register() {
       await ctx.tool.hook('execute.before', (event) => bridge.preWrite(event));
-      // TODO(T4.9–T4.14): the rest of pdkit's hook events.
+      // TODO(T4.10–T4.14): the rest of pdkit's hook events.
       await ctx.tool.hook('execute.after', (event) => bridge.afterTool(event));
     },
 

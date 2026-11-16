@@ -43,6 +43,7 @@ import { handle } from '../lib/hooks/dispatch.js';
 import { handle as handleOwns } from '../lib/hooks/owns.js';
 import { handle as handlePostWrite } from '../lib/hooks/post-write.js';
 import { handle as handlePostClaim } from '../lib/hooks/post-claim.js';
+import { handle as handlePostBash } from '../lib/hooks/post-bash.js';
 import { PLUGIN_ROOT } from '../lib/commands/support.js';
 import { spdxHeader } from '../lib/upstream.js';
 import { start, stop } from '../lib/active.js';
@@ -602,6 +603,52 @@ describe('invoke agrees with handle, for post-claim', () => {
     const outcomes = new Set();
     for (const [, payloadOf] of FIXTURES) {
       const decision = await handlePostClaim(payloadOf(), { event: 'post-claim', pluginRoot: PLUGIN_ROOT });
+      outcomes.add(decision.block ? 'refuse' : decision.message ? 'message' : 'pass');
+    }
+    assert.deepEqual([...outcomes].sort(), ['message', 'pass']);
+  });
+});
+
+// The same for post-bash: post-bash.js imported, and the same payload through
+// bin/pdkit, on each of its outcomes — the rule that runHook sends as
+// additionalContext after a tool, and silence. It never refuses, and reads no
+// repository: the work directory is any directory.
+describe('invoke agrees with handle, for post-bash', () => {
+  /** A namespace a window cut before its brace, and the same one read to it (post-bash.test.js). */
+  const CUT = ['4522:  export namespace env {', '4526-    export const appName: string;', '4579-    export function createTelemetryLogger(): TelemetryLogger;'].join('\n');
+  const WHOLE = `${CUT}\n4590-    export const urlProtocol: string;\n4591-  }`;
+
+  const ran = (command, stdout) => ({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command }, tool_response: { stdout }, cwd: work });
+
+  /** What the decision says, as far as the process protocol carries it; the rule is named under PLUGIN_ROOT, as runHook passes it. */
+  const carried = (decision) => ({ block: decision.block, reason: decision.reason, message: decision.message });
+
+  const FIXTURES = [
+    ['a context grep that stopped inside a block', () => ran('grep -n "namespace env" -A60 api.d.ts', CUT)],
+    ['a sed range, the same', () => ran('sed -n 1555,1600p loader.ts', CUT)],
+    ['head of a file printed by cat', () => ran('cat api.d.ts | head -100', CUT)],
+    ['several windows in one command', () => ran('head -40 a.ts; tail -20 b.ts', CUT)],
+    ['the window reached the closing brace', () => ran('grep -n "namespace env" -A70 api.d.ts', WHOLE)],
+    ['no window, however open the output', () => ran('cat api.d.ts', CUT)],
+    ['head trimming a list of matches', () => ran('grep -n "start() {" loader.ts | head -15', CUT)],
+    ['a log followed', () => ran('tail -f app.log', CUT)],
+    ['another tool', () => ({ ...ran('head -40 a.ts', CUT), tool_name: 'Read' })],
+    ['no command', () => ({ ...ran('', CUT), tool_input: {} })],
+  ];
+
+  for (const [label, payloadOf] of FIXTURES) {
+    test(label, async () => {
+      const direct = carried(await handlePostBash(payloadOf(), { event: 'post-bash', pluginRoot: PLUGIN_ROOT }));
+      const through = carried(await invoke('post-bash', payloadOf(), { root: ROOT }));
+
+      assert.deepEqual(through, direct);
+    });
+  }
+
+  test('the fixtures cover every outcome: a pass, and a pass with a message', async () => {
+    const outcomes = new Set();
+    for (const [, payloadOf] of FIXTURES) {
+      const decision = await handlePostBash(payloadOf(), { event: 'post-bash', pluginRoot: PLUGIN_ROOT });
       outcomes.add(decision.block ? 'refuse' : decision.message ? 'message' : 'pass');
     }
     assert.deepEqual([...outcomes].sort(), ['message', 'pass']);

@@ -110,6 +110,11 @@ const ANSWERS = {
   // beside the write as additionalContext; the model gets it in the write's
   // result. post-claim never blocks.
   'post-claim': afterTool,
+  // A command that read through a window — `grep -A`, `sed -n a,bp`, `head` of
+  // a file — and printed a block it did not close (HK-14): Claude Code placed
+  // the rule beside the command as additionalContext; the model gets it in
+  // the command's result. post-bash never blocks.
+  'post-bash': afterTool,
 };
 
 /**
