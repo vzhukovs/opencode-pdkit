@@ -30,18 +30,24 @@
 
 import { test, describe, before, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 
 import { DEADLINE_MS, childEnv, decide, invoke, refusal, run } from '../lib/hooks/runner.js';
 import { FAIL_CLOSED } from '../lib/hooks/events.js';
 import { handle } from '../lib/hooks/dispatch.js';
+import { handle as handleOwns } from '../lib/hooks/owns.js';
+import { start, stop } from '../lib/active.js';
 import * as gate from '../lib/gate.js';
+import { setOwns, withdrawTask } from '../lib/state.js';
 import { BRANCH, otherRepository, podmanDesktopClone, readyIssue } from './helpers/gate-fixture.js';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
+const execFileAsync = promisify(execFile);
 const POSIX = process.platform !== 'win32';
 
 /** The advice every refusal for want of an answer ends with, as runner.js words it. */
@@ -377,6 +383,80 @@ describe('invoke agrees with handle', () => {
       assert.deepEqual(through, direct);
     });
   }
+});
+
+// The same for the ownership check: owns.js imported, and the same payload
+// through bin/pdkit, on each of its outcomes.
+describe('invoke agrees with handle, for pre-write', () => {
+  let home;
+  let repo;
+  let outside;
+  let previousHome;
+
+  before(async () => {
+    home = await realpath(await mkdtemp(join(tmpdir(), 'pdkit-runner-owns-home-')));
+    previousHome = process.env.PDKIT_HOME;
+    process.env.PDKIT_HOME = home;
+    repo = await realpath(await mkdtemp(join(tmpdir(), 'pdkit-runner-owns-repo-')));
+    outside = await realpath(await mkdtemp(join(tmpdir(), 'pdkit-runner-owns-out-')));
+    await execFileAsync('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    await mkdir(join(repo, 'src'), { recursive: true });
+    await setOwns(3001, 'T1', ['src/owned.ts'], { home });
+    await setOwns(3001, 'T8', [], { home });
+    await setOwns(3001, 'T2', ['src/owned.ts'], { home });
+    await withdrawTask(3001, { task: 'T2', amendment: 'A1', replacedBy: ['T5'], home });
+  });
+
+  after(async () => {
+    await stop({ worktree: repo, home });
+    if (previousHome === undefined) delete process.env.PDKIT_HOME;
+    else process.env.PDKIT_HOME = previousHome;
+    for (const dir of [home, repo, outside]) await rm(dir, { recursive: true, force: true });
+  });
+
+  const write = (file, tool = 'Write') => ({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: { file_path: file }, cwd: repo });
+
+  /** What the decision says, as far as the process protocol carries it. */
+  const carried = (decision) => ({ block: decision.block, reason: decision.reason, message: decision.message });
+
+  /** A task running in the repository, or none. */
+  const task = (issue, taskId) => async () => {
+    await stop({ worktree: repo, home });
+    if (taskId) await start({ issue, taskId, worktree: repo, home });
+  };
+
+  const FIXTURES = [
+    ['a file the task owns', () => write(join(repo, 'src/owned.ts')), task(3001, 'T1')],
+    ['a file it does not own', () => write(join(repo, 'src/other.ts')), task(3001, 'T1')],
+    ['an edit of a file it does not own', () => write(join(repo, 'src/other.ts'), 'Edit'), task(3001, 'T1')],
+    ['a relative path, from cwd', () => write('src/other.ts'), task(3001, 'T1')],
+    ['a file outside the tree', () => write(join(outside, 'notes.md')), task(3001, 'T1')],
+    ['a task that owns nothing', () => write(join(repo, 'src/owned.ts')), task(3001, 'T8')],
+    ['a task with no Owns recorded', () => write(join(repo, 'src/other.ts')), task(4242, 'T9')],
+    ['a withdrawn task', () => write(join(repo, 'src/owned.ts')), task(3001, 'T2')],
+    ['no task running', () => write(join(repo, 'src/other.ts')), task()],
+    ['no file', () => ({ ...write(''), tool_input: {} }), task(3001, 'T1')],
+  ];
+
+  for (const [label, payloadOf, arrange] of FIXTURES) {
+    test(label, async () => {
+      await arrange();
+      const direct = carried(await handleOwns(payloadOf(), { event: 'pre-write', pluginRoot: ROOT }));
+      const through = carried(await invoke('pre-write', payloadOf(), { root: ROOT }));
+
+      assert.deepEqual(through, direct);
+    });
+  }
+
+  test('the fixtures cover every outcome: a refusal, a pass, and a pass with a message', async () => {
+    const outcomes = new Set();
+    for (const [, payloadOf, arrange] of FIXTURES) {
+      await arrange();
+      const decision = await handleOwns(payloadOf(), { event: 'pre-write', pluginRoot: ROOT });
+      outcomes.add(decision.block ? 'refuse' : decision.message ? 'message' : 'pass');
+    }
+    assert.deepEqual([...outcomes].sort(), ['message', 'pass', 'refuse']);
+  });
 });
 
 // The refusal for a handler that cannot run is written twice — in runHook, for

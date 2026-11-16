@@ -24,10 +24,10 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { join, resolve } from 'node:path';
+import { join, resolve, win32 } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { preBash } from '../opencode/bridge/payload.js';
+import { hostPath, preBash, preWrite } from '../opencode/bridge/payload.js';
 
 const DIRECTORY = join(tmpdir(), 'project');
 
@@ -83,5 +83,161 @@ describe('pre-bash', () => {
       assert.equal(preBash(call({ command: 'git push', workdir: 'relative' }), directory).cwd, undefined);
     }
     assert.equal(preBash(call({ command: 'git push', workdir: DIRECTORY }), undefined).cwd, DIRECTORY);
+  });
+});
+
+describe('pre-write', () => {
+  const HOME = join(tmpdir(), 'home');
+  const host = { directory: DIRECTORY, home: HOME };
+  const write = (input) => call(input, 'write');
+  const patch = (...lines) => call({ patchText: lines.join('\n') }, 'patch');
+
+  /** The payload for one file. */
+  const payload = (file, tool_name = 'Write') => ({
+    hook_event_name: 'PreToolUse',
+    tool_name,
+    tool_input: { file_path: file },
+    cwd: DIRECTORY,
+    session_id: 'ses_test',
+  });
+
+  test("write is Claude Code's PreToolUse on Write, with the file whole, the directory and the session", () => {
+    assert.deepEqual(preWrite(write({ path: 'src/a.ts', content: 'x' }), host), [payload(join(DIRECTORY, 'src/a.ts'))]);
+  });
+
+  test('edit is Edit', () => {
+    assert.deepEqual(preWrite(call({ path: 'src/a.ts', oldString: 'a', newString: 'b' }, 'edit'), host), [payload(join(DIRECTORY, 'src/a.ts'), 'Edit')]);
+  });
+
+  test('names no transcript', () => {
+    assert.equal('transcript_path' in preWrite(write({ path: 'a', content: '' }), host)[0], false);
+  });
+
+  // owns.js takes a relative path from `cwd` and knows no `~`; the tool takes
+  // both from the session, and that is the file it writes.
+  describe('the file is the one the tool would write', () => {
+    for (const [given, expected] of [
+      ['src/a.ts', resolve(DIRECTORY, 'src/a.ts')],
+      ['../elsewhere/a.ts', resolve(DIRECTORY, '../elsewhere/a.ts')],
+      [join(tmpdir(), 'other', 'a.ts'), join(tmpdir(), 'other', 'a.ts')],
+      [`${join(tmpdir(), 'other')}/../x/./a.ts`, join(tmpdir(), 'x', 'a.ts')],
+      ['~', HOME],
+      ['~/notes/a.md', join(HOME, 'notes/a.md')],
+      ['~user/a.md', resolve(DIRECTORY, '~user/a.md')],
+      ['./~/a.md', resolve(DIRECTORY, '~/a.md')],
+    ]) {
+      test(JSON.stringify(given), () => {
+        assert.equal(preWrite(write({ path: given, content: '' }), host)[0].tool_input.file_path, expected);
+      });
+    }
+  });
+
+  test('with no directory from the session, a whole path is still a file, and a relative one is passed on as given', () => {
+    for (const directory of [undefined, '']) {
+      const absolute = join(tmpdir(), 'a.ts');
+      assert.deepEqual(preWrite(write({ path: absolute, content: '' }), { directory, home: HOME }), [{ ...payload(absolute), cwd: undefined }]);
+      // The runner refuses a payload without a directory; pre-write then fails
+      // open and says why.
+      assert.deepEqual(preWrite(write({ path: 'a.ts', content: '' }), { directory, home: HOME }), [{ ...payload('a.ts'), cwd: undefined }]);
+    }
+  });
+
+  // The input is the model's, unchecked: Open Code applies the tool's schema
+  // after this hook. What the tool would refuse names no file.
+  test('an input that names no file is no payload', () => {
+    for (const input of [undefined, null, 'a.ts', ['a.ts'], {}, { path: '' }, { path: 7 }, { path: ['a.ts'] }, { filePath: 'a.ts' }, { file_path: 'a.ts' }]) {
+      assert.deepEqual(preWrite(write(input), host), [], JSON.stringify(input));
+      assert.deepEqual(preWrite(call(input, 'edit'), host), [], JSON.stringify(input));
+    }
+    for (const input of [undefined, {}, { patchText: 7 }, { patchText: ['*** Begin Patch'] }, { path: 'a.ts' }]) {
+      assert.deepEqual(preWrite(call(input, 'patch'), host), [], JSON.stringify(input));
+    }
+  });
+
+  test('any other tool is no payload, whatever it carries', () => {
+    for (const tool of ['shell', 'read', 'experimental_image_generate', 'worktree_remove', 'toString', undefined]) {
+      assert.deepEqual(preWrite(call({ path: 'a.ts', content: 'x', patchText: '*** Begin Patch\n*** Delete File: a.ts\n*** End Patch' }, tool), host), [], String(tool));
+    }
+    assert.deepEqual(preWrite(undefined, host), []);
+  });
+
+  describe('patch', () => {
+    // Decided with T4.6: every file the patch changes, a deleted one and the
+    // file a move takes away included.
+    test('a payload for every file it changes: added and moved-to as Write, updated, deleted and moved-from as Edit', () => {
+      const event = patch(
+        '*** Begin Patch',
+        '*** Add File: notes/added.txt',
+        '+x',
+        '*** Update File: notes/update.txt',
+        '@@',
+        '-a',
+        '+b',
+        '*** Update File: notes/move.txt',
+        '*** Move to: ~/moved.txt',
+        '-c',
+        '+d',
+        '*** Delete File: /work/gone.txt',
+        '*** End Patch',
+      );
+
+      assert.deepEqual(preWrite(event, host), [
+        payload(join(DIRECTORY, 'notes/added.txt'), 'Write'),
+        payload(join(DIRECTORY, 'notes/update.txt'), 'Edit'),
+        payload(join(DIRECTORY, 'notes/move.txt'), 'Edit'),
+        payload(join(HOME, 'moved.txt'), 'Write'),
+        payload(resolve('/work/gone.txt'), 'Edit'),
+      ]);
+    });
+
+    test('a file named twice is checked once, however it is spelled', () => {
+      const event = patch('*** Begin Patch', '*** Add File: b.txt', '+x', '*** Update File: a.txt', '*** Move to: ./b.txt', '-a', '+b', `*** Delete File: ${join(DIRECTORY, 'a.txt')}`, '*** End Patch');
+
+      assert.deepEqual(
+        preWrite(event, host).map((one) => [one.tool_name, one.tool_input.file_path]),
+        [
+          ['Write', join(DIRECTORY, 'b.txt')],
+          ['Edit', join(DIRECTORY, 'a.txt')],
+        ],
+      );
+    });
+
+    // The tool refuses it before writing anything (opencode-patch.test.js has
+    // what it refuses).
+    test('a patch the tool cannot read is no payload', () => {
+      assert.deepEqual(preWrite(patch('*** Begin Patch', '*** Delete File: a.txt', '-body', '*** End Patch'), host), []);
+      assert.deepEqual(preWrite(patch('*** Begin Patch', '*** End Patch'), host), []);
+    });
+  });
+});
+
+// Windows is Open Code's own rewrite of a shell's drive path, then Windows'
+// path rules — computed here with path.win32 on any machine.
+describe('hostPath on Windows', () => {
+  const host = { home: 'C:\\Users\\someone', platform: 'win32' };
+  const directory = 'C:\\work\\project';
+
+  for (const [given, expected] of [
+    ['src\\a.ts', 'C:\\work\\project\\src\\a.ts'],
+    ['src/a.ts', 'C:\\work\\project\\src\\a.ts'],
+    ['D:\\other\\a.ts', 'D:\\other\\a.ts'],
+    ['/d/other/a.ts', 'D:\\other\\a.ts'],
+    ['/D:/other/a.ts', 'D:\\other\\a.ts'],
+    ['/cygdrive/e/a.ts', 'E:\\a.ts'],
+    ['/mnt/f/x/a.ts', 'F:\\x\\a.ts'],
+    ['~', 'C:\\Users\\someone'],
+    ['~/a.ts', 'C:\\Users\\someone\\a.ts'],
+    ['~\\a.ts', 'C:\\Users\\someone\\a.ts'],
+  ]) {
+    test(JSON.stringify(given), () => {
+      assert.equal(hostPath(directory, given, host), expected);
+      assert.ok(win32.isAbsolute(expected));
+    });
+  }
+
+  // Elsewhere `~\` is a name like any other.
+  test('`~\\` is the home directory only there', () => {
+    assert.equal(hostPath('/work/project', '~\\a.ts', { home: '/home/someone', platform: 'linux' }), '/work/project/~\\a.ts');
+    assert.equal(hostPath('/work/project', '/d/a.ts', { home: '/home/someone', platform: 'linux' }), '/d/a.ts');
   });
 });

@@ -21,7 +21,8 @@
 // lib/hooks/runner.js reads the handler's process back into the object its
 // handle() returned. This turns that object into one action of the host's —
 // refuse the call, let it through — and lists what has no way to anyone
-// here. A row per pdkit event the bridge carries; pure.
+// here. A row per pdkit event the bridge carries, and combine() for a call
+// that took more than one run to decide; pure.
 //
 // What has no way: before a tool runs, Open Code gives a plugin a throw and
 // nothing else — no text that reaches the model beside a call it lets through,
@@ -53,15 +54,26 @@ function unheard(decision, fields) {
   return fields.filter((field) => typeof decision[field] === 'string' && decision[field] !== '').map((field) => ({ field, text: decision[field] }));
 }
 
+/**
+ * Before a tool runs: a refusal is a throw, whose text the model gets as the
+ * call's error and the person sees under the failed call; anything else lets
+ * the call through. What a run that gave no answer means, runner.decide has
+ * already said by FAIL_CLOSED: a refusal on pre-bash, a pass everywhere else.
+ *
+ * @param {Decision} decision
+ * @returns {Answer}
+ */
+const beforeTool = (decision) => ({
+  action: decision.block ? { kind: 'refuse', text: decision.reason } : PASS,
+  dropped: unheard(decision, ['message', 'notice']),
+});
+
 /** @type {Record<string, (decision: Decision) => Answer>} */
 const ANSWERS = {
-  // A refusal is a throw, whose text the model gets as the call's error and
-  // the person sees under the failed call. runner.decide has already made a
-  // run that gave no answer into a refusal (FAIL_CLOSED).
-  'pre-bash': (decision) => ({
-    action: decision.block ? { kind: 'refuse', text: decision.reason } : PASS,
-    dropped: unheard(decision, ['message', 'notice']),
-  }),
+  'pre-bash': beforeTool,
+  // A message here is owns.js saying a task has no Owns recorded (HK-10).
+  // Claude Code sent it where it sent pre-bash's, to its debug log.
+  'pre-write': beforeTool,
 };
 
 /**
@@ -73,4 +85,25 @@ export function answer(event, decision) {
   const row = Object.hasOwn(ANSWERS, event) ? ANSWERS[event] : undefined;
   if (!row) throw new Error(`the hook bridge carries no "${event}"`);
   return row(decision);
+}
+
+/**
+ * One answer for a call that took several runs to decide — a patch, which
+ * pre-write checks once for each file it changes. Any refusal refuses the
+ * call: the host has no way to apply part of one. The text is every distinct
+ * reason, in the order of the runs, as Claude Code would have shown one
+ * refusal for each of as many separate writes; what reaches no one is listed
+ * once.
+ *
+ * @param {Answer[]} answers
+ * @returns {Answer}
+ */
+export function combine(answers) {
+  const reasons = [...new Set(answers.flatMap(({ action }) => (action.kind === 'refuse' ? [action.text] : [])))];
+  const dropped = new Map();
+  for (const entry of answers.flatMap((answered) => answered.dropped)) dropped.set(`${entry.field}\n${entry.text}`, entry);
+  return {
+    action: reasons.length > 0 ? { kind: 'refuse', text: reasons.join('\n\n') } : PASS,
+    dropped: [...dropped.values()],
+  };
 }

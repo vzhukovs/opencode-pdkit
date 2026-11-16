@@ -24,7 +24,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { answer } from '../opencode/bridge/answer.js';
+import { answer, combine } from '../opencode/bridge/answer.js';
 import { decide } from '../lib/hooks/runner.js';
 
 describe('pre-bash', () => {
@@ -64,6 +64,62 @@ describe('pre-bash', () => {
 
   test('an empty one is nothing to report', () => {
     assert.deepEqual(answer('pre-bash', { block: false, message: '' }).dropped, []);
+  });
+});
+
+describe('pre-write', () => {
+  test('a refusal refuses, with the reason as its text', () => {
+    assert.deepEqual(answer('pre-write', { block: true, reason: 'pdkit: a.ts is not owned by T1 (issue 1).' }), {
+      action: { kind: 'refuse', text: 'pdkit: a.ts is not owned by T1 (issue 1).' },
+      dropped: [],
+    });
+  });
+
+  test('anything else lets the call through', () => {
+    assert.deepEqual(answer('pre-write', { block: false }), { action: { kind: 'pass' }, dropped: [] });
+  });
+
+  // pre-write fails open: runner.decide has made no answer into a pass that
+  // says why, and that is what goes ahead.
+  test('a run that gave no answer arrives as a pass, and is one', () => {
+    const decision = decide('pre-write', { code: null, stdout: '', stderr: '', failure: { kind: 'deadline', detail: 'gave no answer within 10s and was stopped' } });
+    assert.equal(decision.block, false);
+    assert.deepEqual(answer('pre-write', decision), { action: { kind: 'pass' }, dropped: [] });
+  });
+
+  // HK-10: a task with no Owns recorded. Under Claude Code the message was a
+  // PreToolUse hook's stdout on exit 0, which went to its debug log.
+  test('the message for a task with no Owns recorded is listed as dropped', () => {
+    const message = 'pdkit: T9 of issue 4242 has no recorded Owns set, so writes are not constrained.';
+    assert.deepEqual(answer('pre-write', { block: false, message }), { action: { kind: 'pass' }, dropped: [{ field: 'message', text: message }] });
+  });
+});
+
+describe('combine: one answer for a call several runs decided', () => {
+  const pass = { action: { kind: 'pass' }, dropped: [] };
+  const refuse = (text) => ({ action: { kind: 'refuse', text }, dropped: [] });
+  const dropping = (text) => ({ action: { kind: 'pass' }, dropped: [{ field: 'message', text }] });
+
+  test('passes when every run passed, and when there was none', () => {
+    assert.deepEqual(combine([pass, pass]), pass);
+    assert.deepEqual(combine([]), pass);
+  });
+
+  // The host applies a patch whole or not at all.
+  test('refuses when any run refused, whatever the others said', () => {
+    assert.deepEqual(combine([pass, refuse('pdkit: b.ts is not owned'), pass]).action, { kind: 'refuse', text: 'pdkit: b.ts is not owned' });
+  });
+
+  test('says every distinct reason, in the order of the runs', () => {
+    assert.deepEqual(combine([refuse('first'), pass, refuse('second'), refuse('first')]).action, { kind: 'refuse', text: 'first\n\nsecond' });
+  });
+
+  test('lists what reaches no one once', () => {
+    assert.deepEqual(combine([dropping('no Owns'), dropping('no Owns'), dropping('other')]).dropped, [
+      { field: 'message', text: 'no Owns' },
+      { field: 'message', text: 'other' },
+    ]);
+    assert.deepEqual(combine([{ action: { kind: 'pass' }, dropped: [{ field: 'notice', text: 'no Owns' }] }, dropping('no Owns')]).dropped.length, 2);
   });
 });
 

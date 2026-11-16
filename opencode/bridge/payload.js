@@ -30,7 +30,9 @@
 // started, not where the session works. `session_id`, as Claude Code sent it.
 // `transcript_path` never: Open Code keeps no transcript file to point at.
 
-import { isAbsolute, resolve } from 'node:path';
+import { isAbsolute, posix, resolve, win32 } from 'node:path';
+
+import { parse as parsePatch, touched } from './patch.js';
 
 /**
  * The directory a command runs in: the shell tool's `workdir`, which Open
@@ -72,4 +74,118 @@ export function preBash(event, directory) {
     cwd: workingDirectory(directory, event.tool === 'shell' ? event.input.workdir : undefined),
     session_id: event.sessionID,
   };
+}
+
+/**
+ * A drive path as a POSIX shell spells it on Windows — `/c/…`, `/cygdrive/c/…`,
+ * `/mnt/c/…` — as Windows spells it, the way Open Code rewrites a path before
+ * it resolves one (FSUtil.windowsPath). Nothing to do anywhere else.
+ *
+ * @param {string} path
+ * @returns {string}
+ */
+function windowsPath(path) {
+  const drive = (_, letter) => `${letter.toUpperCase()}:/`;
+  return path
+    .replace(/^\/([a-zA-Z]):(?:[\\/]|$)/, drive)
+    .replace(/^\/([a-zA-Z])(?:\/|$)/, drive)
+    .replace(/^\/cygdrive\/([a-zA-Z])(?:\/|$)/, drive)
+    .replace(/^\/mnt\/([a-zA-Z])(?:\/|$)/, drive);
+}
+
+/**
+ * The file a path a model wrote names, worked out as Open Code works it out
+ * before a write tool touches the disk (FileAccess's resolvePath): `~` and
+ * `~/…` from the home directory, anything else from the session's directory.
+ * Not from the process's: the server's is wherever it was started — for the
+ * background service, the home directory.
+ *
+ * Undefined when the path is relative and there is no directory to take it
+ * from.
+ *
+ * @param {string|undefined} directory  ctx.location.directory
+ * @param {string} given  the path as the model wrote it
+ * @param {{home: string, platform?: string}} host
+ * @returns {string|undefined}
+ */
+export function hostPath(directory, given, { home, platform = process.platform }) {
+  const windows = platform === 'win32';
+  const path = windows ? win32 : posix;
+  const normalized = windows ? windowsPath(given) : given;
+  const expanded =
+    normalized === '~' ? home : normalized.startsWith('~/') || (windows && normalized.startsWith('~\\')) ? path.join(home, normalized.slice(2)) : normalized;
+  if (typeof directory === 'string' && directory !== '') return path.resolve(directory, expanded);
+  return path.isAbsolute(expanded) ? path.resolve(expanded) : undefined;
+}
+
+/** The write tools that name one file, as Claude Code's tool of the same job. */
+const ONE_FILE = { write: 'Write', edit: 'Edit' };
+
+/**
+ * The files one call of a write tool would change, as the model named them,
+ * each with the Claude Code tool that would have made that change: Write for a
+ * file that comes into being, Edit for one that exists already. Empty for any
+ * other tool, and for a call whose input names nothing the tool would accept.
+ *
+ * The input is as the model sent it — Open Code checks it against the tool's
+ * schema only after this hook (F38). So a path that is missing or not a
+ * string is no path: the tool would refuse the call anyway. A patch the tool
+ * cannot read is refused by the tool before it writes anything, and is no
+ * file here.
+ *
+ * @param {{tool?: string, input?: unknown}|undefined} event
+ * @returns {{path: string, tool_name: 'Write'|'Edit'}[]}
+ */
+function changes(event) {
+  const input = event?.input;
+  if (input === null || typeof input !== 'object') return [];
+
+  if (Object.hasOwn(ONE_FILE, event?.tool)) {
+    return typeof input.path === 'string' && input.path !== '' ? [{ path: input.path, tool_name: ONE_FILE[event.tool] }] : [];
+  }
+
+  if (event.tool === 'patch' && typeof input.patchText === 'string') {
+    const parsed = parsePatch(input.patchText);
+    if ('error' in parsed) return [];
+    return touched(parsed.hunks).map(({ path, created }) => ({ path, tool_name: created ? 'Write' : 'Edit' }));
+  }
+
+  return [];
+}
+
+/**
+ * The payloads for `pdkit hook pre-write`: Claude Code's PreToolUse on Write
+ * or Edit, one for each file the call would change — every one of them has to
+ * be the active task's to write.
+ *
+ * write and edit name one file. patch names any number, and all of them count:
+ * a file it adds or updates, a file it deletes, and both ends of a file it
+ * moves — taking a file away from where another task owns it is as much a
+ * collision as editing it (decided with T4.6). A file named twice is checked
+ * once.
+ *
+ * `file_path` is absolute, worked out as the tool works it out (hostPath):
+ * owns.js takes a relative one from `cwd`, and has no `~`.
+ *
+ * @param {{tool?: string, sessionID?: string, input?: unknown}} event  execute.before's event
+ * @param {{directory: string|undefined, home: string, platform?: string}} host
+ *   ctx.location.directory, and the home directory Open Code expands `~` to
+ * @returns {Array<{hook_event_name: 'PreToolUse', tool_name: 'Write'|'Edit', tool_input: {file_path: string}, cwd?: string, session_id?: string}>}
+ */
+export function preWrite(event, host) {
+  const payloads = [];
+  const seen = new Set();
+  for (const { path, tool_name } of changes(event)) {
+    const file = hostPath(host.directory, path, host) ?? path;
+    if (seen.has(file)) continue;
+    seen.add(file);
+    payloads.push({
+      hook_event_name: 'PreToolUse',
+      tool_name,
+      tool_input: { file_path: file },
+      cwd: workingDirectory(host.directory, undefined),
+      session_id: event?.sessionID,
+    });
+  }
+  return payloads;
 }

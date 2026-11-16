@@ -45,17 +45,28 @@
 // is seen by the model and the person; one that persists is the doctor's to
 // find.
 
+import { homedir } from 'node:os';
+
 import { invoke, refusal } from '../../lib/hooks/runner.js';
-import { answer } from './answer.js';
-import { preBash as preBashPayload } from './payload.js';
+import { answer, combine } from './answer.js';
+import { preBash as preBashPayload, preWrite as preWritePayloads } from './payload.js';
 
 const PRE_BASH = 'pre-bash';
+const PRE_WRITE = 'pre-write';
 
 /**
  * @param {unknown} error
  * @returns {string}
  */
 const reason = (error) => (error instanceof Error ? error.message : String(error));
+
+/**
+ * The home directory Open Code expands `~` in a path to (Global.Path.home): its
+ * own test override, or the user's.
+ *
+ * @returns {string}
+ */
+const hostHome = () => process.env.OPENCODE_TEST_HOME ?? homedir();
 
 /**
  * The bridge for one loaded instance of the plugin. Open Code loads the plugin
@@ -67,29 +78,34 @@ const reason = (error) => (error instanceof Error ? error.message : String(error
  * @param {{root: string, settings: {models: Readonly<Record<string, string>>}, log: (line: string) => void}} plugin
  * @returns {{
  *   preBash: (event: {tool?: string, sessionID?: string, input: {command: string, workdir?: unknown}}) => Promise<void>,
+ *   preWrite: (event: {tool?: string, sessionID?: string, input?: unknown}) => Promise<void>,
  *   register: () => Promise<void>,
  *   cleanup: () => Promise<void>,
  * }}
  */
 export function createBridge(ctx, plugin) {
   /**
-   * Write what a run let through without saying to anyone. Never throws: the
-   * decision is made, and a line that cannot be written changes nothing.
+   * Write what the runs of one call let through without saying to anyone,
+   * each distinct line once. Never throws: the decision is made, and a line
+   * that cannot be written changes nothing.
    *
    * @param {string} event
-   * @param {import('../../lib/hooks/runner.js').Decision} decision
+   * @param {import('../../lib/hooks/runner.js').Decision[]} decisions
    * @param {import('./answer.js').Dropped[]} dropped
    */
-  const report = (event, decision, dropped) => {
+  const report = (event, decisions, dropped) => {
     try {
-      if (decision.diagnostic) plugin.log(decision.diagnostic);
-      for (const { field, text } of dropped) plugin.log(`${event} ${field}, which reaches no one here: ${text}`);
+      const lines = [
+        ...decisions.flatMap((decision) => (decision.diagnostic ? [decision.diagnostic] : [])),
+        ...dropped.map(({ field, text }) => `${event} ${field}, which reaches no one here: ${text}`),
+      ];
+      for (const line of new Set(lines)) plugin.log(line);
     } catch {
       // Nowhere else to say it.
     }
   };
 
-  return {
+  const bridge = {
     /**
      * pre-bash, for one call that carries a command. Throwing refuses it; the
      * message is what the model and the person see.
@@ -109,16 +125,49 @@ export function createBridge(ctx, plugin) {
       } catch (error) {
         throw new Error(refusal(PRE_BASH, `failed in the hook bridge (${reason(error)})`));
       }
-      report(PRE_BASH, decision, answered.dropped);
+      report(PRE_BASH, [decision], answered.dropped);
       if (answered.action.kind === 'refuse') throw new Error(answered.action.text);
     },
 
-    /** Register every hook but the gate, which the entry point owns. */
+    /**
+     * pre-write, for any call: whether the files a write, edit or patch call
+     * would change are the active task's to write. Throwing refuses the whole
+     * call; the message is what the model and the person see.
+     *
+     * One run for each file, side by side, and a refusal of any one is a
+     * refusal of the call. Everything else fails open: a run that gave no
+     * answer is a pass already (runner.decide), and a failure here — an event
+     * that cannot be read, a location that cannot be had — is a pass that says
+     * why in the log. Nothing but a refusal leaves this callback as an
+     * exception: one would make the call fail like a refusal.
+     */
+    async preWrite(event) {
+      let refused;
+      try {
+        const payloads = preWritePayloads(event, { directory: ctx.location?.directory, home: hostHome() });
+        if (payloads.length === 0) return;
+        const decisions = await Promise.all(payloads.map((payload) => invoke(PRE_WRITE, payload, { root: plugin.root })));
+        const answered = combine(decisions.map((decision) => answer(PRE_WRITE, decision)));
+        report(PRE_WRITE, decisions, answered.dropped);
+        if (answered.action.kind === 'refuse') refused = answered.action.text;
+      } catch (error) {
+        report(PRE_WRITE, [{ block: false, diagnostic: `pdkit: hook "${PRE_WRITE}" failed in the hook bridge (${reason(error)}); allowing` }], []);
+        return;
+      }
+      if (refused !== undefined) throw new Error(refused);
+    },
+
+    /**
+     * Register every hook but the gate, which the entry point owns and
+     * registers first. pre-write is on the same point as the gate, after it.
+     */
     async register() {
-      // TODO(T4.6–T4.14): one registration per pdkit hook event.
+      await ctx.tool.hook('execute.before', (event) => bridge.preWrite(event));
+      // TODO(T4.7–T4.14): one registration per pdkit hook event.
       await ctx.tool.hook('execute.after', () => {});
     },
 
     async cleanup() {},
   };
+  return bridge;
 }

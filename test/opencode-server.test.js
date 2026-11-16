@@ -43,6 +43,9 @@ const RELEASE = Object.freeze({ name: 'cli', version: '2.3.0', channel: 'latest'
 const OLD = Object.freeze({ name: 'cli', version: '2.2.7', channel: 'latest' });
 
 const FULL = [
+  // The gate's, which the entry point registers itself, first.
+  'tool.hook execute.before',
+  // pre-write's, which the bridge registers on the same point.
   'tool.hook execute.before',
   'tool.hook execute.after',
   'shell.hook create.before',
@@ -159,12 +162,15 @@ describe('the gate comes first', () => {
   ]) {
     test(`execute.before is the first thing setup registers, ${label}`, async (t) => {
       logOf(t);
-      const { ctx, order } = host({ app });
+      const { ctx, order, gate } = host({ app });
 
       await plugin.setup(ctx);
 
       assert.equal(order[0], 'tool.hook execute.before');
-      assert.equal(order.filter((name) => name === 'tool.hook execute.before').length, 1);
+      // The entry point registers one callback there, the gate's; on a
+      // supported Open Code the bridge adds pre-write's behind it.
+      assert.equal(order.filter((name) => name === 'tool.hook execute.before').length, app === OLD ? 1 : 2);
+      await assert.rejects(gate(shell('git add -A')), /List the paths explicitly/);
     });
   }
 });
@@ -180,8 +186,8 @@ describe('on a supported Open Code', () => {
   });
 
   // Until the rest of the bridge and the registrars are filled in, loading the
-  // plugin must not change what a session does beyond the gate.
-  test('and none of the registrations but the gate changes anything yet', async (t) => {
+  // plugin must not change what a session does beyond the gate and pre-write.
+  test('and none of the registrations but the gate and pre-write changes anything yet', async (t) => {
     logOf(t);
     const { ctx, callbacks } = host();
 
@@ -206,6 +212,23 @@ describe('on a supported Open Code', () => {
     await gate(shell('git status'));
     await gate(write());
     await assert.rejects(gate(shell('git add -A')), /List the paths explicitly/);
+  });
+
+  // pre-write's rules are test/opencode-owns.test.js's; this is that the
+  // callback the bridge registered reaches them, and leaves the gate's calls
+  // to the gate. The stand-in's directory is no working tree, so no task
+  // runs there and every write is allowed (HK-11).
+  test('pre-write decides through the bridge, on write tools only', async (t) => {
+    const log = logOf(t);
+    const { ctx, callbacks } = host();
+
+    await plugin.setup(ctx);
+
+    const [, preWrite] = callbacks('tool.hook execute.before');
+    await preWrite(write());
+    await preWrite({ ...write(), tool: 'patch', input: { patchText: '*** Begin Patch\n*** Delete File: a.txt\n*** End Patch' } });
+    await preWrite(shell('git add -A'));
+    assert.deepEqual(log(), []);
   });
 
   // What makes `pdkit` a bare command in a session, and tells doctor which
