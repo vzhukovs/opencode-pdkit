@@ -24,7 +24,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { answer, combine } from '../opencode/bridge/answer.js';
+import { answer, combine, withText } from '../opencode/bridge/answer.js';
 import { decide } from '../lib/hooks/runner.js';
 
 describe('pre-bash', () => {
@@ -95,10 +95,59 @@ describe('pre-write', () => {
   });
 });
 
+// After a tool the call has happened: exit 2 cannot undo it, under Claude Code
+// or here. What the handler had for the model goes into the call's result.
+describe('post-write', () => {
+  const HEADER = 'pdkit: src/a.ts has no license header. … Insert this at the top of the file:\n\n/****…';
+
+  test('exit 2 adds its reason to the result, and refuses nothing (HK-12)', () => {
+    assert.deepEqual(answer('post-write', { block: true, rule: 'spdx', reason: HEADER }), {
+      action: { kind: 'append', text: HEADER },
+      dropped: [],
+    });
+  });
+
+  test('a message adds itself to the result (HK-13)', () => {
+    const message = 'pdkit: /x/schemas/a.ts affects the generated schemas — run `pnpm generate:schemas` and commit the result';
+    assert.deepEqual(answer('post-write', { block: false, message }), { action: { kind: 'append', text: message }, dropped: [] });
+  });
+
+  test('nothing to say changes nothing', () => {
+    assert.deepEqual(answer('post-write', { block: false }), { action: { kind: 'pass' }, dropped: [] });
+    assert.deepEqual(answer('post-write', { block: false, message: '' }), { action: { kind: 'pass' }, dropped: [] });
+  });
+
+  test('a run that gave no answer arrives as a pass, and is one', () => {
+    const decision = decide('post-write', { code: 1, stdout: '', stderr: 'SyntaxError: x\n', failure: null });
+    assert.equal(decision.block, false);
+    assert.deepEqual(answer('post-write', decision), { action: { kind: 'pass' }, dropped: [] });
+  });
+
+  test('a notice has no way to the person, and is listed as dropped', () => {
+    assert.deepEqual(answer('post-write', { block: false, notice: 'for the person', message: 'for the model' }), {
+      action: { kind: 'append', text: 'for the model' },
+      dropped: [{ field: 'notice', text: 'for the person' }],
+    });
+  });
+});
+
 describe('combine: one answer for a call several runs decided', () => {
   const pass = { action: { kind: 'pass' }, dropped: [] };
   const refuse = (text) => ({ action: { kind: 'refuse', text }, dropped: [] });
+  const append = (text) => ({ action: { kind: 'append', text }, dropped: [] });
   const dropping = (text) => ({ action: { kind: 'pass' }, dropped: [{ field: 'message', text }] });
+
+  // A patch that left several files, post-write ran on each.
+  test('adds every distinct text, in the order of the runs, as one', () => {
+    assert.deepEqual(combine([append('a.ts has no header'), pass, append('schemas/b.ts'), append('a.ts has no header')]).action, {
+      kind: 'append',
+      text: 'a.ts has no header\n\nschemas/b.ts',
+    });
+  });
+
+  test('a refusal outweighs text for the result', () => {
+    assert.deepEqual(combine([append('context'), refuse('no')]).action, { kind: 'refuse', text: 'no' });
+  });
 
   test('passes when every run passed, and when there was none', () => {
     assert.deepEqual(combine([pass, pass]), pass);
@@ -120,6 +169,57 @@ describe('combine: one answer for a call several runs decided', () => {
       { field: 'message', text: 'other' },
     ]);
     assert.deepEqual(combine([{ action: { kind: 'pass' }, dropped: [{ field: 'notice', text: 'no Owns' }] }, dropping('no Owns')]).dropped.length, 2);
+  });
+});
+
+// The way to the model after a tool (F29): a text part at the end of the
+// result's content, after what the tool said.
+describe('withText', () => {
+  test('adds a text part after the parts the result has, and keeps the rest of it', () => {
+    const result = { output: 'Created file successfully: a.ts', content: [{ type: 'text', text: 'Created file successfully: a.ts' }], metadata: { truncated: false } };
+    assert.deepEqual(withText(result, 'pdkit: a.ts has no license header.'), {
+      output: 'Created file successfully: a.ts',
+      content: [
+        { type: 'text', text: 'Created file successfully: a.ts' },
+        { type: 'text', text: '\npdkit: a.ts has no license header.' },
+      ],
+      metadata: { truncated: false },
+    });
+  });
+
+  test('does not change the result it is given', () => {
+    const result = { content: [{ type: 'text', text: 'ok' }] };
+    withText(result, 'more');
+    assert.deepEqual(result, { content: [{ type: 'text', text: 'ok' }] });
+  });
+
+  // As Open Code reads a result (F28), for one another plugin replaced.
+  test('reads content as the host does: a string is one part; none is the output, as text', () => {
+    assert.deepEqual(withText({ content: 'ok' }, 'x').content, [
+      { type: 'text', text: 'ok' },
+      { type: 'text', text: '\nx' },
+    ]);
+    assert.deepEqual(withText({ content: [], output: 'done' }, 'x').content, [
+      { type: 'text', text: 'done' },
+      { type: 'text', text: '\nx' },
+    ]);
+    assert.deepEqual(withText({ output: {} }, 'x').content, [
+      { type: 'text', text: '{}' },
+      { type: 'text', text: '\nx' },
+    ]);
+    assert.deepEqual(withText(undefined, 'x'), { content: [{ type: 'text', text: 'x' }] });
+  });
+
+  test('keeps a part that is not text where it was', () => {
+    const file = { type: 'file', mime: 'image/png', url: 'data:,' };
+    assert.deepEqual(withText({ content: [file] }, 'x').content, [file, { type: 'text', text: '\nx' }]);
+  });
+
+  // A model on OpenAI's provider got the parts of a result run together, and
+  // read the last file the tool named into the first word of the text (F263).
+  test('starts the text on a line of its own after what the tool said, and only then', () => {
+    assert.equal(withText({ content: [{ type: 'text', text: 'A a.ts' }] }, 'pdkit: x').content.at(-1).text, '\npdkit: x');
+    assert.equal(withText({ content: [] }, 'pdkit: x').content.at(-1).text, 'pdkit: x');
   });
 });
 

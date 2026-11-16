@@ -186,8 +186,9 @@ describe('on a supported Open Code', () => {
   });
 
   // Until the rest of the bridge and the registrars are filled in, loading the
-  // plugin must not change what a session does beyond the gate and pre-write.
-  test('and none of the registrations but the gate and pre-write changes anything yet', async (t) => {
+  // plugin must not change what a session does beyond the gate, pre-write and
+  // post-write — which has nothing to say about a command.
+  test('and none of the registrations but the gate, pre-write and post-write changes anything yet', async (t) => {
     logOf(t);
     const { ctx, callbacks } = host();
 
@@ -229,6 +230,31 @@ describe('on a supported Open Code', () => {
     await preWrite({ ...write(), tool: 'patch', input: { patchText: '*** Begin Patch\n*** Delete File: a.txt\n*** End Patch' } });
     await preWrite(shell('git add -A'));
     assert.deepEqual(log(), []);
+  });
+
+  // post-write's rules are test/opencode-post-write.test.js's; this is that
+  // the callback the bridge registered on execute.after runs it, for a write
+  // and not for a command. The session's directory is made one that is not
+  // there, so a run that is attempted says so in the log, and nothing else
+  // does.
+  test('post-write runs through the bridge, after write tools only', async (t) => {
+    const log = logOf(t);
+    const { ctx, callbacks } = host();
+
+    await plugin.setup(ctx);
+
+    const [afterTool] = callbacks('tool.hook execute.after');
+    ctx.location = { ...ctx.location, directory: join(DIRECTORY, 'pdkit-no-such-directory') };
+    const done = (event) => ({ ...event, status: 'completed', result: { content: [{ type: 'text', text: 'ok' }] } });
+
+    await afterTool(done(shell('git status')));
+    assert.deepEqual(log(), []);
+
+    const event = done(write());
+    await afterTool(event);
+    assert.deepEqual(event.result, { content: [{ type: 'text', text: 'ok' }] });
+    assert.equal(log().length, 1, log().join('\n'));
+    assert.match(log()[0], /^opencode-pdkit: pdkit: hook "post-write" cannot run: its working directory does not exist: .*; allowing$/);
   });
 
   // What makes `pdkit` a bare command in a session, and tells doctor which

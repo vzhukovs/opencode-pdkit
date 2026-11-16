@@ -27,7 +27,7 @@ import assert from 'node:assert/strict';
 import { join, resolve, win32 } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { hostPath, preBash, preWrite } from '../opencode/bridge/payload.js';
+import { hostPath, postWrite, preBash, preWrite } from '../opencode/bridge/payload.js';
 
 const DIRECTORY = join(tmpdir(), 'project');
 
@@ -207,6 +207,100 @@ describe('pre-write', () => {
     test('a patch the tool cannot read is no payload', () => {
       assert.deepEqual(preWrite(patch('*** Begin Patch', '*** Delete File: a.txt', '-body', '*** End Patch'), host), []);
       assert.deepEqual(preWrite(patch('*** Begin Patch', '*** End Patch'), host), []);
+    });
+  });
+});
+
+describe('post-write', () => {
+  const HOME = join(tmpdir(), 'home');
+  const host = { directory: DIRECTORY, home: HOME };
+  /** execute.after's event for a call that ran. */
+  const done = (input, tool, status = 'completed') => ({ ...call(input, tool), status, result: { content: [{ type: 'text', text: 'ok' }] } });
+  const patch = (...lines) => done({ patchText: ['*** Begin Patch', ...lines, '*** End Patch'].join('\n') }, 'patch');
+
+  /** The payload for one file. */
+  const payload = (file, tool_name = 'Write') => ({
+    hook_event_name: 'PostToolUse',
+    tool_name,
+    tool_input: { file_path: file },
+    cwd: DIRECTORY,
+    session_id: 'ses_test',
+  });
+
+  test("write is Claude Code's PostToolUse on Write, with the file whole, the directory and the session", () => {
+    assert.deepEqual(postWrite(done({ path: 'src/a.ts', content: 'x' }, 'write'), host), [payload(join(DIRECTORY, 'src/a.ts'))]);
+  });
+
+  test('edit is Edit', () => {
+    assert.deepEqual(postWrite(done({ path: 'src/a.ts', oldString: 'a', newString: 'b' }, 'edit'), host), [payload(join(DIRECTORY, 'src/a.ts'), 'Edit')]);
+  });
+
+  // post-write reads the file from disk; the result has none of its text (F43).
+  test('carries no tool_response and no transcript', () => {
+    const [one] = postWrite(done({ path: 'a.ts', content: 'x' }, 'write'), host);
+    assert.equal('tool_response' in one, false);
+    assert.equal('transcript_path' in one, false);
+  });
+
+  test('the file is the one the tool wrote, as pre-write takes it', () => {
+    assert.equal(postWrite(done({ path: '~/a.ts', content: '' }, 'write'), host)[0].tool_input.file_path, join(HOME, 'a.ts'));
+    assert.equal(postWrite(done({ path: '../b.ts', content: '' }, 'write'), host)[0].tool_input.file_path, resolve(DIRECTORY, '../b.ts'));
+  });
+
+  // Claude Code ran PostToolUse only after a tool had done its work; a failed
+  // call went to PostToolUseFailure, which pdkit did not register.
+  test('only after a call that succeeded', () => {
+    for (const status of ['error', 'running']) {
+      assert.deepEqual(postWrite(done({ path: 'a.ts', content: 'x' }, 'write', status), host), [], status);
+    }
+    const { status: _, ...noStatus } = done({ path: 'a.ts', content: 'x' }, 'write');
+    assert.deepEqual(postWrite(noStatus, host), []);
+  });
+
+  test('any other tool, or an input that names no file, is no payload', () => {
+    for (const tool of ['shell', 'read', 'grep', 'experimental_image_generate', undefined]) {
+      assert.deepEqual(postWrite(done({ path: 'a.ts', content: 'x' }, tool), host), [], String(tool));
+    }
+    for (const input of [undefined, {}, { path: '' }, { path: 7 }]) {
+      assert.deepEqual(postWrite(done(input, 'write'), host), [], JSON.stringify(input));
+    }
+    assert.deepEqual(postWrite(undefined, host), []);
+  });
+
+  describe('patch', () => {
+    test('a payload for every file it left: added and moved-to as Write, updated as Edit; not a deleted one, nor where one moved from', () => {
+      const event = patch(
+        '*** Add File: notes/added.ts',
+        '+x',
+        '*** Update File: notes/update.ts',
+        '@@',
+        '-a',
+        '+b',
+        '*** Update File: notes/move.ts',
+        '*** Move to: ~/moved.ts',
+        '-c',
+        '+d',
+        '*** Delete File: /work/gone.ts',
+      );
+
+      assert.deepEqual(postWrite(event, host), [
+        payload(join(DIRECTORY, 'notes/added.ts'), 'Write'),
+        payload(join(DIRECTORY, 'notes/update.ts'), 'Edit'),
+        payload(join(HOME, 'moved.ts'), 'Write'),
+      ]);
+    });
+
+    test('a file named twice is looked at once', () => {
+      const event = patch('*** Update File: a.ts', '@@', '-a', '+b', '*** Update File: ./a.ts', '@@', '-c', '+d');
+      assert.deepEqual(postWrite(event, host), [payload(join(DIRECTORY, 'a.ts'), 'Edit')]);
+    });
+
+    test('a patch that only deletes leaves nothing to look at', () => {
+      assert.deepEqual(postWrite(patch('*** Delete File: a.ts'), host), []);
+    });
+
+    test('a patch the tool cannot read is no payload', () => {
+      assert.deepEqual(postWrite(patch('*** Delete File: a.ts', '-body'), host), []);
     });
   });
 });

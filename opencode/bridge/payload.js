@@ -122,21 +122,43 @@ export function hostPath(directory, given, { home, platform = process.platform }
 const ONE_FILE = { write: 'Write', edit: 'Edit' };
 
 /**
- * The files one call of a write tool would change, as the model named them,
- * each with the Claude Code tool that would have made that change: Write for a
- * file that comes into being, Edit for one that exists already. Empty for any
- * other tool, and for a call whose input names nothing the tool would accept.
+ * The files a patch leaves on disk, each with whether it is new there: a file
+ * it adds, and a file it updates — at the path it moves it to, when it moves
+ * it. Not a file it deletes, and not the path a file was moved from: there is
+ * nothing there any more to look at.
+ *
+ * @param {import('./patch.js').Hunk[]} hunks
+ * @returns {{path: string, created: boolean}[]}
+ */
+function written(hunks) {
+  return hunks.flatMap((hunk) => {
+    if (hunk.type === 'add') return [{ path: hunk.path, created: true }];
+    if (hunk.type === 'update') return [hunk.movePath ? { path: hunk.movePath, created: true } : { path: hunk.path, created: false }];
+    return [];
+  });
+}
+
+/**
+ * Files of one call of a write tool, as the model named them, each with the
+ * Claude Code tool that would have made that change: Write for a file that
+ * comes into being, Edit for one that exists already. Empty for any other
+ * tool, and for a call whose input names nothing the tool would accept.
+ *
+ * write and edit name one file. Which files of a patch count is the caller's
+ * to say: every file it touches, before it runs (touched); the files it leaves
+ * behind, after (written).
  *
  * The input is as the model sent it — Open Code checks it against the tool's
- * schema only after this hook (F38). So a path that is missing or not a
+ * schema only after execute.before (F38). So a path that is missing or not a
  * string is no path: the tool would refuse the call anyway. A patch the tool
  * cannot read is refused by the tool before it writes anything, and is no
  * file here.
  *
  * @param {{tool?: string, input?: unknown}|undefined} event
+ * @param {(hunks: import('./patch.js').Hunk[]) => {path: string, created: boolean}[]} filesOfPatch
  * @returns {{path: string, tool_name: 'Write'|'Edit'}[]}
  */
-function changes(event) {
+function changes(event, filesOfPatch) {
   const input = event?.input;
   if (input === null || typeof input !== 'object') return [];
 
@@ -147,10 +169,39 @@ function changes(event) {
   if (event.tool === 'patch' && typeof input.patchText === 'string') {
     const parsed = parsePatch(input.patchText);
     if ('error' in parsed) return [];
-    return touched(parsed.hunks).map(({ path, created }) => ({ path, tool_name: created ? 'Write' : 'Edit' }));
+    return filesOfPatch(parsed.hunks).map(({ path, created }) => ({ path, tool_name: created ? 'Write' : 'Edit' }));
   }
 
   return [];
+}
+
+/**
+ * One payload for each file, with `file_path` absolute and a file named twice
+ * once.
+ *
+ * @template {'PreToolUse'|'PostToolUse'} E
+ * @param {E} hookEventName
+ * @param {{path: string, tool_name: 'Write'|'Edit'}[]} files
+ * @param {{sessionID?: string}|undefined} event
+ * @param {{directory: string|undefined, home: string, platform?: string}} host
+ * @returns {Array<{hook_event_name: E, tool_name: 'Write'|'Edit', tool_input: {file_path: string}, cwd?: string, session_id?: string}>}
+ */
+function payloadsFor(hookEventName, files, event, host) {
+  const payloads = [];
+  const seen = new Set();
+  for (const { path, tool_name } of files) {
+    const file = hostPath(host.directory, path, host) ?? path;
+    if (seen.has(file)) continue;
+    seen.add(file);
+    payloads.push({
+      hook_event_name: hookEventName,
+      tool_name,
+      tool_input: { file_path: file },
+      cwd: workingDirectory(host.directory, undefined),
+      session_id: event?.sessionID,
+    });
+  }
+  return payloads;
 }
 
 /**
@@ -173,19 +224,30 @@ function changes(event) {
  * @returns {Array<{hook_event_name: 'PreToolUse', tool_name: 'Write'|'Edit', tool_input: {file_path: string}, cwd?: string, session_id?: string}>}
  */
 export function preWrite(event, host) {
-  const payloads = [];
-  const seen = new Set();
-  for (const { path, tool_name } of changes(event)) {
-    const file = hostPath(host.directory, path, host) ?? path;
-    if (seen.has(file)) continue;
-    seen.add(file);
-    payloads.push({
-      hook_event_name: 'PreToolUse',
-      tool_name,
-      tool_input: { file_path: file },
-      cwd: workingDirectory(host.directory, undefined),
-      session_id: event?.sessionID,
-    });
-  }
-  return payloads;
+  return payloadsFor('PreToolUse', changes(event, touched), event, host);
+}
+
+/**
+ * The payloads for `pdkit hook post-write`: Claude Code's PostToolUse on Write
+ * or Edit, one for each file a call of a write tool left on disk.
+ *
+ * Only after a call that succeeded: Claude Code ran PostToolUse when a tool
+ * had done its work, and a failed one went to PostToolUseFailure, which pdkit
+ * never registered. A patch is applied whole or not at all (F40), so a
+ * completed one wrote every file it names; of those, post-write looks at the
+ * ones still there — added, updated, and moved to — and not at a file deleted
+ * or at the path one was moved from.
+ *
+ * No `tool_response`. post-write reads `file_path` alone, and reads the file
+ * from disk: the result of a write tool here carries none of the file's text
+ * (F43), and what is on disk is what a formatter left there (F44).
+ *
+ * @param {{tool?: string, sessionID?: string, status?: string, input?: unknown}} event  execute.after's event
+ * @param {{directory: string|undefined, home: string, platform?: string}} host
+ *   ctx.location.directory, and the home directory Open Code expands `~` to
+ * @returns {Array<{hook_event_name: 'PostToolUse', tool_name: 'Write'|'Edit', tool_input: {file_path: string}, cwd?: string, session_id?: string}>}
+ */
+export function postWrite(event, host) {
+  if (event?.status !== 'completed') return [];
+  return payloadsFor('PostToolUse', changes(event, written), event, host);
 }

@@ -33,7 +33,7 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
@@ -41,6 +41,8 @@ import { DEADLINE_MS, childEnv, decide, invoke, refusal, run } from '../lib/hook
 import { FAIL_CLOSED } from '../lib/hooks/events.js';
 import { handle } from '../lib/hooks/dispatch.js';
 import { handle as handleOwns } from '../lib/hooks/owns.js';
+import { handle as handlePostWrite } from '../lib/hooks/post-write.js';
+import { spdxHeader } from '../lib/upstream.js';
 import { start, stop } from '../lib/active.js';
 import * as gate from '../lib/gate.js';
 import { setOwns, withdrawTask } from '../lib/state.js';
@@ -453,6 +455,79 @@ describe('invoke agrees with handle, for pre-write', () => {
     for (const [, payloadOf, arrange] of FIXTURES) {
       await arrange();
       const decision = await handleOwns(payloadOf(), { event: 'pre-write', pluginRoot: ROOT });
+      outcomes.add(decision.block ? 'refuse' : decision.message ? 'message' : 'pass');
+    }
+    assert.deepEqual([...outcomes].sort(), ['message', 'pass', 'refuse']);
+  });
+});
+
+// The same for post-write: post-write.js imported, and the same payload through
+// bin/pdkit, on each of its outcomes — exit 2 with the header to insert, the
+// reminder that runHook sends as additionalContext after a tool, and silence.
+describe('invoke agrees with handle, for post-write', () => {
+  let home;
+  let repo;
+  let other;
+  let previousHome;
+
+  before(async () => {
+    home = await realpath(await mkdtemp(join(tmpdir(), 'pdkit-runner-post-home-')));
+    previousHome = process.env.PDKIT_HOME;
+    process.env.PDKIT_HOME = home;
+    // The clone the configuration names: post-write says nothing anywhere else.
+    await writeFile(join(home, 'config.yaml'), 'repo:\n  fork: someone/podman-desktop\n');
+    repo = await realpath(await podmanDesktopClone('pdkit-runner-post-repo-'));
+    await execFileAsync('git', ['remote', 'add', 'origin', 'git@github.com:someone/podman-desktop.git'], { cwd: repo });
+    other = await realpath(await otherRepository('pdkit-runner-post-other-'));
+    for (const dir of [repo, other]) {
+      await mkdir(join(dir, 'src', 'schemas'), { recursive: true });
+      await writeFile(join(dir, 'src', 'bare.ts'), 'export {};\n');
+    }
+    await writeFile(join(repo, 'src', 'headed.ts'), `${spdxHeader()}\nexport {};\n`);
+    await writeFile(join(repo, 'src', 'schemas', 'settings.ts'), 'export {};\n');
+    await writeFile(join(repo, 'src', 'notes.md'), '# x\n');
+  });
+
+  after(async () => {
+    if (previousHome === undefined) delete process.env.PDKIT_HOME;
+    else process.env.PDKIT_HOME = previousHome;
+    for (const dir of [home, repo, other]) await rm(dir, { recursive: true, force: true });
+  });
+
+  const wrote = (file, tool = 'Write') => ({ hook_event_name: 'PostToolUse', tool_name: tool, tool_input: { file_path: file }, cwd: dirname(file) });
+
+  /**
+   * What the decision says, as far as the process protocol carries it. A
+   * reason travels on stderr up to its trailing whitespace — runHook ends it
+   * with a newline, decide trims the end — and the header to insert ends with
+   * one of its own.
+   */
+  const carried = (decision) => ({ block: decision.block, reason: decision.reason?.trimEnd(), message: decision.message });
+
+  const FIXTURES = [
+    ['a source file without the header', () => wrote(join(repo, 'src/bare.ts'))],
+    ['an edit of one', () => wrote(join(repo, 'src/bare.ts'), 'Edit')],
+    ['a source file with the header', () => wrote(join(repo, 'src/headed.ts'))],
+    ['a schema source', () => wrote(join(repo, 'src/schemas/settings.ts'))],
+    ['a file neither check is for', () => wrote(join(repo, 'src/notes.md'))],
+    ['a source file in another repository', () => wrote(join(other, 'src/bare.ts'))],
+    ['a file that is not there', () => wrote(join(repo, 'src/gone.ts'))],
+    ['no file', () => ({ ...wrote(join(repo, 'src/bare.ts')), tool_input: {} })],
+  ];
+
+  for (const [label, payloadOf] of FIXTURES) {
+    test(label, async () => {
+      const direct = carried(await handlePostWrite(payloadOf(), { event: 'post-write', pluginRoot: ROOT }));
+      const through = carried(await invoke('post-write', payloadOf(), { root: ROOT }));
+
+      assert.deepEqual(through, direct);
+    });
+  }
+
+  test('the fixtures cover every outcome: a refusal, a pass, and a pass with a message', async () => {
+    const outcomes = new Set();
+    for (const [, payloadOf] of FIXTURES) {
+      const decision = await handlePostWrite(payloadOf(), { event: 'post-write', pluginRoot: ROOT });
       outcomes.add(decision.block ? 'refuse' : decision.message ? 'message' : 'pass');
     }
     assert.deepEqual([...outcomes].sort(), ['message', 'pass', 'refuse']);

@@ -48,17 +48,31 @@
 import { homedir } from 'node:os';
 
 import { invoke, refusal } from '../../lib/hooks/runner.js';
-import { answer, combine } from './answer.js';
-import { preBash as preBashPayload, preWrite as preWritePayloads } from './payload.js';
+import { answer, combine, withText } from './answer.js';
+import { postWrite as postWritePayloads, preBash as preBashPayload, preWrite as preWritePayloads } from './payload.js';
 
 const PRE_BASH = 'pre-bash';
 const PRE_WRITE = 'pre-write';
+const POST_WRITE = 'post-write';
+
+/** An answer that does nothing: what a hook that had no run, or failed open, gives. */
+const NOTHING = Object.freeze({ action: Object.freeze({ kind: 'pass' }), dropped: Object.freeze([]) });
 
 /**
  * @param {unknown} error
  * @returns {string}
  */
 const reason = (error) => (error instanceof Error ? error.message : String(error));
+
+/**
+ * What a fail-open hook says when the bridge itself failed before there was a
+ * decision: runHook's words for a handler that failed, with where.
+ *
+ * @param {string} event
+ * @param {unknown} error
+ * @returns {import('../../lib/hooks/runner.js').Decision}
+ */
+const failedOpen = (event, error) => ({ block: false, diagnostic: `pdkit: hook "${event}" failed in the hook bridge (${reason(error)}); allowing` });
 
 /**
  * The home directory Open Code expands `~` in a path to (Global.Path.home): its
@@ -79,6 +93,8 @@ const hostHome = () => process.env.OPENCODE_TEST_HOME ?? homedir();
  * @returns {{
  *   preBash: (event: {tool?: string, sessionID?: string, input: {command: string, workdir?: unknown}}) => Promise<void>,
  *   preWrite: (event: {tool?: string, sessionID?: string, input?: unknown}) => Promise<void>,
+ *   postWrite: (event: {tool?: string, sessionID?: string, status?: string, input?: unknown}) => Promise<import('./answer.js').Answer>,
+ *   afterTool: (event: {tool?: string, sessionID?: string, status?: string, input?: unknown, result?: unknown}) => Promise<void>,
  *   register: () => Promise<void>,
  *   cleanup: () => Promise<void>,
  * }}
@@ -151,20 +167,63 @@ export function createBridge(ctx, plugin) {
         report(PRE_WRITE, decisions, answered.dropped);
         if (answered.action.kind === 'refuse') refused = answered.action.text;
       } catch (error) {
-        report(PRE_WRITE, [{ block: false, diagnostic: `pdkit: hook "${PRE_WRITE}" failed in the hook bridge (${reason(error)}); allowing` }], []);
+        report(PRE_WRITE, [failedOpen(PRE_WRITE, error)], []);
         return;
       }
       if (refused !== undefined) throw new Error(refused);
     },
 
     /**
+     * post-write, for a call that ran: whether a file a write, edit or patch
+     * call left in podman-desktop lacks its license header, or is a schema
+     * source. Gives an answer and never throws.
+     *
+     * One run for each file the call left, side by side, and one answer for
+     * the call. A run that gave no answer is a pass already (runner.decide);
+     * a failure here is a pass that says why in the log.
+     */
+    async postWrite(event) {
+      try {
+        const payloads = postWritePayloads(event, { directory: ctx.location?.directory, home: hostHome() });
+        if (payloads.length === 0) return NOTHING;
+        const decisions = await Promise.all(payloads.map((payload) => invoke(POST_WRITE, payload, { root: plugin.root })));
+        const answered = combine(decisions.map((decision) => answer(POST_WRITE, decision)));
+        report(POST_WRITE, decisions, answered.dropped);
+        return answered;
+      } catch (error) {
+        report(POST_WRITE, [failedOpen(POST_WRITE, error)], []);
+        return NOTHING;
+      }
+    },
+
+    /**
+     * After any call: the post hooks for it, side by side — Claude Code ran
+     * the hooks a tool matched in parallel — and what they have for the model
+     * added to the call's result, once.
+     *
+     * Nothing leaves this callback as an exception. The call has already run;
+     * an exception here would turn its result into an error, and the model
+     * would take a write that happened for one that failed (F33).
+     */
+    async afterTool(event) {
+      try {
+        // TODO(T4.8): post-claim beside post-write.
+        const answered = combine(await Promise.all([bridge.postWrite(event)]));
+        if (answered.action.kind === 'append') event.result = withText(event.result, answered.action.text);
+      } catch (error) {
+        report(POST_WRITE, [{ block: false, diagnostic: `pdkit: the hook bridge failed after a tool call (${reason(error)}); its result is as the tool left it` }], []);
+      }
+    },
+
+    /**
      * Register every hook but the gate, which the entry point owns and
-     * registers first. pre-write is on the same point as the gate, after it.
+     * registers first. pre-write is on the same point as the gate, after it;
+     * the post hooks share one callback after a tool (afterTool).
      */
     async register() {
       await ctx.tool.hook('execute.before', (event) => bridge.preWrite(event));
-      // TODO(T4.7–T4.14): one registration per pdkit hook event.
-      await ctx.tool.hook('execute.after', () => {});
+      // TODO(T4.9–T4.14): the rest of pdkit's hook events.
+      await ctx.tool.hook('execute.after', (event) => bridge.afterTool(event));
     },
 
     async cleanup() {},
