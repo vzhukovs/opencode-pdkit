@@ -858,6 +858,81 @@ describe('no new cycle hides behind a dynamic import', () => {
   });
 });
 
+// The server part runs inside the Open Code server; lib/ runs in the node
+// process the hook bridge starts for each event — except the few modules of
+// lib/ the server part imports itself. Those have to be leaves. One that
+// imported the rest of lib/ would load it into the server, where none of it
+// was meant to run, and a failure to load anything there means the plugin
+// refuses every shell command. The dependency runs one way: lib/ knows nothing
+// of the server part, which is the layer that knows Open Code.
+describe('the server part and lib/', () => {
+  /** The modules of lib/ the server part may load, each with the modules of lib/ it may import. */
+  const LEAVES = new Map([
+    ['lib/opencode-version.js', []],
+    ['lib/hooks/events.js', []],
+    ['lib/hooks/runner.js', ['lib/hooks/events.js']],
+  ]);
+
+  const serverModules = () => modules(join(ROOT, 'opencode'), 'opencode');
+
+  test('lib/ imports nothing from opencode/', async () => {
+    const offenders = [];
+    for (const module of await libModules()) {
+      const { static: statics, dynamic } = importsOf(module);
+      for (const target of [...statics, ...dynamic]) {
+        if (target.startsWith('opencode/')) offenders.push(`${module.name} imports ${target}`);
+      }
+    }
+
+    assert.deepEqual(offenders, [], `lib/ reaches into the Open Code layer:\n  ${offenders.join('\n  ')}`);
+  });
+
+  test('opencode/ loads nothing from lib/ but the leaves listed here', async () => {
+    const offenders = [];
+    for (const module of await serverModules()) {
+      const { static: statics, dynamic } = importsOf(module);
+      for (const target of [...statics, ...dynamic]) {
+        if (target.startsWith('lib/') && !LEAVES.has(target)) offenders.push(`${module.name} imports ${target}`);
+      }
+    }
+
+    assert.deepEqual(
+      offenders,
+      [],
+      `these would load more of lib/ into the Open Code server:\n  ${offenders.join('\n  ')}\n` +
+        'Reach it through the hook bridge, which runs lib/ in a child process; or, if the server part truly needs ' +
+        'it, make it a leaf and add it to LEAVES in test/invariants.test.js.',
+    );
+  });
+
+  test('and each of those leaves stays one', async () => {
+    const offenders = [];
+    for (const module of await libModules()) {
+      if (!LEAVES.has(module.name)) continue;
+      const { static: statics, dynamic } = importsOf(module);
+      for (const target of [...statics, ...dynamic]) {
+        if (!LEAVES.get(module.name).includes(target)) offenders.push(`${module.name} imports ${target}`);
+      }
+    }
+
+    assert.deepEqual(offenders, [], `a module the server part loads imports more of lib/:\n  ${offenders.join('\n  ')}`);
+  });
+
+  // Open Code reloads a plugin when a module it imports changes, and it finds
+  // those modules by their specifiers. A computed one it cannot see: an edit
+  // there is not picked up until the server restarts.
+  test('every import in opencode/ names its module literally', async () => {
+    const offenders = [];
+    for (const module of await serverModules()) {
+      for (const [call] of lexed(module.source).matchAll(/\bimport\s*\(\s*(?!['"])[^)]*\)/g)) {
+        offenders.push(`${module.name}: ${call}`);
+      }
+    }
+
+    assert.deepEqual(offenders, [], `Open Code does not reload on a change to what these load:\n  ${offenders.join('\n  ')}`);
+  });
+});
+
 describe('licensing', () => {
   // The house format, stated here in full rather than sampled from a file that
   // happens to carry it. knowledge/upstream-rules.md tells contributors that a

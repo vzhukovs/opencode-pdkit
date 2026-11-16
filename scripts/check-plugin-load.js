@@ -41,13 +41,14 @@
 // HOME and its own PDKIT_HOME, so the check reads no user config and writes
 // nothing into a live journal.
 //
-// Usage: node scripts/check-plugin-load.js [--root <package dir>] [--keep]
+// Usage: node scripts/check-plugin-load.js [--root <package dir>] [--keep] [--log]
 //        node scripts/check-plugin-load.js --print-minimum
 //
 // --print-minimum prints the lowest Open Code version the package supports,
 // taken from engines.opencode, for CI to install. --keep leaves the throwaway
-// directory in place. Runs on Linux and macOS, with `opencode` and `npm` on
-// PATH.
+// directory in place. --log prints the server log on a pass too: a plugin can
+// load and still write a warning there, and only the log shows it. Runs on
+// Linux and macOS, with `opencode` and `npm` on PATH.
 
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -60,6 +61,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
+import { minimumVersion } from '../lib/opencode-version.js';
+
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 
 /** How long the server may take to answer, and the plugin to be listed. */
@@ -70,13 +73,15 @@ const PLUGIN_SECONDS = 60;
  * The lowest Open Code version the package supports. engines.opencode is the
  * one place the minimum is written, and Open Code itself ignores the field.
  * Only `>=X.Y.Z` is accepted: CI installs exactly this version, and a range of
- * any other shape names no single version to install.
+ * any other shape names no single version to install. The reading is
+ * lib/opencode-version.js's, the same one the plugin compares the running
+ * server against, so CI cannot test on a minimum the plugin does not enforce.
  */
 export function minimumOpenCode(pkg) {
   const range = pkg?.engines?.opencode;
-  const match = typeof range === 'string' ? /^>=(\d+\.\d+\.\d+)$/.exec(range) : null;
-  if (!match) throw new Error(`package.json engines.opencode is ${JSON.stringify(range)}, not ">=X.Y.Z"`);
-  return match[1];
+  const minimum = minimumVersion(range);
+  if (!minimum) throw new Error(`package.json engines.opencode is ${JSON.stringify(range)}, not ">=X.Y.Z"`);
+  return minimum;
 }
 
 /**
@@ -137,7 +142,7 @@ async function stop(server) {
   clearTimeout(force);
 }
 
-async function check({ root, keep }) {
+async function check({ root, keep, printLog }) {
   const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
   const id = pkg.name;
   const failures = [];
@@ -297,7 +302,7 @@ async function check({ root, keep }) {
   // On a failure the log tells why, by the ref the record carries. It always
   // holds a "failed to check plugin update" warning too, which is not the
   // failure: update checks take registry and git specs, never file:.
-  if (failures.length > 0 && log.trim()) console.log(`\nserver log:\n${log.trimEnd()}`);
+  if ((failures.length > 0 || printLog) && log.trim()) console.log(`\nserver log:\n${log.trimEnd()}`);
   console.log(`result: ${failures.length === 0 ? 'PASS' : `FAIL (${failures.join(', ')})`}`);
   return failures.length === 0 ? 0 : 1;
 }
@@ -308,6 +313,7 @@ async function main(argv) {
     options: {
       root: { type: 'string' },
       keep: { type: 'boolean' },
+      log: { type: 'boolean' },
       'print-minimum': { type: 'boolean' },
     },
   });
@@ -316,7 +322,7 @@ async function main(argv) {
     console.log(minimumOpenCode(JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))));
     return 0;
   }
-  return check({ root, keep: values.keep === true });
+  return check({ root, keep: values.keep === true, printLog: values.log === true });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
