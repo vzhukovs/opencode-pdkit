@@ -88,6 +88,7 @@ fixes — see [RELEASING.md](RELEASING.md).
   | `/pd:slice` | `claude-agent/sonnet#medium` | `sonnet`, effort `medium` |
   | `/pd:sync` | `claude-agent/sonnet#medium` | `sonnet`, effort `medium` |
   | `/pd:triage` | `claude-agent/opus#high` | `opus`, effort `high` |
+  | `/pd:validate` | `claude-agent/sonnet#medium` | `sonnet`, effort `medium` |
 
 ## [0.15.0] - 2026-11-13
 

@@ -3,8 +3,7 @@ name: validate
 description: "Drive the built application, collect evidence, and propose an e2e test."
 argument-hint: "<issue-number>"
 disable-model-invocation: true
-model: sonnet
-effort: medium
+model: claude-agent/sonnet#medium
 ---
 
 Via `pd-validator`, against a running application.

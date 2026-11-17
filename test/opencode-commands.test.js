@@ -103,6 +103,7 @@ const DEFAULTS = Object.freeze({
   slice: 'claude-agent/sonnet#medium',
   sync: 'claude-agent/sonnet#medium',
   triage: 'claude-agent/opus#high',
+  validate: 'claude-agent/sonnet#medium',
 });
 
 /**
