@@ -90,6 +90,32 @@ fixes — see [RELEASING.md](RELEASING.md).
   | `/pd:triage` | `claude-agent/opus#high` | `opus`, effort `high` |
   | `/pd:validate` | `claude-agent/sonnet#medium` | `sonnet`, effort `medium` |
 
+- **`pdkit cost` reads Open Code's session database**, not Claude Code's
+  transcripts: one call per step, with its tokens; a subagent is a child
+  session; a fork's copies of its source are counted once; output includes
+  reasoning, as Claude Code's `output_tokens` did; a step counts for the clone
+  when it was taken in the clone or under `worktrees.root`, wherever the
+  session moved. `--db <file>` names the database (Open Code's own by default,
+  `$OPENCODE_DB` honored) in place of `--transcripts <dir>`, which only
+  `--planning` still reads. A database of a schema it does not know is a skip
+  that names what is missing, never a report of zeros. What the database does
+  not give is printed: title and `generate` calls and steps a revert removed
+  are only in Open Code's session totals, and are not counted.
+- **Measuring starts where Claude Code stopped.** `$PDKIT_HOME` is shared with
+  the Claude Code version, so the journal names work this database never saw.
+  The newest snapshot taken from Claude Code's transcripts marks the boundary:
+  calls before it are not counted, and an issue with work before it prints
+  "before <date> — outside Open Code data, not measured", has no figure per
+  task, slice or PR, and stays out of the route groups. A snapshot taken the
+  same day goes beside that one as `cost/<date>.opencode.json`
+  (`--compare <date>.opencode`), never over it.
+- **The issue report adds tokens by model and the cost of compactions.** The
+  weights are unchanged — a model with no "opus" in its name, of any
+  provider, weighs as Sonnet — so the tokens of each model are printed for
+  whoever prices them otherwise. A compaction's tokens are printed apart and
+  kept out of the totals, which Claude Code's transcripts never carried them
+  into. `--compare` across a Claude Code and an Open Code snapshot, or across
+  different weights, says that the scales differ.
 - **Node.js 22.13 or later.** `pdkit cost` reads Open Code's sessions with the
   built-in `node:sqlite`, which needs no flag from 22.13.0. `pdkit doctor`
   compares the whole version to that minimum, not only the major, so a 22.12
