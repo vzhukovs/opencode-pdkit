@@ -29,7 +29,7 @@ reused between runs instead of recreated.
 The fork's own checkout stays on the base branch. It is where trees are made
 from and where `fetch` runs, and it is never an issue's tree — not even on that
 issue's branch. Commands that take an issue number refuse there, and the
-prompt hook tells the session to move with `EnterWorktree` into the issue's
+prompt hook tells the session to move with `session_move` into the issue's
 tree; subagents started after the switch work there too. A branch found in the
 main checkout is moved out: `git -C <fork> switch main`, then
 `pdkit worktree create --issue <n> --branch <b>`.
