@@ -2,8 +2,7 @@
 name: knowledge
 description: "Revise the shipped knowledge base against what recent work actually showed."
 disable-model-invocation: true
-model: opus
-effort: medium
+model: claude-agent/opus#medium
 ---
 
 `${CLAUDE_PLUGIN_ROOT}/knowledge/` ships with the plugin and is read by every later issue. Nobody

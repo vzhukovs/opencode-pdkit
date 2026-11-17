@@ -88,6 +88,7 @@ const DEFAULTS = Object.freeze({
   close: 'claude-agent/sonnet#medium',
   editor: 'claude-agent/haiku#low',
   exec: 'claude-agent/sonnet#medium',
+  knowledge: 'claude-agent/opus#medium',
 });
 
 /**
