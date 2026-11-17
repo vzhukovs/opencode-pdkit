@@ -3,8 +3,7 @@ name: exec
 description: "Implement the plan, one task per worker, each producing a receipt."
 argument-hint: "<issue-number> [task-id]"
 disable-model-invocation: true
-model: sonnet
-effort: medium
+model: claude-agent/sonnet#medium
 ---
 
 One `pd-implementer` per task, fresh context each time. Fresh context is not
@@ -35,10 +34,11 @@ pdkit worktree create --issue <n> --slug <a few words of the issue title>
 
 The slug names the branch, `DESKTOP-<n>/<slug>`, and that is the branch the
 pull request will carry, so choose it as you would its title. Show the
-command to the person before running it. Then call the **EnterWorktree** tool
-with the path it printed. A `cd` moves one shell, while EnterWorktree moves
-the session and every subagent started after it. Implementers inherit the
-session's directory, and that is where their edits land.
+command to the person before running it. Then call the **`execute`** tool
+with `tools.opencode.session_move({ directory: "<the path it printed>" })`. A
+`cd` moves one shell, while `session_move` moves the session and every
+subagent started after it. Implementers inherit the session's directory, and
+that is where their edits land.
 
 `pdkit task start` refuses any other tree, the main checkout included.
 
@@ -122,8 +122,9 @@ finding about the plan, like any other.
    done now, and what runs next.
 
 Tasks that share no files and that `task list` shows ready together may run in
-parallel. Tasks that do share files were mis-planned — say so instead of
-serializing around it.
+parallel: wait for the reports of all the workers started together, then take
+steps 5–7 for each. Tasks that do share files were mis-planned — say so instead
+of serializing around it.
 
 ## Follow the plan literally
 
@@ -273,7 +274,7 @@ verbatim — not summarized, not trimmed to the interesting part.
 output text, so there is nothing to compose: the choice between "the tests
 passed" and the test runner's own words is not offered.
 
-Two refusals to expect from the SubagentStop hook, and they mean different
+Two refusals to expect from the completion hook, and they mean different
 things:
 
 - **no receipt, or one that no longer matches its digest** — run the command
