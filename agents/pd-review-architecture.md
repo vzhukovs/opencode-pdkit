@@ -1,7 +1,7 @@
 ---
 name: pd-review-architecture
 description: "Reviews a pull request, someone else's or our own before it is published, for architectural fit and over-engineering."
-model: sonnet
+model: claude-agent/sonnet#medium
 tools: Read, Grep, Glob
 ---
 
