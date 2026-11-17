@@ -3,8 +3,7 @@ name: plan
 description: "Plan an issue: scout the code, resolve the open choices, and produce a plan with executable done-criteria."
 argument-hint: "<issue-number>"
 disable-model-invocation: true
-model: opus
-effort: high
+model: claude-agent/opus#high
 ---
 
 The plan is the only artefact that carries intent to the implementer. Three
@@ -118,18 +117,18 @@ Do not read the code broadly yourself. Scouts exist so you read 40 lines
 instead of 4000; reading both is the failure mode this structure was built
 against.
 
-Write the compressed map to `research.md`, and after it two sections that
-merge what the scouts returned: `## Local rules`, one line per obligation with
-its `file:line` and the directory it binds, the same rule from two scouts
-once; and `## Modes of the environment`, one line per mode with how the
-neighbors handle it and where. A section with nothing in it keeps its heading
-and the searches that came back empty, so a reader can tell "none" from "not
-asked".
+Wait for every scout's report, then write the compressed map to
+`research.md`, and after it two sections that merge what the scouts returned:
+`## Local rules`, one line per obligation with its `file:line` and the
+directory it binds, the same rule from two scouts once; and
+`## Modes of the environment`, one line per mode with how the neighbors
+handle it and where. A section with nothing in it keeps its heading and the
+searches that came back empty, so a reader can tell "none" from "not asked".
 
 ## Phase 2 — the choices
 
 Anything a scout flagged as a decision goes to the user through
-AskUserQuestion, with the options and what each costs.
+the `question` tool, with the options and what each costs.
 
 A question you do not ask becomes `[NEEDS DECISION]` in the plan, and that
 blocks approval. This is deliberate: an unasked question does not disappear,

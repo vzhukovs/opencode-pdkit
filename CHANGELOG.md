@@ -75,6 +75,7 @@ fixes — see [RELEASING.md](RELEASING.md).
   | `/pd:exec` | `claude-agent/sonnet#medium` | `sonnet`, effort `medium` |
   | `/pd:knowledge` | `claude-agent/opus#medium` | `opus`, effort `medium` |
   | `/pd:open` | `claude-agent/haiku#low` | `haiku`, effort `low` |
+  | `/pd:plan` | `claude-agent/opus#high` | `opus`, effort `high` |
 
 ## [0.15.0] - 2026-11-13
 

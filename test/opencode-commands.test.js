@@ -90,6 +90,7 @@ const DEFAULTS = Object.freeze({
   exec: 'claude-agent/sonnet#medium',
   knowledge: 'claude-agent/opus#medium',
   open: 'claude-agent/haiku#low',
+  plan: 'claude-agent/opus#high',
 });
 
 /**
