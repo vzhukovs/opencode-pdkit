@@ -33,6 +33,7 @@ fixes — see [RELEASING.md](RELEASING.md).
   | `pd-review-synth` | `claude-agent/opus#medium` | `/pd:review-pr`, `/pd:pr` (medium); `/pd:pr-sync` (high) |
   | `pd-review-tests` | `claude-agent/sonnet#medium` | `/pd:review-pr`, `/pd:pr` (medium); `/pd:pr-sync` (high) |
   | `pd-scout` | `claude-agent/sonnet#high` | `/pd:plan`, `/pd:triage` (high) |
+  | `pd-slicer` | `claude-agent/sonnet#medium` | `/pd:slice` (medium) |
 
 ## [0.15.0] - 2026-11-13
 

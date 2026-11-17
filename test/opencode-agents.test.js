@@ -62,7 +62,7 @@ const EXPECTED = {
   'pd-review-synth': { model: { providerID: 'claude-agent', id: 'opus', variant: 'medium' }, actions: ['read'] },
   'pd-review-tests': { model: { providerID: 'claude-agent', id: 'sonnet', variant: 'medium' }, actions: READS },
   'pd-scout': { model: { providerID: 'claude-agent', id: 'sonnet', variant: 'high' }, actions: [...READS, 'shell'] },
-  'pd-slicer': { alias: 'sonnet', actions: [...READS, 'shell'] },
+  'pd-slicer': { model: { providerID: 'claude-agent', id: 'sonnet', variant: 'medium' }, actions: [...READS, 'shell'] },
   'pd-thread-resolver': { alias: 'sonnet', actions: ['read', 'edit', 'grep', 'glob', 'shell'] },
   'pd-validator': {
     alias: 'sonnet',
