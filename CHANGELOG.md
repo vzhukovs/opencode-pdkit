@@ -14,11 +14,11 @@ fixes — see [RELEASING.md](RELEASING.md).
 - **Agents name their default model the way Open Code reads one,
   `provider/model#variant`.** The class is the one each agent had under Claude
   Code, through the `claude-agent` provider (a Claude subscription). The
-  variant is the effort of the command that calls the agent: a session's
-  `/effort` does not reach an agent in Open Code. To run an agent on another
-  model, `anthropic/claude-sonnet-5-5` with an API key or any other provider's,
-  map its ID in the plugin's `options.models`; Open Code's own
-  `agents.<id>.model` wins over both.
+  variant is the effort of the command that calls the agent, or of most of
+  the commands that call it: a session's `/effort` does not reach an agent in
+  Open Code. To run an agent on another model, `anthropic/claude-sonnet-5-5`
+  with an API key or any other provider's, map its ID in the plugin's
+  `options.models`; Open Code's own `agents.<id>.model` wins over both.
 
   | Agent | Default | Called by |
   |---|---|---|
@@ -27,6 +27,7 @@ fixes — see [RELEASING.md](RELEASING.md).
   | `pd-conflict-analyst` | `claude-agent/opus#medium` | `/pd:resume` (medium) |
   | `pd-implementer` | `claude-agent/sonnet#medium` | `/pd:exec` (medium) |
   | `pd-plan-critic` | `claude-agent/opus#high` | `/pd:plan-review` (high) |
+  | `pd-review-api-compat` | `claude-agent/sonnet#medium` | `/pd:review-pr`, `/pd:pr` (medium); `/pd:pr-sync` (high) |
 
 ## [0.15.0] - 2026-11-13
 
