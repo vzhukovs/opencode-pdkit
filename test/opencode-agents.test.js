@@ -53,7 +53,7 @@ const READS = ['read', 'grep', 'glob'];
 const EXPECTED = {
   'pd-archaeologist': { model: { providerID: 'claude-agent', id: 'sonnet', variant: 'high' }, actions: [...READS, 'shell'] },
   'pd-auditor': { model: { providerID: 'claude-agent', id: 'opus', variant: 'high' }, actions: [...READS, 'shell'] },
-  'pd-conflict-analyst': { alias: 'opus', actions: [...READS, 'shell'] },
+  'pd-conflict-analyst': { model: { providerID: 'claude-agent', id: 'opus', variant: 'medium' }, actions: [...READS, 'shell'] },
   'pd-implementer': { alias: 'sonnet', actions: ['read', 'edit', 'grep', 'glob', 'shell'] },
   'pd-plan-critic': { alias: 'opus', actions: READS },
   'pd-review-api-compat': { alias: 'sonnet', actions: READS },

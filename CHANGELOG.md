@@ -24,6 +24,7 @@ fixes — see [RELEASING.md](RELEASING.md).
   |---|---|---|
   | `pd-archaeologist` | `claude-agent/sonnet#high` | `/pd:triage` (high) |
   | `pd-auditor` | `claude-agent/opus#high` | `/pd:audit` (high) |
+  | `pd-conflict-analyst` | `claude-agent/opus#medium` | `/pd:resume` (medium) |
 
 ## [0.15.0] - 2026-11-13
 
