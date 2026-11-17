@@ -190,7 +190,7 @@ None of it blocks use. Each closes with the next issue of the right kind.
 
 | Required | Why |
 |---|---|
-| Node.js >= 22 | `pdkit` is zero-dependency ESM and uses the built-in test runner |
+| Node.js >= 22.13 | `pdkit` is zero-dependency ESM and uses the built-in test runner; `pdkit cost` reads Open Code's sessions with `node:sqlite`, which needs no flag from 22.13 |
 | `git` | branch, worktree, and history primitives |
 | [`gh`](https://cli.github.com/) | issues, pull requests, and review threads |
 | `pnpm` | the package manager podman-desktop uses |

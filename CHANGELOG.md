@@ -90,6 +90,11 @@ fixes — see [RELEASING.md](RELEASING.md).
   | `/pd:triage` | `claude-agent/opus#high` | `opus`, effort `high` |
   | `/pd:validate` | `claude-agent/sonnet#medium` | `sonnet`, effort `medium` |
 
+- **Node.js 22.13 or later.** `pdkit cost` reads Open Code's sessions with the
+  built-in `node:sqlite`, which needs no flag from 22.13.0. `pdkit doctor`
+  compares the whole version to that minimum, not only the major, so a 22.12
+  fails the `node` check.
+
 ## [0.15.0] - 2026-11-13
 
 ### Upgrading

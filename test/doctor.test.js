@@ -35,7 +35,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { cleanup, commitAll, initRepo } from './helpers/repo-fixture.js';
-import { GATE_PROBES, RETIRED_KEYS, checkAgentRuns, checkHooks, checkSessionModel, diagnose, gateSelftest, mcpServers, playwrightCdp } from '../lib/doctor.js';
+import { GATE_PROBES, RETIRED_KEYS, checkAgentRuns, checkHooks, checkNode, checkSessionModel, diagnose, gateSelftest, mcpServers, playwrightCdp } from '../lib/doctor.js';
 import { HOOK_HANDLERS } from '../lib/hooks/events.js';
 import { append as appendJournal } from '../lib/journal.js';
 import { sessionModel } from '../lib/session-model.js';
@@ -256,6 +256,29 @@ describe('the agent-done liveness check', () => {
 
     assert.equal(entry.status, 'ok');
     assert.match(entry.detail, /^1 in the last 30d/);
+  });
+});
+
+// The minimum is a patch release, 22.13.0, where node:sqlite stops needing a
+// flag. Read as a major, as it once was, ">=22.13.0" became 2213 and every
+// Node failed; and a 22.12 passed a check that only looked at the 22.
+describe('the Node check', () => {
+  test('compares the running Node to the patch the package names', async () => {
+    const pkg = JSON.parse(await readFile(join(process.cwd(), 'package.json'), 'utf8'));
+    assert.equal(pkg.engines.node, '>=22.13.0');
+    assert.equal(checkNode(pkg.engines.node).status, 'ok', 'the suite itself runs on a Node the package admits');
+
+    const [major, minor, patch] = process.versions.node.split('.').map(Number);
+    assert.equal(checkNode(`>=${major}.${minor}.${patch}`).status, 'ok');
+    const above = checkNode(`>=${major}.${minor}.${patch + 1}`);
+    assert.equal(above.status, 'fail');
+    assert.match(above.detail, new RegExp(`need >= ${major}\\.${minor}\\.${patch + 1}$`));
+  });
+
+  test('a range it cannot read is a failure that says so, not a pass', () => {
+    const result = checkNode('>=22');
+    assert.equal(result.status, 'fail');
+    assert.match(result.detail, /engines\.node is ">=22", not ">=X\.Y\.Z"/);
   });
 });
 

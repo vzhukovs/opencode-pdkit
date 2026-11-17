@@ -1,7 +1,7 @@
 # opencode-pdkit
 
 An Open Code plugin (`opencode-pdkit`) for working upstream issues in podman-desktop.
-Zero-dependency ESM on Node >= 22, no build: `lib/` is what runs. The plugin
+Zero-dependency ESM on Node >= 22.13, no build: `lib/` is what runs. The plugin
 works on **somebody else's** repository, and most rules below follow from that.
 
 Read before changing anything: [`CONTRIBUTING.md`](CONTRIBUTING.md) (where code
