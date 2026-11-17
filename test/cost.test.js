@@ -21,18 +21,17 @@
 // The command exists to show "before" and "after" on one scale, so what is
 // worth pinning is that the scale is honest: sums that are sums, a weighting
 // that is the one documented, attribution that says where it stops, and a
-// coverage figure that cannot be left out. Two of these were learned from the
-// real corpus — one response written as several lines with the same usage, and
-// subagents filed away from their session — and both are pinned here, because
-// either one silently doubles or halves every number the command prints.
+// coverage figure that cannot be left out. What the source of calls gets wrong
+// when it is read carelessly is pinned beside its reader, in
+// test/transcripts.test.js.
 //
-// Nothing here reads ~/.claude. Fixtures are built in memory, and the two tests
+// Nothing here reads ~/.claude. Fixtures are built in memory, and the tests
 // that need files on disk write them to a temporary directory.
 
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -47,13 +46,11 @@ import {
   format,
   normalize,
   phaser,
-  readUsage,
-  scan,
-  slugOf,
   tally,
   unattributedShare,
   unitsOf,
 } from '../lib/cost.js';
+import { readUsage } from '../lib/transcripts.js';
 
 const HOUR = 3_600_000;
 const T0 = Date.parse('2026-08-26T10:00:00Z');
@@ -71,7 +68,7 @@ const call = (over = {}) => ({
   ...over,
 });
 
-/** @param {Partial<import('../lib/cost.js').Scan>} over */
+/** @param {Partial<import('../lib/transcripts.js').Scan>} over */
 const scanOf = (over = {}) => ({
   calls: [],
   compactions: [],
@@ -304,47 +301,6 @@ describe('reading transcripts', () => {
 
   after(async () => {
     await rm(dir, { recursive: true, force: true });
-  });
-
-  test('the project directory name replaces every non-alphanumeric character', () => {
-    assert.equal(
-      slugOf('/Users/Vlad/Workspace/RedHat/git/vzhukovs/podman-desktop'),
-      '-Users-Vlad-Workspace-RedHat-git-vzhukovs-podman-desktop',
-    );
-  });
-
-  test('one response written as several lines is one call, and subagents are read from their own files', async () => {
-    const usage = { input_tokens: 1, cache_read_input_tokens: 100, cache_creation_input_tokens: 10, output_tokens: 2 };
-    const line = (id, block, extra = {}) =>
-      JSON.stringify({
-        timestamp: '2026-08-26T10:00:00.000Z',
-        sessionId: 's1',
-        message: { id, model: 'claude-opus-5', role: 'assistant', usage, content: [{ type: block }] },
-        ...extra,
-      });
-
-    await writeFile(
-      join(dir, 's1.jsonl'),
-      [
-        line('msg_1', 'thinking'),
-        line('msg_1', 'text'),
-        line('msg_1', 'tool_use'),
-        'not json',
-        JSON.stringify({ timestamp: '2026-08-26T10:01:00.000Z', isCompactSummary: true, sessionId: 's1' }),
-        line('msg_2', 'text'),
-        '',
-      ].join('\n'),
-    );
-    await mkdir(join(dir, 's1', 'subagents'), { recursive: true });
-    await writeFile(join(dir, 's1', 'subagents', 'agent-abc.jsonl'), `${line('msg_3', 'text', { isSidechain: true })}\n`);
-
-    const scanned = await scan([dir]);
-    assert.equal(scanned.calls.length, 3);
-    assert.equal(scanned.duplicateLines, 2);
-    assert.equal(scanned.unreadableLines, 1);
-    assert.equal(scanned.compactions.length, 1);
-    assert.equal(scanned.subagentFiles, 1);
-    assert.deepEqual(scanned.calls.map((entry) => entry.agent).sort(), ['abc', null, null]);
   });
 
   test('a missing transcript directory is a skip with a reason, not an exception', async () => {

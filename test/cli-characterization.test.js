@@ -69,7 +69,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { COMMANDS } from '../lib/cli.js';
-import { slugOf } from '../lib/cost.js';
+import { slugOf } from '../lib/transcripts.js';
 import { initRepo, writeFiles, commitAll, cleanup } from './helpers/repo-fixture.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
