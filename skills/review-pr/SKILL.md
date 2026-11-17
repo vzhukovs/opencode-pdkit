@@ -3,8 +3,7 @@ name: review-pr
 description: "Review someone else's pull request along four parallel axes."
 argument-hint: "<pr-number>"
 disable-model-invocation: true
-model: opus
-effort: medium
+model: claude-agent/opus#medium
 ---
 
 Outside the issue lifecycle entirely. Nothing here moves a state machine, and
@@ -71,9 +70,9 @@ marker is a label, not a downgrade. A finding is reported only after it has
 been checked in the actual code. If it could not be checked, it becomes a
 `question:`.
 
-Then `pd-review-synth` merges them. It is given the four reports **and**
-`feedback` from step 1: dedupe, calibrate, mark what reviewers already raised,
-and reach one verdict.
+Wait for all four axis reports, then `pd-review-synth` merges them. It is
+given the four reports **and** `feedback` from step 1: dedupe, calibrate, mark
+what reviewers already raised, and reach one verdict.
 
 ## 3. The report
 

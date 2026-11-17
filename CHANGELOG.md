@@ -84,6 +84,7 @@ fixes — see [RELEASING.md](RELEASING.md).
   | `/pd:quickfix` | `claude-agent/sonnet#medium` | `sonnet`, effort `medium` |
   | `/pd:reset` | `claude-agent/sonnet#medium` | `sonnet`, effort `medium` |
   | `/pd:resume` | `claude-agent/sonnet#medium` | `sonnet`, effort `medium` |
+  | `/pd:review-pr` | `claude-agent/opus#medium` | `opus`, effort `medium` |
 
 ## [0.15.0] - 2026-11-13
 

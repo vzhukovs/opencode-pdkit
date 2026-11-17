@@ -99,6 +99,7 @@ const DEFAULTS = Object.freeze({
   quickfix: 'claude-agent/sonnet#medium',
   reset: 'claude-agent/sonnet#medium',
   resume: 'claude-agent/sonnet#medium',
+  'review-pr': 'claude-agent/opus#medium',
 });
 
 /**
