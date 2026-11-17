@@ -3,8 +3,7 @@ name: resume
 description: "Come back to an issue after a break: drift analysis, rebase, plan amendment."
 argument-hint: "<issue-number>"
 disable-model-invocation: true
-model: sonnet
-effort: medium
+model: claude-agent/sonnet#medium
 ---
 
 Everything here assumes the world moved while you were away, and asks whether it
@@ -66,7 +65,7 @@ instead of the requirement that was.
    decides what happens to it. Nothing else is touched in that tree.
 
    Do it here rather than through `/pd:sync`: that command is the person's to
-   run, and the Skill tool refuses it. If they want the full picture of every
+   run, and no tool of yours runs it. If they want the full picture of every
    worktree, suggest they run it themselves.
 
 2. **`pdkit drift <issue>`** — the upstream commits that landed since each slice

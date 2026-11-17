@@ -98,6 +98,7 @@ const DEFAULTS = Object.freeze({
   preflight: 'claude-agent/sonnet#medium',
   quickfix: 'claude-agent/sonnet#medium',
   reset: 'claude-agent/sonnet#medium',
+  resume: 'claude-agent/sonnet#medium',
 });
 
 /**
