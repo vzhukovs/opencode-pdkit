@@ -70,19 +70,34 @@ const HOST_EVENTS = {
  * What setup() registers that is not a point of a hook event: the shell
  * environment, which puts `pdkit` on PATH (opencode/environment.js); the
  * answer that keeps the plugin's own files readable (opencode/access.js); the
- * registrars of agents, commands and skills; and the bridge's watch on runs
- * that fail or are interrupted, which keeps what subagent-stop remembers
- * right and runs no hook.
+ * registrars of agents, commands and skills, and the tools taken out of the
+ * agents' requests (opencode/agents.js); and the bridge's watch on runs that
+ * fail or are interrupted, which keeps what subagent-stop remembers right and
+ * runs no hook. One registration each: a point can carry a hook's callback
+ * and one of these both, as a compaction does.
  */
 const NOT_A_HOOK = [
   'shell create.before',
   'permission evaluate',
+  'session context',
+  'session compaction',
+  'session generate',
   'agent transform',
   'command transform',
   'skill transform',
   'event session.execution.failed',
   'event session.execution.interrupted',
 ];
+
+/** The registrations of `order` that stand for a hook: all but one of each NOT_A_HOOK names. */
+function hooksOf(order) {
+  const rest = [...order];
+  for (const name of NOT_A_HOOK) {
+    const at = rest.lastIndexOf(name);
+    if (at !== -1) rest.splice(at, 1);
+  }
+  return rest;
+}
 
 const PARENT = 'ses_parent';
 const CHILD = 'ses_child';
@@ -316,7 +331,7 @@ describe('every event of the table is registered and has a module', () => {
 
   test('setup registers each point the table names, and no other', () => {
     const named = new Set(Object.values(WIRING).flatMap((rows) => rows.map((row) => row.point)));
-    const registered = stand.order.filter((name) => !NOT_A_HOOK.includes(name));
+    const registered = hooksOf(stand.order);
 
     assert.deepEqual(new Set(registered), named);
     // One callback on each point, the gate's on execute.before aside: the
@@ -401,7 +416,7 @@ describe('an event of the table the bridge cannot place', () => {
     const plugin = (await import(pathToFileURL(join(dir, 'opencode', 'server.js')).href)).default;
     const cleanup = await plugin.setup(stand.ctx);
     t.after(() => cleanup?.());
-    return { registered: stand.order.filter((name) => !NOT_A_HOOK.includes(name)), log: error.mock.calls.map((call) => call.arguments.join(' ')) };
+    return { registered: hooksOf(stand.order), log: error.mock.calls.map((call) => call.arguments.join(' ')) };
   }
 
   const named = () => new Set(Object.values(WIRING).flatMap((rows) => rows.map((row) => row.point)));

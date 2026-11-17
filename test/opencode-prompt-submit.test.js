@@ -519,7 +519,8 @@ describe('where it is registered', () => {
     const { hooks, log } = await loaded(t, { fail: { hook: 'prompt' } });
 
     assert.deepEqual(log(), ['opencode-pdkit: cannot register its hooks (unknown session hook: prompt); the gate and the rest are unaffected']);
-    assert.deepEqual([...hooks.keys()].sort(), ['compaction', 'experimental.idle', 'fork']);
+    // context and generate: the agents' hiding of tools (opencode/agents.js).
+    assert.deepEqual([...hooks.keys()].sort(), ['compaction', 'context', 'experimental.idle', 'fork', 'generate']);
   });
 
   test('one callback on the prompt hook, for session-start and prompt-submit both', async (t) => {

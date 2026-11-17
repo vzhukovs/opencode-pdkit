@@ -34,7 +34,10 @@
 //                  checks it by, after a first rule that denies everything:
 //                  what the agent was not given, it does not see. To read the
 //                  plugin's files and the plans under $PDKIT_HOME, every agent
-//                  gets those two directories too (opencode/access.js);
+//                  gets those two directories too (opencode/access.js). An
+//                  action can show a tool of Open Code's own besides the ones
+//                  it stands for (EXTRA_TOOLS); such a tool is taken out of
+//                  every request of the agent's sessions instead;
 //   the body:      the system prompt, with ${CLAUDE_PLUGIN_ROOT} spelled out:
 //                  Open Code has no such variable, and the model reads the
 //                  files the prompt names by their absolute path.
@@ -77,6 +80,32 @@ export const ACTIONS = Object.freeze({
   Write: 'edit',
   Edit: 'edit',
 });
+
+/**
+ * Open Code's own tools an action shows an agent besides the tools of Claude
+ * Code it stands for, by action. Open Code offers the model every tool whose
+ * action the agent's rules allow, and checks these by the action of a tool
+ * Claude Code had, so an agent given that tool would see them too, though
+ * Claude Code never gave it them. The rule stays, since the agent's own tools
+ * need it; the tools are taken out of the requests of its sessions instead
+ * (hideTools), by the name the model knows them by. A model that calls one all
+ * the same is told it is not available.
+ *
+ *   opencode_worktree_remove  removes a worktree of the project. It checks
+ *                             `edit` on the worktree's directory, and nothing
+ *                             else: not whether the directory is outside the
+ *                             project.
+ */
+export const EXTRA_TOOLS = Object.freeze({
+  edit: Object.freeze(['opencode_worktree_remove']),
+});
+
+/**
+ * The requests of a session whose tools a plugin's hook sees, by the hook's
+ * name: a turn of the model, a summary of the session, and a question asked
+ * on the side. Open Code's own plugins take tools out on all three.
+ */
+export const REQUESTS = Object.freeze(['context', 'compaction', 'generate']);
 
 /** Claude Code's name for a tool of an MCP server: mcp__<server>__<tool>. */
 const MCP = /^mcp__(.+?)__(.+)$/;
@@ -139,6 +168,39 @@ export function permissionsFor(tools, directories) {
     rules.push(rule);
   }
   return { rules, unknown };
+}
+
+/**
+ * The tools of EXTRA_TOOLS an agent's rules show it: those of every action
+ * the rules allow.
+ *
+ * @param {readonly Rule[]} rules
+ * @returns {string[]}
+ */
+export function extraTools(rules) {
+  const tools = new Set();
+  for (const rule of rules) {
+    if (rule.effect === 'allow' && Object.hasOwn(EXTRA_TOOLS, rule.action)) {
+      for (const tool of EXTRA_TOOLS[rule.action]) tools.add(tool);
+    }
+  }
+  return [...tools];
+}
+
+/**
+ * Take the tools hidden from an agent out of one request of its session, as a
+ * hook of REQUESTS receives it: `agent` is the ID of the session's agent and
+ * `tools` the tools offered, by the name the model knows them by. A session of
+ * any other agent — the main one, the user's, another plugin's — is left as it
+ * is.
+ *
+ * @param {{agent?: unknown, tools?: unknown}} event changed in place
+ * @param {ReadonlyMap<string, readonly string[]>} hidden by agent ID
+ */
+export function hideTools(event, hidden) {
+  const names = typeof event?.agent === 'string' ? hidden.get(event.agent) : undefined;
+  if (names === undefined || typeof event.tools !== 'object' || event.tools === null) return;
+  for (const name of names) delete event.tools[name];
 }
 
 /**
@@ -262,6 +324,7 @@ export function agentModels(agents, map) {
  * @property {string} system
  * @property {Rule[]} permissions
  * @property {import('./options.js').ModelRef|undefined} model
+ * @property {readonly string[]} hidden the tools of EXTRA_TOOLS taken out of its requests
  */
 
 /**
@@ -278,6 +341,42 @@ function apply(info, agent) {
   info.permissions = agent.permissions.map((rule) => ({ ...rule }));
   if (agent.model) info.model = { ...agent.model };
   else delete info.model;
+}
+
+/**
+ * Take each agent's `hidden` out of every request of its sessions, from a
+ * hook on each of REQUESTS; with nothing to hide, nothing is registered. Done
+ * before the agents are, so that none of them is ever there without it.
+ * Neither this nor the callback throws: a callback that throws fails the
+ * request it was called for. A hook that cannot be registered leaves the
+ * others registered, and is reported in one line.
+ *
+ * @param {object} ctx
+ * @param {readonly Definition[]} agents
+ * @param {(line: string) => void} log
+ */
+async function registerHiding(ctx, agents, log) {
+  const hidden = new Map(agents.filter((agent) => agent.hidden.length > 0).map((agent) => [agent.id, agent.hidden]));
+  if (hidden.size === 0) return;
+  const tools = [...new Set([...hidden.values()].flat())].join(', ');
+  const hide = (event) => {
+    try {
+      hideTools(event, hidden);
+    } catch (error) {
+      log(`cannot hide tools from a request (${reason(error)}); its model may be offered ${tools}`);
+    }
+  };
+  const failures = [];
+  for (const request of REQUESTS) {
+    try {
+      await ctx.session.hook(request, hide);
+    } catch (error) {
+      failures.push(reason(error));
+    }
+  }
+  if (failures.length > 0) {
+    log(`cannot register its hiding of tools (${failures.join('; ')}); ${[...hidden.keys()].join(', ')} may be offered ${tools}, which Claude Code did not give them`);
+  }
 }
 
 /**
@@ -311,6 +410,7 @@ export async function registerAgents(ctx, plugin) {
         system: agent.body.replaceAll(ROOT_TOKEN, root),
         permissions: rules,
         model: models.get(agent.id),
+        hidden: Object.freeze(extraTools(rules)),
       }),
     );
   }
@@ -319,6 +419,8 @@ export async function registerAgents(ctx, plugin) {
   // its default is written as provider/model#variant, as intended for now.
   // Once every default is written, a test holds `unread` empty.
   for (const line of [...problems, ...dropped]) plugin.log(line);
+
+  await registerHiding(ctx, defined, plugin.log);
 
   await ctx.agent.transform((editor) => {
     for (const agent of defined) {

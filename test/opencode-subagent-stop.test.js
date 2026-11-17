@@ -772,6 +772,8 @@ describe('where it is registered', () => {
     assert.deepEqual(points, ['tool.hook execute.before', 'tool.hook execute.before', 'tool.hook execute.after']);
     assert.deepEqual(log(), [
       'opencode-pdkit: cannot register its hooks (unknown session hook: experimental.idle; unknown session hook: prompt; unknown session hook: fork; unknown session hook: compaction); the gate and the rest are unaffected',
+      // The agents' hiding of tools stands on session hooks too (opencode/agents.js).
+      'opencode-pdkit: cannot register its hiding of tools (unknown session hook: context; unknown session hook: compaction; unknown session hook: generate); pd-implementer, pd-thread-resolver may be offered opencode_worktree_remove, which Claude Code did not give them',
     ]);
     const watches = stand.streams.filter(({ options }) => options.types?.includes('session.execution.failed'));
     assert.equal(watches.length, 0, 'no watch for a hook that is not there');

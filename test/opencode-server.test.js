@@ -59,6 +59,11 @@ const FULL = [
   'shell.hook create.before',
   // The answer that keeps the plugin's own files readable under a strict config.
   'permission.hook evaluate',
+  // The tools of Open Code's own that edit shows besides write and edit,
+  // taken out of the agents' requests before the agents are registered.
+  'session.hook context',
+  'session.hook compaction',
+  'session.hook generate',
   'agent.transform',
   'command.transform',
   'skill.transform',
@@ -609,16 +614,20 @@ describe('a plugin that cannot load refuses every command', () => {
 });
 
 describe('a registration that fails', () => {
-  for (const [what, failing] of [
-    ['access to its own files', 'permission.hook evaluate'],
-    ['agents', 'agent.transform'],
-    ['commands and skills', 'command.transform'],
-    ['hooks', 'tool.hook execute.after'],
-    ['hooks', 'session.hook experimental.idle'],
-    ['hooks', 'session.hook prompt'],
-    ['hooks', 'session.hook fork'],
-    ['hooks', 'session.hook compaction'],
-    ['shell environment', 'shell.hook create.before'],
+  // What each failing point takes down, by the line the log names it in: a
+  // point two parts stand on is reported by each of them.
+  for (const [failing, ...whats] of [
+    ['permission.hook evaluate', 'access to its own files'],
+    ['agent.transform', 'agents'],
+    ['command.transform', 'commands and skills'],
+    ['tool.hook execute.after', 'hooks'],
+    ['session.hook experimental.idle', 'hooks'],
+    ['session.hook prompt', 'hooks'],
+    ['session.hook fork', 'hooks'],
+    ['session.hook compaction', 'hooks', 'hiding of tools'],
+    ['session.hook context', 'hiding of tools'],
+    ['session.hook generate', 'hiding of tools'],
+    ['shell.hook create.before', 'shell environment'],
   ]) {
     test(`leaves the gate and the rest in place: ${failing}`, async (t) => {
       const log = logOf(t);
@@ -631,8 +640,8 @@ describe('a registration that fails', () => {
         assert.ok(order.includes(name), `${name} is missing`);
       }
       await gate(shell());
-      assert.equal(log().length, 1);
-      assert.match(log()[0], new RegExp(`cannot register its ${what} \\(${failing} is unavailable\\)`));
+      assert.equal(log().length, whats.length, log().join('\n'));
+      whats.forEach((what, n) => assert.match(log()[n], new RegExp(`cannot register its ${what} \\(${failing} is unavailable\\)`)));
     });
   }
 });

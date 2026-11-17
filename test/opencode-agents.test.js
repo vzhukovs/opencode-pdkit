@@ -33,7 +33,19 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { ACTIONS, ROOT_TOKEN, actionOf, agentModels, permissionsFor, readAgents, registerAgents } from '../opencode/agents.js';
+import {
+  ACTIONS,
+  EXTRA_TOOLS,
+  REQUESTS,
+  ROOT_TOKEN,
+  actionOf,
+  agentModels,
+  extraTools,
+  hideTools,
+  permissionsFor,
+  readAgents,
+  registerAgents,
+} from '../opencode/agents.js';
 import { PLUGIN_ROOT, issueDir, resolveHome } from '../lib/config.js';
 import { cutDecision } from '../lib/hooks/cut.js';
 import { IMPLEMENTER } from '../lib/hooks/task-completed.js';
@@ -136,22 +148,75 @@ function editor() {
   };
 }
 
-/** Register against a stand-in, run the transform once, and hand back what it made. */
-async function register({ root = ROOT, models = {} } = {}) {
+/**
+ * Register against a stand-in, run the transform once, and hand back what it
+ * made. `order` is every registration, in order; `hooks` the session hooks
+ * by name. `fail` names session hooks the stand-in does not have.
+ */
+async function register({ root = ROOT, models = {}, fail = [] } = {}) {
   const lines = [];
   const transforms = [];
+  const order = [];
+  const hooks = new Map();
   const ctx = {
     agent: {
       transform: async (callback) => {
+        order.push('agent.transform');
         transforms.push(callback);
+      },
+    },
+    session: {
+      hook: async (name, callback) => {
+        if (fail.includes(name)) throw new Error(`unknown session hook: ${name}`);
+        order.push(`session.hook ${name}`);
+        hooks.set(name, [...(hooks.get(name) ?? []), callback]);
+        return { dispose: async () => {} };
       },
     },
   };
   const report = await registerAgents(ctx, { root, settings: { models }, log: (line) => lines.push(line) });
   const host = editor();
   for (const transform of transforms) transform(host);
-  return { report, lines, agents: host.agents, transforms };
+  return { report, lines, agents: host.agents, transforms, order, hooks };
 }
+
+/**
+ * The tools Open Code 2.3.0 can offer a model, by the name the model knows
+ * them by: its own (write and edit, or patch, by the model), the code mode's
+ * tool, and an MCP server's. Which of them a request carries is the host's
+ * business; a hook of REQUESTS may only take some out.
+ */
+const OFFERED = [
+  'edit',
+  'execute',
+  'glob',
+  'grep',
+  'opencode_worktree_remove',
+  'patch',
+  'playwright_browser_click',
+  'question',
+  'read',
+  'shell',
+  'skill',
+  'subagent',
+  'webfetch',
+  'websearch',
+  'write',
+];
+
+/** A request as a hook of REQUESTS receives it (F285): the session's agent and the tools on offer. */
+const request = (agent, tools = OFFERED) => ({
+  sessionID: 'ses_t5c',
+  model: { providerID: 'mock', id: 'agent' },
+  system: [],
+  messages: [],
+  options: {},
+  agent,
+  tools: Object.fromEntries(tools.map((name) => [name, { description: `The ${name} tool.`, input: { type: 'object' } }])),
+});
+
+/** Run every callback of one hook on the event, in order, as Open Code does; what each gave back. */
+const trigger = (hooks, name, event) => (hooks.get(name) ?? []).map((callback) => callback(event));
 
 /** A plugin root of its own, with these agent files. */
 async function fixture(t, files) {
@@ -211,6 +276,19 @@ describe('the 14 agents', () => {
         }
         // Open Code's own .env rules go with the defaults: Claude Code's Read did not ask either.
         assert.equal(decide(rules, 'read', '.env'), actions.includes('read') ? 'allow' : 'deny');
+      });
+
+      // The edit action shows opencode_worktree_remove too (F283), which
+      // Claude Code never gave an agent; every other tool is the host's to offer.
+      test("is offered none of Open Code's own tools that its tools' actions show besides them", async () => {
+        const { hooks } = await register();
+
+        for (const name of REQUESTS) {
+          const event = request(id);
+          trigger(hooks, name, event);
+          const kept = actions.includes('edit') ? OFFERED.filter((tool) => tool !== 'opencode_worktree_remove') : OFFERED;
+          assert.deepEqual(Object.keys(event.tools), kept, `${id} on ${name}`);
+        }
       });
 
       if (EXPECTED[id].model) {
@@ -445,6 +523,109 @@ describe('tools and permissions', () => {
       ],
     );
     assert.deepEqual(lines, ['agents/a.md: Open Code has no permission for the tool NotebookEdit; the agent goes without it']);
+  });
+});
+
+describe("Open Code's own tools an action shows besides Claude Code's", () => {
+  test('are, on Open Code 2.3.0, opencode_worktree_remove, which edit shows', () => {
+    assert.deepEqual(EXTRA_TOOLS, { edit: ['opencode_worktree_remove'] });
+    for (const action of Object.keys(EXTRA_TOOLS)) assert.ok(Object.values(ACTIONS).includes(action), action);
+  });
+
+  test("are those of every action an agent's rules allow", () => {
+    const rules = (tools) => permissionsFor(tools, ['/somewhere']).rules;
+
+    assert.deepEqual(extraTools(rules(['Read', 'Grep', 'Glob', 'Bash'])), []);
+    assert.deepEqual(extraTools(rules(['Write'])), ['opencode_worktree_remove']);
+    assert.deepEqual(extraTools(rules(['Read', 'Write', 'Edit'])), ['opencode_worktree_remove']);
+    assert.deepEqual(extraTools([{ action: 'edit', resource: '*', effect: 'deny' }]), []);
+  });
+
+  test('are taken from the requests of the agents with Write or Edit: the implementer and the thread resolver', async () => {
+    const { report } = await register();
+
+    assert.deepEqual(
+      report.agents.filter((agent) => agent.hidden.length > 0).map((agent) => [agent.id, agent.hidden]),
+      [
+        ['pd-implementer', ['opencode_worktree_remove']],
+        ['pd-thread-resolver', ['opencode_worktree_remove']],
+      ],
+    );
+  });
+
+  // F285: the hook's `agent` is the ID of the session's agent — `build` for
+  // the main session, whatever the user or another plugin registered for theirs.
+  test("are left to the main session, the user's agents and another plugin's", async () => {
+    const { hooks } = await register();
+
+    for (const agent of ['build', 'plan', 'explore', 'my-implementer', 'pd-implementer-2', 'PD-IMPLEMENTER', '', undefined, 7]) {
+      for (const name of REQUESTS) {
+        const event = request(agent);
+        trigger(hooks, name, event);
+        assert.deepEqual(event, request(agent), `${agent} on ${name}`);
+      }
+    }
+  });
+
+  test('are hidden on a turn, a summary and a side question, from hooks registered before the agents', async () => {
+    const { order } = await register();
+
+    assert.deepEqual(REQUESTS, ['context', 'compaction', 'generate']);
+    assert.deepEqual(order, ['session.hook context', 'session.hook compaction', 'session.hook generate', 'agent.transform']);
+  });
+
+  test('leave the rest of a request as it was, and give the host nothing back', async () => {
+    const { hooks, lines } = await register();
+    const event = request(IMPLEMENTER);
+    const { tools, ...rest } = request(IMPLEMENTER);
+
+    for (const name of REQUESTS) assert.deepEqual(trigger(hooks, name, event), [undefined]);
+    assert.deepEqual({ ...event, tools: undefined }, { ...rest, tools: undefined });
+    for (const [name, tool] of Object.entries(event.tools)) assert.deepEqual(tool, tools[name]);
+    assert.deepEqual(lines, []);
+  });
+
+  // A hook that throws fails the request it was called for (§14 F285).
+  test('a callback that cannot change the request does not throw, and says so', async () => {
+    const { hooks, lines } = await register();
+    const frozen = { ...request(IMPLEMENTER), tools: Object.freeze(request(IMPLEMENTER).tools) };
+
+    for (const event of [undefined, null, {}, { agent: IMPLEMENTER }, { agent: IMPLEMENTER, tools: null }, { agent: IMPLEMENTER, tools: 'edit' }, frozen]) {
+      for (const name of REQUESTS) assert.deepEqual(trigger(hooks, name, event), [undefined]);
+    }
+    assert.equal(lines.length, REQUESTS.length);
+    for (const line of lines) assert.match(line, /^cannot hide tools from a request \(.+\); its model may be offered opencode_worktree_remove$/);
+  });
+
+  test('a hook the host does not have leaves the others and the agents registered, and is reported once', async () => {
+    const { agents, order, lines } = await register({ fail: ['compaction', 'generate'] });
+
+    assert.deepEqual(order, ['session.hook context', 'agent.transform']);
+    assert.equal(agents.size, Object.keys(EXPECTED).length);
+    assert.deepEqual(lines, [
+      'cannot register its hiding of tools (unknown session hook: compaction; unknown session hook: generate); pd-implementer, pd-thread-resolver may be offered opencode_worktree_remove, which Claude Code did not give them',
+    ]);
+  });
+
+  test('with nothing to hide, nothing is registered', async (t) => {
+    const root = await fixture(t, { 'a.md': agentFile({ name: 'a', tools: 'Read, Bash' }) });
+
+    const { order, report } = await register({ root });
+
+    assert.deepEqual(order, ['agent.transform']);
+    assert.deepEqual(report.agents[0].hidden, []);
+  });
+
+  test('hideTools takes out only the names it is given, of the agent it is given them for', () => {
+    const hidden = new Map([['a', ['x', 'missing']]]);
+    const event = { agent: 'a', tools: { x: 1, y: 2 } };
+    const other = { agent: 'b', tools: { x: 1, y: 2 } };
+
+    hideTools(event, hidden);
+    hideTools(other, hidden);
+
+    assert.deepEqual(event.tools, { y: 2 });
+    assert.deepEqual(other.tools, { x: 1, y: 2 });
   });
 });
 

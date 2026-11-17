@@ -38,9 +38,10 @@
 //   3. compares the running Open Code with engines.opencode in package.json,
 //      the one place the minimum is written (Open Code ignores the field);
 //   4. registers hooks, the shell environment that puts `pdkit` on PATH,
-//      the answer that keeps the plugin's own files readable, agents,
-//      commands and skills — or, below the minimum, only `/pd:*` commands
-//      that refuse and say which version to install.
+//      the answer that keeps the plugin's own files readable, agents (with
+//      the session hooks that keep from their models the tools Claude Code
+//      did not give them), commands and skills — or, below the minimum, only
+//      `/pd:*` commands that refuse and say which version to install.
 //
 // Nothing after step 1 throws out of setup(). A registrar that fails is
 // reported and skipped; the gate does not depend on it.

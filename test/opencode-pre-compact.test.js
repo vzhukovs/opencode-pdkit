@@ -154,9 +154,10 @@ function stream(options, streams) {
 
 /**
  * A stand-in for setup()'s context, in `directory`: just enough for the entry
- * point to load in full, with the sessions it knows. `compact` calls the
- * compaction hook as Open Code does and checks that the callback leaves the
- * event as it was and gives nothing back; `compacted` sends the end of a
+ * point to load in full, with the sessions it knows. `hooks` holds the
+ * callbacks of each session hook, in the order registered. `compact` calls the
+ * compaction hook as Open Code does — each callback in turn — and checks that
+ * they leave the event as it was and give nothing back; `compacted` sends the end of a
  * compaction on the streams the bridge subscribed to. `directory: null` is an
  * instance with no location; `fail.hook` names a hook point the host does not
  * have.
@@ -175,7 +176,7 @@ function host({ directory = repo, sessions = {}, fail = {} } = {}) {
     session: {
       hook: async (name, callback) => {
         if (fail.hook === name) throw new Error(`unknown session hook: ${name}`);
-        hooks.set(name, callback);
+        hooks.set(name, [...(hooks.get(name) ?? []), callback]);
         return registered;
       },
       get: async ({ sessionID }) => {
@@ -205,9 +206,10 @@ function host({ directory = repo, sessions = {}, fail = {} } = {}) {
     entries,
     compact: async (sessionID) => {
       const event = compacting(sessionID);
-      const returned = await hooks.get('compaction')(event);
-      assert.equal(returned, undefined, 'the callback gives the host nothing back');
-      assert.deepEqual(event, compacting(sessionID), 'the callback leaves the compaction as it was: no result, no text');
+      for (const callback of hooks.get('compaction')) {
+        assert.equal(await callback(event), undefined, 'a callback gives the host nothing back');
+      }
+      assert.deepEqual(event, compacting(sessionID), 'the callbacks leave the compaction as it was: no result, no text');
     },
     compacted: (sessionID) => {
       for (const { push } of streams) push({ type: 'session.compaction.ended', data: { sessionID, reason: 'manual' } });
@@ -466,7 +468,7 @@ describe('no answer lets the compaction go on, and says why', () => {
     const before = (await compacts()).length;
 
     for (const event of [undefined, {}, { sessionID: '' }, { sessionID: 7 }]) {
-      assert.equal(await hooks.get('compaction')(event), undefined);
+      for (const callback of hooks.get('compaction')) assert.equal(await callback(event), undefined);
     }
     assert.equal((await compacts()).length, before);
     assert.deepEqual(log(), []);
@@ -475,11 +477,15 @@ describe('no answer lets the compaction go on, and says why', () => {
 
 describe('where it is registered', () => {
   // A host without the compaction hook must leave the rest registered, and
-  // say which point it lacks.
+  // say which point it lacks — once for pre-compact, once for the agents'
+  // hiding of tools, which stands on the same point (opencode/agents.js).
   test('a point the host does not have leaves the rest registered, and is reported', async (t) => {
     const { hooks, log } = await loaded(t, { fail: { hook: 'compaction' } });
 
-    assert.deepEqual(log(), ['opencode-pdkit: cannot register its hooks (unknown session hook: compaction); the gate and the rest are unaffected']);
-    assert.deepEqual([...hooks.keys()].sort(), ['experimental.idle', 'fork', 'prompt']);
+    assert.deepEqual(log(), [
+      'opencode-pdkit: cannot register its hooks (unknown session hook: compaction); the gate and the rest are unaffected',
+      'opencode-pdkit: cannot register its hiding of tools (unknown session hook: compaction); pd-implementer, pd-thread-resolver may be offered opencode_worktree_remove, which Claude Code did not give them',
+    ]);
+    assert.deepEqual([...hooks.keys()].sort(), ['context', 'experimental.idle', 'fork', 'generate', 'prompt']);
   });
 });
