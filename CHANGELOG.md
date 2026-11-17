@@ -78,6 +78,7 @@ fixes — see [RELEASING.md](RELEASING.md).
   | `/pd:plan` | `claude-agent/opus#high` | `opus`, effort `high` |
   | `/pd:plan-review` | `claude-agent/opus#high` | `opus`, effort `high` |
   | `/pd:pr` | `claude-agent/sonnet#medium` | `sonnet`, effort `medium` |
+  | `/pd:pr-status` | `claude-agent/sonnet#medium` | `sonnet`, effort `medium` |
 
 ## [0.15.0] - 2026-11-13
 
