@@ -102,6 +102,7 @@ const DEFAULTS = Object.freeze({
   'review-pr': 'claude-agent/opus#medium',
   slice: 'claude-agent/sonnet#medium',
   sync: 'claude-agent/sonnet#medium',
+  triage: 'claude-agent/opus#high',
 });
 
 /**
