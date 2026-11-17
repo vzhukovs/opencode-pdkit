@@ -1,7 +1,7 @@
 ---
 name: pd-review-synth
 description: "Merges the four review axes into a single verdict."
-model: opus
+model: claude-agent/opus#medium
 tools: Read
 ---
 

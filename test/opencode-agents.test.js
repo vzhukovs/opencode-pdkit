@@ -59,7 +59,7 @@ const EXPECTED = {
   'pd-review-api-compat': { model: { providerID: 'claude-agent', id: 'sonnet', variant: 'medium' }, actions: READS },
   'pd-review-architecture': { model: { providerID: 'claude-agent', id: 'sonnet', variant: 'medium' }, actions: READS },
   'pd-review-product': { model: { providerID: 'claude-agent', id: 'sonnet', variant: 'medium' }, actions: READS },
-  'pd-review-synth': { alias: 'opus', actions: ['read'] },
+  'pd-review-synth': { model: { providerID: 'claude-agent', id: 'opus', variant: 'medium' }, actions: ['read'] },
   'pd-review-tests': { alias: 'sonnet', actions: READS },
   'pd-scout': { alias: 'sonnet', actions: [...READS, 'shell'] },
   'pd-slicer': { alias: 'sonnet', actions: [...READS, 'shell'] },
