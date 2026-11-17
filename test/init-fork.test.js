@@ -232,6 +232,12 @@ describe('the model the skills declare', () => {
     assert.equal((await sessionModel(plugin)).model, null);
   });
 
+  test("a model in Open Code's form is a vote for its family", async () => {
+    await skill('g', ['disable-model-invocation: true', 'model: claude-agent/sonnet#medium']);
+
+    assert.deepEqual(await sessionModel(plugin), { model: 'sonnet', counts: { sonnet: 3, opus: 2 } });
+  });
+
   // Against the real skills/: what init writes today.
   test('the shipped skills give sonnet', async () => {
     assert.equal((await sessionModel()).model, 'sonnet');
