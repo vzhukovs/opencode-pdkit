@@ -66,11 +66,33 @@ const CATALOG = [
 ];
 
 /**
+ * The models the shipped defaults name, as Open Code 2.3.0 lists them for a
+ * Claude subscription: the three aliases, each with five variants.
+ */
+const SUBSCRIPTION = ['opus', 'sonnet', 'haiku'].map((id) => ({
+  id,
+  modelID: id,
+  providerID: 'claude-agent',
+  enabled: true,
+  variants: ['low', 'medium', 'high', 'xhigh', 'max'].map((variant) => ({ id: variant })),
+}));
+
+/**
+ * The default of each command ported so far (decisions/T5.B): the class of its
+ * Claude Code `model:` through a Claude subscription, its `effort:` as the
+ * variant.
+ * TODO(T6.01–T6.24): a row per port; with all 21, the alias branch below goes.
+ */
+const DEFAULTS = Object.freeze({
+  audit: 'claude-agent/sonnet#high',
+});
+
+/**
  * Register against a stand-in, run each transform once, and hand back what it
  * made. `calls` is every call into the session or the model catalog, in
  * order. `refuse` names what the editors throw on: `command <name>`, `skill <id>`.
  */
-async function register({ root = ROOT, models = {}, catalog = CATALOG, listFails = false, refuse = [] } = {}) {
+async function register({ root = ROOT, models = {}, catalog = [...CATALOG, ...SUBSCRIPTION], listFails = false, refuse = [] } = {}) {
   const lines = [];
   const calls = [];
   const transforms = { command: [], skill: [] };
@@ -221,6 +243,12 @@ describe('what a command sends', () => {
       assert.equal(sent.length, 1, name);
       const [, input] = sent[0];
       const { body } = await source(name);
+
+      // A shipped default is one this Open Code can use, and the session is on it before the text.
+      const ref = modelRef(await skillModel(name));
+      const switched = calls.filter(([call]) => call === 'switchModel').map(([, { model }]) => model);
+      assert.deepEqual(switched, ref ? [ref] : [], name);
+      assert.equal(calls.at(-1)[0], 'prompt', name);
 
       assert.equal(input.sessionID, 'ses_t6b', name);
       assert.equal(input.delivery, 'steer', name);
@@ -462,6 +490,22 @@ describe('the model of each phase a state leads to', () => {
 
   test('a skill that does not exist gives none either', async () => {
     assert.equal(await skillModel('no-such-skill'), null);
+  });
+});
+
+describe('the defaults the commands ship with', () => {
+  test('a ported command names the one decided for it, and only a ported command names one', async () => {
+    const named = [];
+    for (const name of await skillNames(ROOT)) if (modelRef(await skillModel(name))) named.push(name);
+    assert.deepEqual(named.sort(), Object.keys(DEFAULTS).sort());
+    for (const [name, model] of Object.entries(DEFAULTS)) assert.equal(await skillModel(name), model, name);
+  });
+
+  test('effort: is gone from every ported skill: the variant says it', async () => {
+    for (const name of Object.keys(DEFAULTS)) {
+      const { data } = await source(name);
+      assert.equal(Object.hasOwn(data, 'effort'), false, name);
+    }
   });
 });
 

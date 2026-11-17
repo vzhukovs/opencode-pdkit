@@ -55,6 +55,15 @@ fixes — see [RELEASING.md](RELEASING.md).
   | `pd-thread-resolver` | `claude-agent/sonnet#high` | `/pd:pr-sync` (high) |
   | `pd-validator` | `claude-agent/sonnet#medium` | `/pd:validate` (medium) |
 
+- **Commands name their default model the same way.** Each keeps the class of
+  its skill's `model:` under Claude Code, through the `claude-agent` provider,
+  and its `effort:` becomes the variant — the key itself is gone. To run a
+  command on another model, map `pd:<skill>` in the plugin's `options.models`.
+
+  | Command | Default | Under Claude Code |
+  |---|---|---|
+  | `/pd:audit` | `claude-agent/sonnet#high` | `sonnet`, effort `high` |
+
 ## [0.15.0] - 2026-11-13
 
 ### Upgrading
