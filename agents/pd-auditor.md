@@ -1,7 +1,7 @@
 ---
 name: pd-auditor
 description: "Audits a finished diff against the plan in fresh context."
-model: opus
+model: claude-agent/opus#high
 tools: Read, Grep, Glob, Bash
 ---
 

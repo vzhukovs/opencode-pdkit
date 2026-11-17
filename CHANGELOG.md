@@ -23,6 +23,7 @@ fixes — see [RELEASING.md](RELEASING.md).
   | Agent | Default | Called by |
   |---|---|---|
   | `pd-archaeologist` | `claude-agent/sonnet#high` | `/pd:triage` (high) |
+  | `pd-auditor` | `claude-agent/opus#high` | `/pd:audit` (high) |
 
 ## [0.15.0] - 2026-11-13
 
