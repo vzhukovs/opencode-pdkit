@@ -1,7 +1,7 @@
 ---
 name: pd-implementer
 description: "Implements exactly one planned task within its declared file ownership, and finishes with a receipt."
-model: sonnet
+model: claude-agent/sonnet#medium
 tools: Read, Write, Edit, Grep, Glob, Bash
 ---
 
