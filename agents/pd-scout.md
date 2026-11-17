@@ -1,7 +1,7 @@
 ---
 name: pd-scout
 description: "Maps a region of the podman-desktop codebase and reports back compressed. Returns findings, never recommendations."
-model: sonnet
+model: claude-agent/sonnet#high
 tools: Read, Grep, Glob, Bash
 ---
 
