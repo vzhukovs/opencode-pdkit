@@ -55,7 +55,7 @@ const EXPECTED = {
   'pd-auditor': { model: { providerID: 'claude-agent', id: 'opus', variant: 'high' }, actions: [...READS, 'shell'] },
   'pd-conflict-analyst': { model: { providerID: 'claude-agent', id: 'opus', variant: 'medium' }, actions: [...READS, 'shell'] },
   'pd-implementer': { model: { providerID: 'claude-agent', id: 'sonnet', variant: 'medium' }, actions: ['read', 'edit', 'grep', 'glob', 'shell'] },
-  'pd-plan-critic': { alias: 'opus', actions: READS },
+  'pd-plan-critic': { model: { providerID: 'claude-agent', id: 'opus', variant: 'high' }, actions: READS },
   'pd-review-api-compat': { alias: 'sonnet', actions: READS },
   'pd-review-architecture': { alias: 'sonnet', actions: READS },
   'pd-review-product': { alias: 'sonnet', actions: READS },

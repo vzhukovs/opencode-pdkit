@@ -26,6 +26,7 @@ fixes — see [RELEASING.md](RELEASING.md).
   | `pd-auditor` | `claude-agent/opus#high` | `/pd:audit` (high) |
   | `pd-conflict-analyst` | `claude-agent/opus#medium` | `/pd:resume` (medium) |
   | `pd-implementer` | `claude-agent/sonnet#medium` | `/pd:exec` (medium) |
+  | `pd-plan-critic` | `claude-agent/opus#high` | `/pd:plan-review` (high) |
 
 ## [0.15.0] - 2026-11-13
 

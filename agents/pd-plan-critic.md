@@ -1,7 +1,7 @@
 ---
 name: pd-plan-critic
 description: "Adversarial review of a plan before any code exists."
-model: opus
+model: claude-agent/opus#high
 tools: Read, Grep, Glob
 ---
 
