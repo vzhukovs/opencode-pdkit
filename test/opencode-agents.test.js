@@ -59,8 +59,7 @@ const READS = ['read', 'grep', 'glob'];
  * Each agent as Claude Code ran it (§1.3 of the migration plan): the Open Code
  * actions its `tools:` amount to, and its model. That is the default its
  * frontmatter names as provider/model#variant (the class it had under Claude
- * Code, at the effort of the command that calls it), or, while the agent is
- * not ported yet, the Claude Code alias its frontmatter still has.
+ * Code, at the effort of the command that calls it).
  */
 const EXPECTED = {
   'pd-archaeologist': { model: { providerID: 'claude-agent', id: 'sonnet', variant: 'high' }, actions: [...READS, 'shell'] },
@@ -77,7 +76,7 @@ const EXPECTED = {
   'pd-slicer': { model: { providerID: 'claude-agent', id: 'sonnet', variant: 'medium' }, actions: [...READS, 'shell'] },
   'pd-thread-resolver': { model: { providerID: 'claude-agent', id: 'sonnet', variant: 'high' }, actions: ['read', 'edit', 'grep', 'glob', 'shell'] },
   'pd-validator': {
-    alias: 'sonnet',
+    model: { providerID: 'claude-agent', id: 'sonnet', variant: 'medium' },
     actions: [
       'read',
       'shell',
@@ -240,6 +239,14 @@ describe('the 14 agents', () => {
     assert.deepEqual(lines, []);
   });
 
+  // None is left on a Claude Code alias, which would put it on whatever model
+  // its caller runs.
+  test('each names its default model as provider/model#variant', async () => {
+    const { report } = await register();
+
+    assert.deepEqual(report.unread, []);
+  });
+
   // The receipt gate knows the implementer by the ID Open Code reports for
   // the child session, which is the ID registered here. Under any other, the
   // gate would let the implementer go as it lets any agent go.
@@ -291,21 +298,12 @@ describe('the 14 agents', () => {
         }
       });
 
-      if (EXPECTED[id].model) {
-        test('runs on the default model its frontmatter names, with its variant', async () => {
-          const { agents, report } = await register();
+      test('runs on the default model its frontmatter names, with its variant', async () => {
+        const { agents, report } = await register();
 
-          assert.deepEqual(agents.get(id).model, EXPECTED[id].model);
-          assert.deepEqual(report.unread.filter((line) => line.startsWith(`agents/${id}.md:`)), []);
-        });
-      } else {
-        test('runs on the model of its caller until the defaults name one (T5.B)', async () => {
-          const { agents, report } = await register();
-
-          assert.equal(Object.hasOwn(agents.get(id), 'model'), false);
-          assert.ok(report.unread.includes(`agents/${id}.md: model "${EXPECTED[id].alias}" is not provider/model#variant`));
-        });
-      }
+        assert.deepEqual(agents.get(id).model, EXPECTED[id].model);
+        assert.deepEqual(report.unread.filter((line) => line.startsWith(`agents/${id}.md:`)), []);
+      });
 
       test('reads the plugin files its prompt names, by their absolute path', async () => {
         const { agents } = await register();
@@ -396,6 +394,17 @@ describe('the model', () => {
     const { agents } = await register({ models: { 'pd-scout': 'openai/gpt-6.1-terra#high' } });
 
     assert.equal(typeof agents.get('pd-scout').model, 'object');
+  });
+
+  test("is the caller's when the frontmatter names a Claude Code alias, and the agent is listed as unread", async (t) => {
+    const root = await fixture(t, { 'a.md': agentFile({ name: 'a', model: 'sonnet' }), 'b.md': agentFile({ name: 'b', model: 'mock/alpha#low' }) });
+
+    const { agents, lines, report } = await register({ root });
+
+    assert.equal(Object.hasOwn(agents.get('a'), 'model'), false);
+    assert.deepEqual(agents.get('b').model, { providerID: 'mock', id: 'alpha', variant: 'low' });
+    assert.deepEqual(report.unread, ['agents/a.md: model "sonnet" is not provider/model#variant']);
+    assert.deepEqual(lines, []);
   });
 
   test('that is not provider/model#variant is dropped and logged, and the agent keeps its default', async (t) => {

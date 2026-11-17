@@ -35,6 +35,7 @@ fixes — see [RELEASING.md](RELEASING.md).
   | `pd-scout` | `claude-agent/sonnet#high` | `/pd:plan`, `/pd:triage` (high) |
   | `pd-slicer` | `claude-agent/sonnet#medium` | `/pd:slice` (medium) |
   | `pd-thread-resolver` | `claude-agent/sonnet#high` | `/pd:pr-sync` (high) |
+  | `pd-validator` | `claude-agent/sonnet#medium` | `/pd:validate` (medium) |
 
 ## [0.15.0] - 2026-11-13
 

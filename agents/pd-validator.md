@@ -1,7 +1,7 @@
 ---
 name: pd-validator
 description: "Drives the built application, collects evidence, and drafts an e2e test candidate."
-model: sonnet
+model: claude-agent/sonnet#medium
 tools: Read, Bash, mcp__playwright__browser_navigate, mcp__playwright__browser_click, mcp__playwright__browser_type, mcp__playwright__browser_snapshot, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_wait_for
 ---
 

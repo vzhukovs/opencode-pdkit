@@ -414,10 +414,9 @@ export async function registerAgents(ctx, plugin) {
       }),
     );
   }
-  // TODO(T5.B): an agent whose model: is still a Claude Code alias is named
-  // in `unread`, and that is not logged: it runs on its caller's model until
-  // its default is written as provider/model#variant, as intended for now.
-  // Once every default is written, a test holds `unread` empty.
+  // An agent whose model: is not provider/model#variant (a Claude Code alias,
+  // say) is named in `unread`, and that is not logged: it runs on its caller's
+  // model. Every agent shipped names its default, which a test holds.
   for (const line of [...problems, ...dropped]) plugin.log(line);
 
   await registerHiding(ctx, defined, plugin.log);
