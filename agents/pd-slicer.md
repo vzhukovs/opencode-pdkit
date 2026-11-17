@@ -143,7 +143,7 @@ for the person, not a gate.
 `slice suggest`, the proposal, `slice set`, `slice verify --all` and
 `slice render` — `${CLAUDE_PLUGIN_ROOT}/skills/slice/SKILL.md` steps 1–4. The proposal and the
 rationale values are inputs to `pdkit`, not artefacts: write them to a
-temporary file from Bash. The session that dispatched you does not read the
+temporary file from `shell`. The session that dispatched you does not read the
 diff or the file map, so nothing you leave out of your answer reaches it.
 
 ## What you return

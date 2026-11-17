@@ -100,6 +100,7 @@ const DEFAULTS = Object.freeze({
   reset: 'claude-agent/sonnet#medium',
   resume: 'claude-agent/sonnet#medium',
   'review-pr': 'claude-agent/opus#medium',
+  slice: 'claude-agent/sonnet#medium',
 });
 
 /**

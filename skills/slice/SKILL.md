@@ -3,8 +3,7 @@ name: slice
 description: "Turn one change set into a verified graph of atomic pull requests."
 argument-hint: "<issue-number>"
 disable-model-invocation: true
-model: sonnet
-effort: medium
+model: claude-agent/sonnet#medium
 ---
 
 Via `pd-slicer`, in fresh context, working from the finished diff.
