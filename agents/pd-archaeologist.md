@@ -1,7 +1,7 @@
 ---
 name: pd-archaeologist
 description: "Reconstructs history: reverts, regressions, and why a previous attempt failed."
-model: sonnet
+model: claude-agent/sonnet#high
 tools: Read, Grep, Glob, Bash
 ---
 

@@ -44,11 +44,14 @@ const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const READS = ['read', 'grep', 'glob'];
 
 /**
- * Each agent as Claude Code ran it (§1.3 of the migration plan): the model
- * alias of its frontmatter, and the Open Code actions its `tools:` amount to.
+ * Each agent as Claude Code ran it (§1.3 of the migration plan): the Open Code
+ * actions its `tools:` amount to, and its model. That is the default its
+ * frontmatter names as provider/model#variant (the class it had under Claude
+ * Code, at the effort of the command that calls it), or, while the agent is
+ * not ported yet, the Claude Code alias its frontmatter still has.
  */
 const EXPECTED = {
-  'pd-archaeologist': { alias: 'sonnet', actions: [...READS, 'shell'] },
+  'pd-archaeologist': { model: { providerID: 'claude-agent', id: 'sonnet', variant: 'high' }, actions: [...READS, 'shell'] },
   'pd-auditor': { alias: 'opus', actions: [...READS, 'shell'] },
   'pd-conflict-analyst': { alias: 'opus', actions: [...READS, 'shell'] },
   'pd-implementer': { alias: 'sonnet', actions: ['read', 'edit', 'grep', 'glob', 'shell'] },
@@ -210,12 +213,21 @@ describe('the 14 agents', () => {
         assert.equal(decide(rules, 'read', '.env'), actions.includes('read') ? 'allow' : 'deny');
       });
 
-      test('runs on the model of its caller until the defaults name one (T5.B)', async () => {
-        const { agents, report } = await register();
+      if (EXPECTED[id].model) {
+        test('runs on the default model its frontmatter names, with its variant', async () => {
+          const { agents, report } = await register();
 
-        assert.equal(Object.hasOwn(agents.get(id), 'model'), false);
-        assert.ok(report.unread.includes(`agents/${id}.md: model "${EXPECTED[id].alias}" is not provider/model#variant`));
-      });
+          assert.deepEqual(agents.get(id).model, EXPECTED[id].model);
+          assert.deepEqual(report.unread.filter((line) => line.startsWith(`agents/${id}.md:`)), []);
+        });
+      } else {
+        test('runs on the model of its caller until the defaults name one (T5.B)', async () => {
+          const { agents, report } = await register();
+
+          assert.equal(Object.hasOwn(agents.get(id), 'model'), false);
+          assert.ok(report.unread.includes(`agents/${id}.md: model "${EXPECTED[id].alias}" is not provider/model#variant`));
+        });
+      }
 
       test('reads the plugin files its prompt names, by their absolute path', async () => {
         const { agents } = await register();

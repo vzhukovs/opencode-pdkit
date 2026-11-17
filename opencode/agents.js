@@ -314,10 +314,10 @@ export async function registerAgents(ctx, plugin) {
       }),
     );
   }
-  // TODO(T5.B): every model: is a Claude Code alias until the defaults are
-  // written as provider/model#variant, so `unread` names all of them, and is
-  // not logged: each agent runs on its caller's model, as intended for now.
-  // Once they are written, a test holds `unread` empty.
+  // TODO(T5.B): an agent whose model: is still a Claude Code alias is named
+  // in `unread`, and that is not logged: it runs on its caller's model until
+  // its default is written as provider/model#variant, as intended for now.
+  // Once every default is written, a test holds `unread` empty.
   for (const line of [...problems, ...dropped]) plugin.log(line);
 
   await ctx.agent.transform((editor) => {

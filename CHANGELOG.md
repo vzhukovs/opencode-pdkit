@@ -9,6 +9,21 @@ fixes — see [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+### Changed
+
+- **Agents name their default model the way Open Code reads one,
+  `provider/model#variant`.** The class is the one each agent had under Claude
+  Code, through the `claude-agent` provider (a Claude subscription). The
+  variant is the effort of the command that calls the agent: a session's
+  `/effort` does not reach an agent in Open Code. To run an agent on another
+  model, `anthropic/claude-sonnet-5-5` with an API key or any other provider's,
+  map its ID in the plugin's `options.models`; Open Code's own
+  `agents.<id>.model` wins over both.
+
+  | Agent | Default | Called by |
+  |---|---|---|
+  | `pd-archaeologist` | `claude-agent/sonnet#high` | `/pd:triage` (high) |
+
 ## [0.15.0] - 2026-11-13
 
 ### Upgrading
