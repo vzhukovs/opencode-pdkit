@@ -3,8 +3,7 @@ name: pr-sync
 description: "Process review feedback: triage threads, fix, reply, resolve."
 argument-hint: "<pr-number>"
 disable-model-invocation: true
-model: opus
-effort: high
+model: claude-agent/opus#high
 ---
 
 The reviewer spent their time. This command exists so it does not have to be
@@ -60,7 +59,8 @@ spent twice.
    - the four `pd-review-*` axes, in parallel, on `git diff <base>...HEAD` in
      the local tree. Use the local tree, not `refs/pull/<k>/head`: after
      `/pd:resume` the rebased branch is not pushed yet;
-   - then `pd-review-synth`, then `pdkit review render <k> --values <f>`.
+   - wait for all four axis reports, then `pd-review-synth`, then
+     `pdkit review render <k> --values <f>`.
 
    No threads go to the axes or to the synthesis. The threads are already this
    round's agenda, and the self-review exists to find what they missed.
@@ -255,7 +255,7 @@ or into nothing at all.
    touch. It implements that and nothing wider; if the fix turns out to need
    another file or another approach, it stops and reports, and the row comes
    back to the person. Resolvers draft the reply as well as the change. They
-   never publish.
+   never publish. Wait for every resolver's report before step 7.
 
    A `self` row goes to a resolver as well. Tell it there is no thread, so it
    drafts no reply. Its fixes go in a commit of their own, apart from the
@@ -279,10 +279,12 @@ or into nothing at all.
    change step 4 exists to prevent, and pushing it is impossible.
 
    Between the two passes, **the self-review**, exactly as `/pd:pr` step 5
-   runs it: `pdkit self-review target`, the four axes and the synthesis on
-   the whole pull request, then `pdkit self-review record` with the body
-   pass two will read. When that body is the one on GitHub, write it to a file
-   first with `gh pr view <k> --json body -q .body`. Upstream's agent reads
+   runs it: `pdkit self-review target`, the four axes on the whole pull
+   request, wait for all four axis reports, then the synthesis, then
+   `pdkit self-review record` with the body pass two will read, in a file
+   under `$PDKIT_HOME/issues/<n>/`, where the axes can read it. When that
+   body is the one on GitHub, write it there first with
+   `gh pr view <k> --json body -q .body`. Upstream's agent reads
    the whole pull request again after every push, not only this round's
    commits, so ours does too. An open finding is a new row for step 4, with
    source `self (§n)`. The `self-review` check fails until a review of the
