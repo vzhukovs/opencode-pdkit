@@ -1,7 +1,7 @@
 ---
 name: pd-review-product
 description: "Reviews a pull request, someone else's or our own before it is published, against the issue it claims to solve, and for user-facing quality."
-model: sonnet
+model: claude-agent/sonnet#medium
 tools: Read, Grep, Glob
 ---
 

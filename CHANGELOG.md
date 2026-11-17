@@ -29,6 +29,7 @@ fixes — see [RELEASING.md](RELEASING.md).
   | `pd-plan-critic` | `claude-agent/opus#high` | `/pd:plan-review` (high) |
   | `pd-review-api-compat` | `claude-agent/sonnet#medium` | `/pd:review-pr`, `/pd:pr` (medium); `/pd:pr-sync` (high) |
   | `pd-review-architecture` | `claude-agent/sonnet#medium` | `/pd:review-pr`, `/pd:pr` (medium); `/pd:pr-sync` (high) |
+  | `pd-review-product` | `claude-agent/sonnet#medium` | `/pd:review-pr`, `/pd:pr` (medium); `/pd:pr-sync` (high) |
 
 ## [0.15.0] - 2026-11-13
 
