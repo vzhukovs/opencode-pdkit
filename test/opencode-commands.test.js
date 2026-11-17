@@ -85,6 +85,7 @@ const SUBSCRIPTION = ['opus', 'sonnet', 'haiku'].map((id) => ({
  */
 const DEFAULTS = Object.freeze({
   audit: 'claude-agent/sonnet#high',
+  close: 'claude-agent/sonnet#medium',
 });
 
 /**

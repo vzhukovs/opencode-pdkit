@@ -3,8 +3,7 @@ name: close
 description: "Close out a merged issue: harvest what was learned, clean up worktrees."
 argument-hint: "<issue-number>"
 disable-model-invocation: true
-model: sonnet
-effort: medium
+model: claude-agent/sonnet#medium
 ---
 
 ## Steps
@@ -63,9 +62,10 @@ effort: medium
    mean to abandon those commits.
 
    **Leave the tree first if this session is in it.** If the session moved into
-   the issue's worktree with `EnterWorktree`, call `ExitWorktree` before
-   `--finish`. Removing the directory the session stands in leaves it with no
-   working directory, and the next step then needs a new session.
+   the issue's worktree with `session_move`, call `session_move` with the main
+   checkout's path before `--finish`. Removing the directory the session stands
+   in leaves it with no working directory, and the next step then needs a new
+   session.
 
    Three outcomes per tree, and they are worth telling apart:
 

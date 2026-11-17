@@ -63,6 +63,7 @@ fixes — see [RELEASING.md](RELEASING.md).
   | Command | Default | Under Claude Code |
   |---|---|---|
   | `/pd:audit` | `claude-agent/sonnet#high` | `sonnet`, effort `high` |
+  | `/pd:close` | `claude-agent/sonnet#medium` | `sonnet`, effort `medium` |
 
 ## [0.15.0] - 2026-11-13
 
