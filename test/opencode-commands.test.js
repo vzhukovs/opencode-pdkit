@@ -89,6 +89,7 @@ const DEFAULTS = Object.freeze({
   editor: 'claude-agent/haiku#low',
   exec: 'claude-agent/sonnet#medium',
   knowledge: 'claude-agent/opus#medium',
+  open: 'claude-agent/haiku#low',
 });
 
 /**
