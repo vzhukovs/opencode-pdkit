@@ -124,11 +124,18 @@ const fresh = (directory = main) => ({ id: PERSON, projectID: 'global', time: { 
  * A stand-in for setup()'s context, in `directory`: just enough for the entry
  * point to load in full, with the sessions it knows and the instruction
  * entries it was given. `submit` calls the prompt hook as Open Code does and
- * checks the callback gives nothing back. `directory: null` is an instance
+ * checks the callbacks give nothing back. `directory: null` is an instance
  * with no location; `fail.hook` names a hook point the host does not have.
+ *
+ * `hooks.get(name)` runs every callback registered on the point, in the order
+ * they were registered, on the one event — as Open Code 2.3.0 triggers a
+ * point (src/plugin/hooks.ts) — and gives back the first answer that is not
+ * undefined: the prompt point carries the bridge's and the grant of a
+ * command's allowed-tools (opencode/allowed.js).
  */
 function host({ directory = main, sessions = { [PERSON]: ran() }, fail = {} } = {}) {
   const hooks = new Map();
+  const callbacks = new Map();
   const looked = [];
   const entries = [];
   const registered = { dispose: async () => {} };
@@ -140,7 +147,12 @@ function host({ directory = main, sessions = { [PERSON]: ran() }, fail = {} } = 
     session: {
       hook: async (name, callback) => {
         if (fail.hook === name) throw new Error(`unknown session hook: ${name}`);
-        hooks.set(name, callback);
+        callbacks.set(name, [...(callbacks.get(name) ?? []), callback]);
+        hooks.set(name, async (event) => {
+          const answers = [];
+          for (const each of callbacks.get(name)) answers.push(await each(event));
+          return answers.find((answer) => answer !== undefined);
+        });
         return registered;
       },
       get: async ({ sessionID }) => {
@@ -513,17 +525,38 @@ describe('no answer lets the prompt through, and says why', () => {
 });
 
 describe('where it is registered', () => {
-  // The prompt point carries two hooks; a host without it loses both, and
-  // says so once.
+  // The prompt point carries two hooks of the bridge's, and the end of the
+  // grant a command's allowed-tools gives (opencode/allowed.js); a host
+  // without it loses all three, and each part says so once.
   test('a host without the prompt hook leaves the rest registered, and is reported', async (t) => {
     const { hooks, log } = await loaded(t, { fail: { hook: 'prompt' } });
 
-    assert.deepEqual(log(), ['opencode-pdkit: cannot register its hooks (unknown session hook: prompt); the gate and the rest are unaffected']);
+    assert.deepEqual(log(), [
+      'opencode-pdkit: cannot register its hooks (unknown session hook: prompt); the gate and the rest are unaffected',
+      "opencode-pdkit: cannot register its allowed tools (unknown session hook: prompt); /pd:editor, /pd:open run their commands as the person's rules say, asking where they ask",
+    ]);
     // context and generate: the agents' hiding of tools (opencode/agents.js).
     assert.deepEqual([...hooks.keys()].sort(), ['compaction', 'context', 'experimental.idle', 'fork', 'generate']);
   });
 
-  test('one callback on the prompt hook, for session-start and prompt-submit both', async (t) => {
+  test('one callback of the bridge on the prompt hook, for session-start and prompt-submit both', async () => {
+    const registrations = [];
+    const stand = host();
+    const hook = stand.ctx.session.hook;
+    stand.ctx.session.hook = async (name, callback) => {
+      registrations.push(name);
+      return hook(name, callback);
+    };
+    const bridge = createBridge(stand.ctx, { root: ROOT, settings: { models: {} }, log: () => {} });
+    await bridge.register();
+    try {
+      assert.equal(registrations.filter((name) => name === 'prompt').length, 1);
+    } finally {
+      await bridge.cleanup();
+    }
+  });
+
+  test('beside it, after it, the one that ends a grant of allowed-tools', async (t) => {
     const registrations = [];
     const stand = host();
     const hook = stand.ctx.session.hook;
@@ -535,6 +568,6 @@ describe('where it is registered', () => {
     const cleanup = await plugin.setup(stand.ctx);
     t.after(() => cleanup?.());
 
-    assert.equal(registrations.filter((name) => name === 'prompt').length, 1);
+    assert.equal(registrations.filter((name) => name === 'prompt').length, 2);
   });
 });

@@ -46,7 +46,11 @@
 //   label:        `metadata` on the prompt the command sends, which tells the
 //                 prompt hook that a pdkit command ran, and which one
 //                 (opencode/bridge/payload.js). Open Code hands the hook the
-//                 text alone.
+//                 text alone;
+//   allowed-tools: the shell commands the skill lists run without a question
+//                 until the person's next message, as Claude Code granted
+//                 them for the turn (opencode/allowed.js). Invoking any
+//                 command ends the grant an earlier one gave.
 //
 // A skill the model may load by itself — one without
 // `disable-model-invocation: true` — is registered as a skill too, under the
@@ -64,6 +68,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import { skillDescription, skillModel } from '../lib/session-model.js';
+import { allowedPatterns, createGrants, registerGrants } from './allowed.js';
 import { LABEL_SOURCE } from './bridge/payload.js';
 import { modelRef } from './options.js';
 import { readPrompt, spellRoot } from './prompts.js';
@@ -106,6 +111,7 @@ export async function skillNames(root) {
  * @property {string|undefined} description the command's, hint first
  * @property {string|undefined} listed what the model reads of a skill it may load: description and when_to_use
  * @property {string|null} model `model:` as written
+ * @property {string[]} allowed the shell patterns of `allowed-tools`
  * @property {string} body with the root spelled out
  */
 
@@ -133,6 +139,10 @@ export async function readSkills(root) {
       if (description === undefined) problems.push(`${file}: no description:; /${PREFIX}${name} is listed without one`);
       const personOnly = data['disable-model-invocation'] === true;
       const listed = [text('description'), text('when_to_use')].filter(Boolean).join(' ') || undefined;
+      const allowed = allowedPatterns(data['allowed-tools']);
+      for (const entry of allowed.unknown) {
+        problems.push(`${file}: allowed-tools ${entry} has no counterpart in Open Code; /${PREFIX}${name} is asked about it as the person's rules say`);
+      }
       skills.push({
         name,
         file,
@@ -140,6 +150,7 @@ export async function readSkills(root) {
         description,
         listed,
         model: await skillModel(name, root),
+        allowed: allowed.patterns,
         body: spellRoot(prompt.body, root),
       });
     } catch (error) {
@@ -237,21 +248,26 @@ export function withArguments(body, given) {
  * @property {string} name pd:<skill>
  * @property {string|undefined} description
  * @property {Chosen|undefined} model
+ * @property {readonly string[]} allowed the shell patterns of `allowed-tools`
  * @property {string} body
  */
 
 /**
  * A command's execute: check its model and switch to it, then send its text,
- * labeled. Throws when the model cannot be used — before anything in the
- * session changes. Open Code shows the message to the person.
+ * labeled — with the grant of its `allowed-tools`, if it has one. Throws when
+ * the model cannot be used — before anything in the session changes but the
+ * end of an earlier command's grant, which the person's invoking this one
+ * ends. Open Code shows the message to the person.
  *
  * @param {object} ctx
  * @param {Definition} command
+ * @param {ReturnType<typeof createGrants>} [grants]
  */
-export function executor(ctx, command) {
+export function executor(ctx, command, grants) {
   return async (input) => {
     const sessionID = input?.sessionID;
     const given = typeof input?.prompt?.text === 'string' ? input.prompt.text : '';
+    grants?.end(sessionID);
     if (command.model) {
       const { ref, text, source } = command.model;
       const setTo = `/${command.name} is set to ${text} (${source})`;
@@ -271,13 +287,19 @@ export function executor(ctx, command) {
       }
       await ctx.session.switchModel({ sessionID, model: { ...ref } });
     }
-    await ctx.session.prompt({
-      ...input?.prompt,
-      sessionID,
-      text: withArguments(command.body, given),
-      delivery: input?.delivery,
-      metadata: { source: LABEL_SOURCE, command: command.name, arguments: given },
-    });
+    grants?.give(sessionID, command.name, command.allowed);
+    try {
+      await ctx.session.prompt({
+        ...input?.prompt,
+        sessionID,
+        text: withArguments(command.body, given),
+        delivery: input?.delivery,
+        metadata: { source: LABEL_SOURCE, command: command.name, arguments: given },
+      });
+    } catch (error) {
+      grants?.end(sessionID);
+      throw error;
+    }
   };
 }
 
@@ -302,6 +324,7 @@ export async function registerCommands(ctx, plugin) {
       name: `${PREFIX}${skill.name}`,
       description: skill.description,
       model: models.get(`${PREFIX}${skill.name}`),
+      allowed: Object.freeze([...skill.allowed]),
       body: skill.body,
     }),
   );
@@ -317,13 +340,19 @@ export async function registerCommands(ctx, plugin) {
       }),
     );
 
+  // The hooks that answer for and end a grant, before the commands that give
+  // one: none of them is ever there without them. With none, none.
+  const grants = createGrants();
+  const granting = commands.filter((command) => command.allowed.length > 0).map((command) => command.name);
+  if (granting.length > 0) await registerGrants(ctx, grants, granting, plugin.log);
+
   await ctx.command.transform((editor) => {
     for (const command of commands) {
       try {
         editor.add({
           name: command.name,
           ...(command.description === undefined ? {} : { description: command.description }),
-          execute: executor(ctx, command),
+          execute: executor(ctx, command, grants),
         });
       } catch (error) {
         plugin.log(`cannot add the command ${command.name}: ${reason(error)}`);

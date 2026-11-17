@@ -86,20 +86,44 @@ const SUBSCRIPTION = ['opus', 'sonnet', 'haiku'].map((id) => ({
 const DEFAULTS = Object.freeze({
   audit: 'claude-agent/sonnet#high',
   close: 'claude-agent/sonnet#medium',
+  editor: 'claude-agent/haiku#low',
 });
 
 /**
  * Register against a stand-in, run each transform once, and hand back what it
  * made. `calls` is every call into the session or the model catalog, in
- * order. `refuse` names what the editors throw on: `command <name>`, `skill <id>`.
+ * order; `order`, every registration — of a hook (`<domain>.<name>`) or a
+ * transform (`<domain>.transform`). `refuse` names what the editors throw on:
+ * `command <name>`, `skill <id>`; `fail`, the hooks whose registration
+ * rejects: `session.prompt`, `permission.evaluate`. `hooks` holds the
+ * callbacks by the same names. A prompt goes through the prompt hooks before
+ * it is recorded, as Open Code runs them inside the call (F77, F81);
+ * `promptFails` makes the call reject after them.
  */
-async function register({ root = ROOT, models = {}, catalog = [...CATALOG, ...SUBSCRIPTION], listFails = false, refuse = [] } = {}) {
+async function register({ root = ROOT, models = {}, catalog = [...CATALOG, ...SUBSCRIPTION], listFails = false, refuse = [], fail = [], promptFails = false } = {}) {
   const lines = [];
   const calls = [];
   const transforms = { command: [], skill: [] };
+  const order = [];
+  const hooks = new Map();
+  const hook = (domain) => async (name, callback) => {
+    if (fail.includes(`${domain}.${name}`)) throw new Error(`${domain}.${name} is unavailable`);
+    order.push(`${domain}.${name}`);
+    hooks.set(`${domain}.${name}`, [...(hooks.get(`${domain}.${name}`) ?? []), callback]);
+  };
   const ctx = {
-    command: { transform: async (callback) => transforms.command.push(callback) },
-    skill: { transform: async (callback) => transforms.skill.push(callback) },
+    command: {
+      transform: async (callback) => {
+        order.push('command.transform');
+        transforms.command.push(callback);
+      },
+    },
+    skill: {
+      transform: async (callback) => {
+        order.push('skill.transform');
+        transforms.skill.push(callback);
+      },
+    },
     model: {
       list: async () => {
         calls.push(['model.list']);
@@ -107,9 +131,15 @@ async function register({ root = ROOT, models = {}, catalog = [...CATALOG, ...SU
         return { data: catalog };
       },
     },
+    permission: { hook: hook('permission') },
     session: {
+      hook: hook('session'),
       switchModel: async (input) => calls.push(['switchModel', input]),
-      prompt: async (input) => calls.push(['prompt', input]),
+      prompt: async (input) => {
+        for (const callback of hooks.get('session.prompt') ?? []) await callback({ sessionID: input.sessionID, messageID: 'msg_t6', prompt: { text: input.text }, metadata: input.metadata, delivery: input.delivery });
+        if (promptFails) throw new Error('the session is gone');
+        calls.push(['prompt', input]);
+      },
     },
   };
   const report = await registerCommands(ctx, { root, settings: { models }, log: (line) => lines.push(line) });
@@ -123,7 +153,19 @@ async function register({ root = ROOT, models = {}, catalog = [...CATALOG, ...SU
   });
   for (const transform of transforms.command) transform(editor(commands, 'command', 'name'));
   for (const transform of transforms.skill) transform(editor(skills, 'skill', 'id'));
-  return { report, lines, calls, commands, skills, transforms };
+  return { report, lines, calls, commands, skills, transforms, hooks, order };
+}
+
+/** Ask the permission hooks a question about shell, as Open Code asks it (F114, F207); the effect it ends with. */
+async function ask(hooks, commands, { sessionID = 'ses_t6b', effect = 'ask', action = 'shell' } = {}) {
+  const event = { sessionID, agent: 'build', action, resources: commands, metadata: {}, source: { type: 'tool' }, effect };
+  for (const callback of hooks.get('permission.evaluate') ?? []) await callback(event);
+  return event.effect;
+}
+
+/** A prompt as the person sends it: through the prompt hooks, with no label. */
+async function say(hooks, text, sessionID = 'ses_t6b') {
+  for (const callback of hooks.get('session.prompt') ?? []) await callback({ sessionID, messageID: 'msg_next', prompt: { text }, metadata: null, delivery: 'steer' });
 }
 
 /** Run a command as Open Code does: the arguments only, no name (F98). */
@@ -538,6 +580,138 @@ describe('the skills the model may load', () => {
     const { skills } = await register();
     const { skills: read } = await readSkills(ABSOLUTE);
     for (const one of read.filter((entry) => entry.personOnly)) assert.equal(skills.has(`${PREFIX}${one.name}`), false, one.name);
+  });
+});
+
+// Claude Code's allowed-tools let the commands a skill lists run without a
+// question during the turn that invoked it, and the grant ended with the
+// person's next message; it fenced nothing in (opencode/allowed.js). The
+// matching itself is test/opencode-allowed.test.js's.
+describe('allowed-tools: what a command runs without asking, until the next message', () => {
+  test('editor and open list the commands they run, and no other skill lists any', async () => {
+    const { skills, problems } = await readSkills(ABSOLUTE);
+    assert.deepEqual(problems, []);
+    const listing = Object.fromEntries(skills.filter((one) => one.allowed.length > 0).map((one) => [one.name, one.allowed]));
+    assert.deepEqual(listing, {
+      editor: ['pdkit editor', 'pdkit editor:*'],
+      open: ['pdkit open home', 'pdkit open issue', 'pdkit open issue:*', 'pdkit open tree', 'pdkit open tree:*'],
+    });
+  });
+
+  test('the hooks that answer for and end a grant are there before any command is', async () => {
+    const { order, lines } = await register();
+    assert.deepEqual(order, ['session.prompt', 'permission.evaluate', 'command.transform', 'skill.transform']);
+    assert.deepEqual(lines, []);
+  });
+
+  test("/pd:editor's command runs without a question in its turn, and the next message ends that", async () => {
+    const { commands, hooks, calls } = await register();
+    assert.equal(await ask(hooks, ['pdkit editor 42']), 'ask', 'nothing granted before the command');
+    await run(commands.get('pd:editor'), '42');
+    assert.equal(calls.at(-1)[0], 'prompt');
+
+    assert.equal(await ask(hooks, ['pdkit editor 42']), 'allow');
+    assert.equal(await ask(hooks, ['pdkit editor']), 'allow');
+    // Not the skill's: another command, a longer word, or the right command with another beside it.
+    assert.equal(await ask(hooks, ['pdkit open home']), 'ask');
+    assert.equal(await ask(hooks, ['pdkit editorial 42']), 'ask');
+    assert.equal(await ask(hooks, ['pdkit editor 42', 'touch pwned']), 'ask');
+    // What the rule never covered in Claude Code: a nested command, a redirect's target, a second command unsplit.
+    for (const command of ['pdkit editor $(touch pwned)', 'pdkit editor `touch pwned`', 'pdkit editor 42 > out.txt', 'pdkit editor 42; touch pwned', 'pdkit editor 42 && touch pwned', 'pdkit editor 42 | sh', 'pdkit editor 42\ntouch pwned']) {
+      assert.equal(await ask(hooks, [command]), 'ask', command);
+    }
+    assert.equal(await ask(hooks, []), 'ask', 'a question about nothing');
+
+    await say(hooks, 'Thanks. Now open it again.');
+    assert.equal(await ask(hooks, ['pdkit editor 42']), 'ask');
+  });
+
+  test('/pd:open grants the five forms it runs', async () => {
+    const { commands, hooks } = await register();
+    await run(commands.get('pd:open'), 'tree 42');
+    for (const command of ['pdkit open home', 'pdkit open issue', 'pdkit open issue 42', 'pdkit open tree', 'pdkit open tree 42']) {
+      assert.equal(await ask(hooks, [command]), 'allow', command);
+    }
+    for (const command of ['pdkit open home 42', 'pdkit open', 'pdkit editor 42']) assert.equal(await ask(hooks, [command]), 'ask', command);
+  });
+
+  test("only a question is answered, about shell, in the command's session", async () => {
+    const { commands, hooks } = await register();
+    await run(commands.get('pd:editor'), '42');
+    assert.equal(await ask(hooks, ['pdkit editor 42'], { effect: 'deny' }), 'deny');
+    assert.equal(await ask(hooks, ['pdkit editor 42'], { effect: 'allow' }), 'allow');
+    assert.equal(await ask(hooks, ['pdkit editor 42'], { action: 'edit' }), 'ask');
+    assert.equal(await ask(hooks, ['pdkit editor 42'], { sessionID: 'ses_other' }), 'ask');
+    await say(hooks, 'hello', 'ses_other');
+    assert.equal(await ask(hooks, ['pdkit editor 42']), 'allow', "another session's message ends nothing here");
+  });
+
+  test('invoking another command ends the grant, even one refused for its model', async () => {
+    const { commands, hooks } = await register({ models: { 'pd:audit': 'mock/off' } });
+    await run(commands.get('pd:editor'), '42');
+    await run(commands.get('pd:close'), '42');
+    assert.equal(await ask(hooks, ['pdkit editor 42']), 'ask', 'a command that ran');
+
+    await run(commands.get('pd:editor'), '42');
+    await assert.rejects(run(commands.get('pd:audit'), '42'), /the model mock\/off is disabled/);
+    assert.equal(await ask(hooks, ['pdkit editor 42']), 'ask', 'a command refused before its prompt');
+
+    await run(commands.get('pd:editor'), '');
+    assert.equal(await ask(hooks, ['pdkit editor']), 'allow', 'invoked again, granted again');
+  });
+
+  test('only the command\'s own prompt keeps the grant: the same label later ends it', async () => {
+    const { commands, hooks } = await register();
+    await run(commands.get('pd:editor'), '42');
+    for (const callback of hooks.get('session.prompt')) {
+      await callback({ sessionID: 'ses_t6b', messageID: 'msg_x', prompt: { text: 'x' }, metadata: { source: LABEL_SOURCE, command: 'pd:editor', arguments: '42' }, delivery: 'steer' });
+    }
+    assert.equal(await ask(hooks, ['pdkit editor 42']), 'ask');
+  });
+
+  test('a prompt that fails takes the grant with it', async () => {
+    const { commands, hooks } = await register({ promptFails: true });
+    await assert.rejects(run(commands.get('pd:editor'), '42'), /the session is gone/);
+    assert.equal(await ask(hooks, ['pdkit editor 42']), 'ask');
+  });
+
+  test('a skill without allowed-tools registers no hook; a tool with no counterpart here is named in the log', async () => {
+    const plain = await plugin({ a: skill(['name: a', 'description: "A."', 'disable-model-invocation: true']) });
+    const none = await register({ root: plain });
+    assert.deepEqual(none.order, ['command.transform', 'skill.transform']);
+
+    const listing = await plugin({ b: skill(['name: b', 'description: "B."', 'disable-model-invocation: true', 'allowed-tools: Read, Bash(git status)']) });
+    const { report, lines, hooks, commands } = await register({ root: listing });
+    assert.deepEqual(report.commands[0].allowed, ['git status']);
+    assert.deepEqual(lines, ["skills/b/SKILL.md: allowed-tools Read has no counterpart in Open Code; /pd:b is asked about it as the person's rules say"]);
+    await run(commands.get('pd:b'));
+    assert.equal(await ask(hooks, ['git status']), 'allow');
+  });
+
+  for (const failing of ['session.prompt', 'permission.evaluate']) {
+    test(`a hook that cannot be registered is logged, and every command is: ${failing}`, async () => {
+      const { commands, hooks, lines } = await register({ fail: [failing] });
+      assert.equal(commands.size, 24);
+      assert.deepEqual(lines, [
+        `cannot register its allowed tools (${failing} is unavailable); /pd:editor, /pd:open run their commands as the person's rules say, asking where they ask`,
+      ]);
+      // Without the hook that ends a grant, nothing answers for one.
+      if (failing === 'session.prompt') assert.equal(hooks.has('permission.evaluate'), false);
+      await run(commands.get('pd:editor'), '42');
+      assert.equal(await ask(hooks, ['pdkit editor 42']), 'ask');
+    });
+  }
+
+  test('neither hook throws, whatever it is handed', async () => {
+    const { commands, hooks, lines } = await register();
+    await run(commands.get('pd:editor'), '42');
+    for (const event of [undefined, null, {}, { sessionID: 42 }, { sessionID: 'ses_t6b', metadata: 'x' }]) {
+      for (const callback of hooks.get('session.prompt')) await callback(event);
+    }
+    for (const event of [undefined, null, {}, { action: 'shell', effect: 'ask', sessionID: 'ses_t6b', resources: 'pdkit editor' }, { action: 'shell', effect: 'ask', sessionID: 'ses_t6b', resources: [42] }]) {
+      for (const callback of hooks.get('permission.evaluate')) await callback(event);
+    }
+    assert.deepEqual(lines, []);
   });
 });
 

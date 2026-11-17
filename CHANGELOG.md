@@ -26,6 +26,13 @@ fixes — see [RELEASING.md](RELEASING.md).
   loads by itself**, as `pd:package-map` and so on, with their `when_to_use`
   lines appended to the description it reads. `@pd:package-map` attaches one
   to a message; `/pd:package-map <question>` still runs it with a question.
+- **`/pd:editor` and `/pd:open` run their one `pdkit` command without a
+  question**, even where your Open Code config asks before every shell
+  command, as their `allowed-tools` let them under Claude Code. The grant
+  lasts until your next message and covers the forms each skill lists, the
+  command alone: a command nested in it, a redirect or a second command is
+  asked about as your rules say, and a `deny` in them still stands. Nothing
+  else is restricted, as before.
 
 ### Changed
 
@@ -64,6 +71,7 @@ fixes — see [RELEASING.md](RELEASING.md).
   |---|---|---|
   | `/pd:audit` | `claude-agent/sonnet#high` | `sonnet`, effort `high` |
   | `/pd:close` | `claude-agent/sonnet#medium` | `sonnet`, effort `medium` |
+  | `/pd:editor` | `claude-agent/haiku#low` | `haiku`, effort `low` |
 
 ## [0.15.0] - 2026-11-13
 

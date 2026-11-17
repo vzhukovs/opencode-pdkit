@@ -352,9 +352,14 @@ describe('in Open Code: the prompt a pdkit command sends, through the hook bridg
     location: { directory },
   });
 
-  /** A stand-in for setup()'s context in `directory`: just enough for the entry point to load in full. */
+  /**
+   * A stand-in for setup()'s context in `directory`: just enough for the entry
+   * point to load in full. A point runs every callback registered on it, in
+   * order, on the one event, as Open Code 2.3.0 does (src/plugin/hooks.ts).
+   */
   const host = (directory) => {
     const hooks = new Map();
+    const callbacks = new Map();
     const registered = { dispose: async () => {} };
     const transforms = { transform: async () => registered };
     const ctx = {
@@ -363,7 +368,12 @@ describe('in Open Code: the prompt a pdkit command sends, through the hook bridg
       tool: { hook: async () => registered },
       session: {
         hook: async (name, callback) => {
-          hooks.set(name, callback);
+          callbacks.set(name, [...(callbacks.get(name) ?? []), callback]);
+          hooks.set(name, async (event) => {
+            const answers = [];
+            for (const each of callbacks.get(name)) answers.push(await each(event));
+            return answers.find((answer) => answer !== undefined);
+          });
           return registered;
         },
         get: async () => ran(directory),

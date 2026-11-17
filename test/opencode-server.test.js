@@ -65,6 +65,10 @@ const FULL = [
   'session.hook compaction',
   'session.hook generate',
   'agent.transform',
+  // What a command's allowed-tools lets run without a question: the prompt
+  // hook that ends the grant, then the answer, before the commands.
+  'session.hook prompt',
+  'permission.hook evaluate',
   'command.transform',
   'skill.transform',
 ];
@@ -635,12 +639,12 @@ describe('a registration that fails', () => {
   // What each failing point takes down, by the line the log names it in: a
   // point two parts stand on is reported by each of them.
   for (const [failing, ...whats] of [
-    ['permission.hook evaluate', 'access to its own files'],
+    ['permission.hook evaluate', 'access to its own files', 'allowed tools'],
     ['agent.transform', 'agents'],
     ['command.transform', 'commands and skills'],
     ['tool.hook execute.after', 'hooks'],
     ['session.hook experimental.idle', 'hooks'],
-    ['session.hook prompt', 'hooks'],
+    ['session.hook prompt', 'hooks', 'allowed tools'],
     ['session.hook fork', 'hooks'],
     ['session.hook compaction', 'hooks', 'hiding of tools'],
     ['session.hook context', 'hiding of tools'],

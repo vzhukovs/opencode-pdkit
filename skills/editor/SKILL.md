@@ -4,8 +4,7 @@ description: "Open an issue's worktree in the IDE configured as editor.path."
 disable-model-invocation: true
 argument-hint: "[<issue>]"
 allowed-tools: Bash(pdkit editor), Bash(pdkit editor:*)
-model: haiku
-effort: low
+model: claude-agent/haiku#low
 ---
 
 Arguments: `$ARGUMENTS`
@@ -22,7 +21,7 @@ of two fixed commands runs, and nothing else.
    - anything else — a second word, a quote, `;`, `$`, a backtick, a pipe, a
      flag — → run nothing. Say the argument must be an issue number or empty,
      and stop.
-2. Run that one command with the Bash tool, exactly as written above: no
+2. Run that one command with the `shell` tool, exactly as written above: no
    quoting, no redirection, no second command, nothing appended.
 
 ## Report

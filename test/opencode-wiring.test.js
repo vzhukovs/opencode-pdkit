@@ -71,13 +71,17 @@ const HOST_EVENTS = {
  * environment, which puts `pdkit` on PATH (opencode/environment.js); the
  * answer that keeps the plugin's own files readable (opencode/access.js); the
  * registrars of agents, commands and skills, and the tools taken out of the
- * agents' requests (opencode/agents.js); and the bridge's watch on runs that
- * fail or are interrupted, which keeps what subagent-stop remembers right and
- * runs no hook. One registration each: a point can carry a hook's callback
- * and one of these both, as a compaction does.
+ * agents' requests (opencode/agents.js); the grant a command's allowed-tools
+ * gives, ended on the next prompt and answered for on the same point as the
+ * plugin's own files (opencode/allowed.js); and the bridge's watch on runs
+ * that fail or are interrupted, which keeps what subagent-stop remembers right
+ * and runs no hook. One registration each: a point can carry a hook's
+ * callback and one of these both, as a compaction and a prompt do.
  */
 const NOT_A_HOOK = [
   'shell create.before',
+  'permission evaluate',
+  'session prompt',
   'permission evaluate',
   'session context',
   'session compaction',

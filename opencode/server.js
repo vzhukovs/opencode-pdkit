@@ -40,8 +40,10 @@
 //   4. registers hooks, the shell environment that puts `pdkit` on PATH,
 //      the answer that keeps the plugin's own files readable, agents (with
 //      the session hooks that keep from their models the tools Claude Code
-//      did not give them), commands and skills — or, below the minimum, only
-//      `/pd:*` commands that refuse and say which version to install.
+//      did not give them), commands (with the hooks that let one run what its
+//      allowed-tools lists without a question) and skills — or, below the
+//      minimum, only `/pd:*` commands that refuse and say which version to
+//      install.
 //
 // Nothing after step 1 throws out of setup(). A registrar that fails is
 // reported and skipped; the gate does not depend on it.

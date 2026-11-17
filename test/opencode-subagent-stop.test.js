@@ -774,6 +774,8 @@ describe('where it is registered', () => {
       'opencode-pdkit: cannot register its hooks (unknown session hook: experimental.idle; unknown session hook: prompt; unknown session hook: fork; unknown session hook: compaction); the gate and the rest are unaffected',
       // The agents' hiding of tools stands on session hooks too (opencode/agents.js).
       'opencode-pdkit: cannot register its hiding of tools (unknown session hook: context; unknown session hook: compaction; unknown session hook: generate); pd-implementer, pd-thread-resolver may be offered opencode_worktree_remove, which Claude Code did not give them',
+      // And the end of a grant of allowed-tools, on the prompt hook (opencode/allowed.js).
+      "opencode-pdkit: cannot register its allowed tools (unknown session hook: prompt); /pd:editor, /pd:open run their commands as the person's rules say, asking where they ask",
     ]);
     const watches = stand.streams.filter(({ options }) => options.types?.includes('session.execution.failed'));
     assert.equal(watches.length, 0, 'no watch for a hook that is not there');

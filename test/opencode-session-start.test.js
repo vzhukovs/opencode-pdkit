@@ -132,10 +132,13 @@ const forkOf = (id, from = PERSON, options) => ({ ...fresh(id, options), fork: {
  * call the hooks as Open Code does, and give back what the bridge did to the
  * session's instruction entries; `compacted` sends the event on the streams
  * the bridge subscribed to. `fail` names the calls that throw, and is read at
- * each call.
+ * each call. A point runs every callback registered on it, in order, on the
+ * one event, as Open Code 2.3.0 does (src/plugin/hooks.ts): the prompt point
+ * carries the end of a grant of allowed-tools too (opencode/allowed.js).
  */
 function host({ sessions = {}, fail = {}, events = true, instructions = true } = {}) {
   const hooks = new Map();
+  const callbacks = new Map();
   const done = [];
   const looked = [];
   const streams = [];
@@ -159,7 +162,12 @@ function host({ sessions = {}, fail = {}, events = true, instructions = true } =
     session: {
       hook: async (name, callback) => {
         if (fail.hook === name) throw new Error(`unknown session hook: ${name}`);
-        hooks.set(name, callback);
+        callbacks.set(name, [...(callbacks.get(name) ?? []), callback]);
+        hooks.set(name, async (event) => {
+          const answers = [];
+          for (const each of callbacks.get(name)) answers.push(await each(event));
+          return answers.find((answer) => answer !== undefined);
+        });
         return registered;
       },
       get: async ({ sessionID }) => {
