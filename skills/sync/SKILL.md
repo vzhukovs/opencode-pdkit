@@ -2,8 +2,7 @@
 name: sync
 description: "Report fork status against upstream and the state of every worktree."
 disable-model-invocation: true
-model: sonnet
-effort: medium
+model: claude-agent/sonnet#medium
 ---
 
 Read-only. Never rebase, never push, never reset from here — this command
