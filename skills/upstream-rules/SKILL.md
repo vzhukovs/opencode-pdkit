@@ -35,7 +35,7 @@ with turned out to be wrong when measured.
 Squash with `git reset --soft <base> && git commit`, **not** `git rebase -i`.
 The commit-msg hook appends `Signed-off-by` to a message that already carries
 one from the commits being squashed, then rejects the duplicate it just made.
-The Bash hook refuses `git rebase -i` for this reason and says so.
+The `pre-bash` hook refuses `git rebase -i` for this reason and says so.
 
 ## Held to it by a reviewer, not by a machine
 
