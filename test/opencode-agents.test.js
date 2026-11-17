@@ -75,7 +75,7 @@ const EXPECTED = {
   'pd-review-tests': { model: { providerID: 'claude-agent', id: 'sonnet', variant: 'medium' }, actions: READS },
   'pd-scout': { model: { providerID: 'claude-agent', id: 'sonnet', variant: 'high' }, actions: [...READS, 'shell'] },
   'pd-slicer': { model: { providerID: 'claude-agent', id: 'sonnet', variant: 'medium' }, actions: [...READS, 'shell'] },
-  'pd-thread-resolver': { alias: 'sonnet', actions: ['read', 'edit', 'grep', 'glob', 'shell'] },
+  'pd-thread-resolver': { model: { providerID: 'claude-agent', id: 'sonnet', variant: 'high' }, actions: ['read', 'edit', 'grep', 'glob', 'shell'] },
   'pd-validator': {
     alias: 'sonnet',
     actions: [

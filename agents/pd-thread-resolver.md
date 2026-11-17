@@ -1,7 +1,7 @@
 ---
 name: pd-thread-resolver
 description: "Handles one review thread: the fix and a draft reply."
-model: sonnet
+model: claude-agent/sonnet#high
 tools: Read, Edit, Grep, Glob, Bash
 ---
 
