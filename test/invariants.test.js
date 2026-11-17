@@ -902,6 +902,9 @@ describe('the server part and lib/', () => {
     // reader for the agents' frontmatter.
     ['lib/config.js', ['lib/yaml.js']],
     ['lib/yaml.js', []],
+    // The commands' registrar: a skill's model, argument hint and description,
+    // read where the prompt hook and the doctor read them.
+    ['lib/session-model.js', ['lib/config.js', 'lib/yaml.js']],
   ]);
 
   const serverModules = () => modules(join(ROOT, 'opencode'), 'opencode');

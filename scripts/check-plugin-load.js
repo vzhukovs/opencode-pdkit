@@ -31,11 +31,15 @@
 //   3. polls GET /api/plugin until the plugin is listed and expects "active".
 //      Loading is asynchronous and the API does not wait for it. A plugin
 //      that never shows up fails as surely as one marked "failed";
-//   4. requests the command and agent registries, then reads the record again:
-//      a plugin whose command.transform throws is disabled only on the first
-//      registry request. Every agent under agents/ must be in the agent
-//      registry, under its name and as a subagent: one that is missing, or a
-//      primary agent a subagent call refuses, fails here;
+//   4. requests the command, agent and skill registries, then reads the
+//      record again: a plugin whose command.transform throws is disabled only
+//      on the first registry request. Every skill under skills/ must be in the
+//      command registry as `/pd:<name>`, with the description the registrar
+//      builds; every agent under agents/ in the agent registry, under its name
+//      and as a subagent; and every skill the model may load in the skill
+//      registry as `pd:<name>`, read from the package's own SKILL.md. One that
+//      is missing, or replaced, or a primary agent a subagent call refuses,
+//      fails here;
 //   5. runs `opencode plugin check`, which exits 1 for a package plugin that
 //      failed to load.
 //
@@ -65,6 +69,7 @@ import { parseArgs } from 'node:util';
 
 import { minimumVersion } from '../lib/opencode-version.js';
 import { readAgents } from '../opencode/agents.js';
+import { PREFIX, readSkills } from '../opencode/commands.js';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 
@@ -128,6 +133,56 @@ export function agentsVerdict(listing, ids) {
   if (ids.length === 0) problems.push('the package has no agents to look for');
   if (problems.length > 0) return { ok: false, detail: `${listing.length} registered; of the plugin's ${ids.length}, ${problems.join('; ')}` };
   return { ok: true, detail: `${listing.length} registered, the plugin's ${ids.length} among them as subagents` };
+}
+
+/**
+ * Whether a GET /api/command listing holds each of the plugin's commands with
+ * the description the registrar gives it, and a line saying what it shows. A
+ * command listed with another description is someone else's under that name.
+ *
+ * @param {unknown} listing the `data` of the answer
+ * @param {ReadonlyArray<{name: string, description: string|undefined}>} expected the plugin's commands
+ */
+export function commandsVerdict(listing, expected) {
+  if (!Array.isArray(listing)) return { ok: false, detail: 'no command listing' };
+  const byName = new Map(listing.map((command) => [command?.name, command]));
+  const missing = expected.filter(({ name }) => !byName.has(name)).map(({ name }) => name);
+  const other = expected
+    .filter(({ name, description }) => byName.has(name) && byName.get(name).description !== description)
+    .map(({ name }) => `${name} (${JSON.stringify(byName.get(name).description)})`);
+  const problems = [
+    ...(missing.length > 0 ? [`missing: ${missing.join(', ')}`] : []),
+    ...(other.length > 0 ? [`described otherwise: ${other.join(', ')}`] : []),
+  ];
+  if (expected.length === 0) problems.push('the package has no commands to look for');
+  if (problems.length > 0) return { ok: false, detail: `${listing.length} registered; of the plugin's ${expected.length}, ${problems.join('; ')}` };
+  return { ok: true, detail: `${listing.length} registered, the plugin's ${expected.length} among them` };
+}
+
+/**
+ * Whether a GET /api/skill listing holds each of the plugin's skills, read from
+ * the package's own SKILL.md, and a line saying what it shows. A skill file of
+ * the same ID elsewhere replaces the plugin's whole, path included.
+ *
+ * @param {unknown} listing the `data` of the answer
+ * @param {readonly string[]} names the skills under skills/ the model may load, by directory
+ */
+export function skillsVerdict(listing, names) {
+  if (!Array.isArray(listing)) return { ok: false, detail: 'no skill listing' };
+  const byId = new Map(listing.map((skill) => [skill?.id, skill]));
+  const ids = names.map((name) => `${PREFIX}${name}`);
+  const missing = ids.filter((id) => !byId.has(id));
+  const elsewhere = names
+    .filter((name) => byId.has(`${PREFIX}${name}`))
+    .filter((name) => !String(byId.get(`${PREFIX}${name}`).path ?? '').replaceAll('\\', '/').endsWith(`/skills/${name}/SKILL.md`))
+    .map((name) => `${PREFIX}${name} (${byId.get(`${PREFIX}${name}`).path})`);
+  const problems = [
+    ...(missing.length > 0 ? [`missing: ${missing.join(', ')}`] : []),
+    ...(elsewhere.length > 0 ? [`read from elsewhere: ${elsewhere.join(', ')}`] : []),
+  ];
+  if (names.length === 0) problems.push('the package has no skills to look for');
+  if (problems.length > 0) return { ok: false, detail: `${listing.length} registered; of the plugin's ${names.length}, ${problems.join('; ')}` };
+  return { ok: true, detail: `${listing.length} registered, the plugin's ${names.length} among them` };
 }
 
 function run(command, args, options) {
@@ -299,8 +354,15 @@ async function check({ root, keep, printLog }) {
     const loaded = verdict(listed.entry, id);
     report('plugin', loaded.ok, listed.seconds, loaded.detail);
 
+    const { skills: shipped } = await readSkills(root);
     const commands = api('GET', `/api/command?${location}`);
-    report('command', commands.code === 0, commands.seconds, commands.code === 0 ? `${commands.json?.data?.length} registered` : commands.stderr);
+    if (commands.code === 0) {
+      const expected = shipped.map((skill) => ({ name: `${PREFIX}${skill.name}`, description: skill.description }));
+      const ours = commandsVerdict(commands.json?.data, expected);
+      report('command', ours.ok, commands.seconds, ours.detail);
+    } else {
+      report('command', false, commands.seconds, commands.stderr);
+    }
 
     const agents = api('GET', `/api/agent?${location}`);
     if (agents.code === 0) {
@@ -308,6 +370,14 @@ async function check({ root, keep, printLog }) {
       report('agent', ours.ok, agents.seconds, ours.detail);
     } else {
       report('agent', false, agents.seconds, agents.stderr);
+    }
+
+    const skills = api('GET', `/api/skill?${location}`);
+    if (skills.code === 0) {
+      const ours = skillsVerdict(skills.json?.data, shipped.filter((skill) => !skill.personOnly).map((skill) => skill.name));
+      report('skill', ours.ok, skills.seconds, ours.detail);
+    } else {
+      report('skill', false, skills.seconds, skills.stderr);
     }
 
     const again = plugins();

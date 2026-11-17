@@ -9,6 +9,24 @@ fixes — see [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+### Added
+
+- **Every skill is a `/pd:<skill>` command in Open Code**, all 24 of them,
+  the three phrase-triggered ones included. Open Code shows a command's
+  description and nothing else beside its name, so the argument hint comes
+  first: `/pd:exec  <issue-number> [task-id] · Implement the plan…`.
+- **A command checks its model before it switches the session to it.** The
+  model is the one mapped to the command in the plugin's `options.models`,
+  else its `model:`. One Open Code cannot use — no such model, a disabled one,
+  or a variant the model lacks — is refused with a line that names the model
+  and where it came from, and the session stays on its model. The phase keeps
+  the model it switched to until you change it; under Claude Code a skill's
+  `model:` lasted one turn.
+- **`package-map`, `upstream-rules` and `worktree-kit` are skills the model
+  loads by itself**, as `pd:package-map` and so on, with their `when_to_use`
+  lines appended to the description it reads. `@pd:package-map` attaches one
+  to a message; `/pd:package-map <question>` still runs it with a question.
+
 ### Changed
 
 - **Agents name their default model the way Open Code reads one,

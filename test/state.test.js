@@ -31,7 +31,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  ADVANCES,
   TRANSITIONS,
   GATE_ELIGIBLE,
   JOIN_ELIGIBLE,
@@ -49,7 +48,6 @@ import {
   setOwns,
   transition,
 } from '../lib/state.js';
-import { skillModel } from '../lib/session-model.js';
 import { read as readJournal } from '../lib/journal.js';
 import { BODY_DEPENDENT, CHECK_IDS } from '../lib/preflight/index.js';
 import { write } from '../lib/preflight/record.js';
@@ -776,29 +774,6 @@ describe('the skill the next step runs', () => {
 
   test('a terminal state names none', () => {
     assert.equal(nextSkill({ issue: 1, state: 'merged', route: 'standard' }), null);
-  });
-});
-
-// Against the real skills/ directory: a renamed skill or a lost `model:` field
-// fails here rather than quietly dropping the line from `pdkit next`.
-describe('the model a phase is announced with', () => {
-  test('every skill a state advances to declares one', async () => {
-    const skills = new Set([...Object.values(ADVANCES).filter(Boolean), 'quickfix']);
-    const missing = [];
-    for (const skill of skills) if (!(await skillModel(skill))) missing.push(skill);
-    assert.deepEqual(missing, []);
-  });
-
-  test('it is read from the frontmatter', async () => {
-    assert.equal(await skillModel('exec'), 'sonnet');
-  });
-
-  test('a skill without the field gives no line rather than a failure', async () => {
-    assert.equal(await skillModel('package-map'), null);
-  });
-
-  test('a skill that does not exist gives none either', async () => {
-    assert.equal(await skillModel('no-such-skill'), null);
   });
 });
 

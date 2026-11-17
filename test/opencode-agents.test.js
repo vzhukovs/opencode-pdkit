@@ -37,7 +37,6 @@ import {
   ACTIONS,
   EXTRA_TOOLS,
   REQUESTS,
-  ROOT_TOKEN,
   actionOf,
   agentModels,
   extraTools,
@@ -46,6 +45,7 @@ import {
   readAgents,
   registerAgents,
 } from '../opencode/agents.js';
+import { ROOT_TOKEN } from '../opencode/prompts.js';
 import { PLUGIN_ROOT, issueDir, resolveHome } from '../lib/config.js';
 import { cutDecision } from '../lib/hooks/cut.js';
 import { IMPLEMENTER } from '../lib/hooks/task-completed.js';

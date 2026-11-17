@@ -566,7 +566,7 @@ describe('a file the bridge cannot count costs the rule, and says why', () => {
 async function broken(t, files) {
   const dir = await mkdtemp(join(tmpdir(), 'pdkit-post-read-plugin-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
-  for (const entry of ['opencode', 'lib', 'bin', 'defaults', 'agents', 'package.json']) {
+  for (const entry of ['opencode', 'lib', 'bin', 'defaults', 'agents', 'skills', 'package.json']) {
     await cp(join(ROOT, entry), join(dir, entry), { recursive: true });
   }
   for (const [path, change] of Object.entries(files)) {

@@ -571,7 +571,7 @@ describe('what the host did, done by the bridge', () => {
 async function broken(t, files, options) {
   const dir = await mkdtemp(join(tmpdir(), 'pdkit-subagent-stop-plugin-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
-  for (const entry of ['opencode', 'lib', 'bin', 'defaults', 'agents', 'package.json']) {
+  for (const entry of ['opencode', 'lib', 'bin', 'defaults', 'agents', 'skills', 'package.json']) {
     await cp(join(ROOT, entry), join(dir, entry), { recursive: true });
   }
   for (const [path, change] of Object.entries(files)) {

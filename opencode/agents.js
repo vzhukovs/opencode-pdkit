@@ -60,13 +60,10 @@ import { readdir, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import { resolveHome } from '../lib/config.js';
-import { parse } from '../lib/yaml.js';
 import { directoryRule } from './access.js';
 import { PREFIX } from './commands.js';
 import { modelRef } from './options.js';
-
-/** How a prompt names the plugin's root. Claude Code expanded it; the registrar does here. */
-export const ROOT_TOKEN = '${CLAUDE_PLUGIN_ROOT}';
+import { readPrompt, spellRoot } from './prompts.js';
 
 /**
  * Claude Code's tools, by the action Open Code checks each one by. `edit`
@@ -109,8 +106,6 @@ export const REQUESTS = Object.freeze(['context', 'compaction', 'generate']);
 
 /** Claude Code's name for a tool of an MCP server: mcp__<server>__<tool>. */
 const MCP = /^mcp__(.+?)__(.+)$/;
-
-const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/;
 
 /**
  * @param {unknown} error
@@ -239,13 +234,12 @@ export async function readAgents(root) {
   for (const name of files) {
     const file = `agents/${name}`;
     try {
-      const text = await readFile(join(dir, name), 'utf8');
-      const match = FRONTMATTER.exec(text);
-      if (!match) {
+      const prompt = readPrompt(await readFile(join(dir, name), 'utf8'));
+      if (!prompt) {
         problems.push(`${file}: no frontmatter; not registered`);
         continue;
       }
-      const data = parse(match[1]) ?? {};
+      const { data } = prompt;
       const id = data.name;
       if (typeof id !== 'string' || id === '') {
         problems.push(`${file}: no name:; not registered`);
@@ -269,7 +263,7 @@ export async function readAgents(root) {
         description: typeof data.description === 'string' ? data.description : undefined,
         model: data.model,
         tools,
-        body: text.slice(match[0].length).trim(),
+        body: prompt.body,
       });
     } catch (error) {
       problems.push(`${file}: ${reason(error)}; not registered`);
@@ -407,7 +401,7 @@ export async function registerAgents(ctx, plugin) {
       Object.freeze({
         id: agent.id,
         description: agent.description,
-        system: agent.body.replaceAll(ROOT_TOKEN, root),
+        system: spellRoot(agent.body, root),
         permissions: rules,
         model: models.get(agent.id),
         hidden: Object.freeze(extraTools(rules)),

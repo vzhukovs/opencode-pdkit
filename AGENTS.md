@@ -87,10 +87,10 @@ Do not reopen a split the round-2 review rejected without new facts.
   subagents run in the podman-desktop checkout, so a bare `knowledge/x.md`
   resolves against the wrong repository. Open Code has no such variable: the
   name is kept from Claude Code as the plugin's own placeholder
-  (`ROOT_TOKEN`, `opencode/agents.js`), and the plugin replaces it with its
-  absolute root when it registers an agent, a command or a skill. TODO(T6.B):
-  only agents are registered so far. A plugin file the model reads for itself
-  arrives as written, placeholder included, as it did in Claude Code.
+  (`ROOT_TOKEN`, `opencode/prompts.js`), and the plugin replaces it with its
+  absolute root when it registers an agent, a command or a skill. A plugin
+  file the model reads for itself arrives as written, placeholder included, as
+  it did in Claude Code.
   `test/invariants.test.js` holds the prefix.
 - **A skip is never a pass**, and a message is never wider than what was
   measured.

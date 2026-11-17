@@ -150,7 +150,7 @@ function logOf(t) {
 async function copy(t, files) {
   const dir = await mkdtemp(join(tmpdir(), 'pdkit-entry-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
-  for (const entry of ['opencode', 'lib', 'bin', 'defaults', 'agents', 'package.json']) {
+  for (const entry of ['opencode', 'lib', 'bin', 'defaults', 'agents', 'skills', 'package.json']) {
     await cp(join(ROOT, entry), join(dir, entry), { recursive: true });
   }
   for (const [path, content] of Object.entries(files)) {
@@ -219,19 +219,37 @@ describe('on a supported Open Code', () => {
     );
   });
 
-  // Until the commands' registrar is filled in, loading the plugin must not
-  // change what a session does beyond the hooks and the agents — and the hooks
-  // have nothing to say about this command, this read, this prompt or this
-  // compaction.
-  test('and none of the registrations but the hooks and the agents changes anything yet', async (t) => {
+  // The commands' and skills' own rules are test/opencode-commands.test.js's;
+  // this is that the transforms the entry point registered add one command
+  // per skill under skills/, and the three the model may load as skills, and
+  // touch nothing else.
+  test('the commands are the skills under skills/, and three of them are skills too', async (t) => {
     logOf(t);
     const { ctx, callbacks } = host();
 
     await plugin.setup(ctx);
 
-    for (const domain of ['command', 'skill']) {
-      assert.deepEqual(edits(callbacks(`${domain}.transform`)), [], `${domain}.transform edits something`);
-    }
+    const skills = (await readdir(join(ROOT, 'skills'), { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
+    assert.equal(skills.length, 24);
+    assert.deepEqual(
+      edits(callbacks('command.transform')).map(({ method, args }) => `${String(method)} ${args[0].name}`),
+      skills.map((name) => `add pd:${name}`),
+    );
+    assert.deepEqual(
+      edits(callbacks('skill.transform')).map(({ method, args }) => `${String(method)} ${args[0].id}`),
+      ['add pd:package-map', 'add pd:upstream-rules', 'add pd:worktree-kit'],
+    );
+  });
+
+  // Loading the plugin must not change what a session does beyond what it
+  // registers — and the hooks have nothing to say about this command, this
+  // read, this prompt or this compaction.
+  test('and the hooks leave alone what they have nothing to say about', async (t) => {
+    logOf(t);
+    const { ctx, callbacks } = host();
+
+    await plugin.setup(ctx);
+
     const ran = () => ({ ...shell(), status: 'completed', result: { output: { output: 'ok {\n', exitCode: 0 }, content: [{ type: 'text', text: 'ok {\n' }] } });
     const event = ran();
     for (const after of callbacks('tool.hook execute.after')) await after(event);

@@ -27,8 +27,9 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { agentsVerdict, findPlugin, minimumOpenCode, verdict } from '../scripts/check-plugin-load.js';
+import { agentsVerdict, commandsVerdict, findPlugin, minimumOpenCode, skillsVerdict, verdict } from '../scripts/check-plugin-load.js';
 import { readAgents } from '../opencode/agents.js';
+import { PREFIX, readSkills } from '../opencode/commands.js';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const ID = 'opencode-pdkit';
@@ -160,5 +161,97 @@ describe("the plugin's agents", () => {
   test('fail when there is no listing, or nothing to look for', () => {
     assert.equal(agentsVerdict(undefined, ['pd-scout']).ok, false);
     assert.equal(agentsVerdict(BUILTIN, []).ok, false);
+  });
+});
+
+describe("the plugin's commands", () => {
+  /** Open Code's own commands on 2.3.0 (F197): what a listing holds without the plugin's. */
+  const BUILTIN = [
+    { name: 'init', description: 'create/update AGENTS.md' },
+    { name: 'review', description: 'review changes' },
+    { name: 'goal', description: 'set a goal' },
+  ];
+  const ours = [
+    { name: 'pd:exec', description: '<issue-number> [task-id] · Implement the plan.' },
+    { name: 'pd:sync', description: 'Report fork status.' },
+  ];
+
+  test('are the 24 skills under skills/, each with the description the registrar gives it', async () => {
+    const { skills } = await readSkills(ROOT);
+    assert.equal(skills.length, 24);
+    assert.equal(skills.every((skill) => typeof skill.description === 'string' && skill.description !== ''), true);
+  });
+
+  test('pass when every one is listed with its description', () => {
+    assert.deepEqual(commandsVerdict([...BUILTIN, ...ours], ours), { ok: true, detail: "5 registered, the plugin's 2 among them" });
+  });
+
+  test('fail when one is missing, and name it', () => {
+    const result = commandsVerdict([...BUILTIN, ours[0]], ours);
+    assert.equal(result.ok, false);
+    assert.match(result.detail, /missing: pd:sync$/);
+  });
+
+  // A markdown command of the same name replaces the plugin's, description
+  // and all (F100).
+  test('fail when one is described otherwise, and say how', () => {
+    const result = commandsVerdict([...BUILTIN, ours[0], { name: 'pd:sync', description: 'my own sync' }], ours);
+    assert.equal(result.ok, false);
+    assert.match(result.detail, /described otherwise: pd:sync \("my own sync"\)$/);
+  });
+
+  test('fail on the built-in commands alone, on no listing, or with nothing to look for', () => {
+    assert.equal(commandsVerdict(BUILTIN, ours).ok, false);
+    assert.equal(commandsVerdict(undefined, ours).ok, false);
+    assert.equal(commandsVerdict(BUILTIN, []).ok, false);
+  });
+});
+
+describe("the plugin's skills", () => {
+  const PACKAGE = '/home/u/.cache/opencode/npm/x/node_modules/opencode-pdkit';
+  const skill = (name, path = `${PACKAGE}/skills/${name}/SKILL.md`) => ({ id: `${PREFIX}${name}`, name: `${PREFIX}${name}`, path });
+  const BUILTIN = [
+    { id: 'opencode', path: 'skill://opencode/SKILL.md' },
+    { id: 'report', path: 'skill://report/SKILL.md' },
+  ];
+
+  test('are the three under skills/ the model may load', async () => {
+    const { skills } = await readSkills(ROOT);
+    assert.deepEqual(
+      skills.filter((one) => !one.personOnly).map((one) => one.name),
+      ['package-map', 'upstream-rules', 'worktree-kit'],
+    );
+  });
+
+  test('pass when every one is listed, read from the package', () => {
+    const names = ['package-map', 'worktree-kit'];
+    assert.deepEqual(skillsVerdict([...BUILTIN, ...names.map((name) => skill(name))], names), {
+      ok: true,
+      detail: "4 registered, the plugin's 2 among them",
+    });
+  });
+
+  test('pass on Windows paths too', () => {
+    assert.equal(skillsVerdict([skill('package-map', 'C:\\Users\\u\\pkg\\skills\\package-map\\SKILL.md')], ['package-map']).ok, true);
+  });
+
+  test('fail when one is missing, and name it', () => {
+    const result = skillsVerdict([...BUILTIN, skill('package-map')], ['package-map', 'worktree-kit']);
+    assert.equal(result.ok, false);
+    assert.match(result.detail, /missing: pd:worktree-kit$/);
+  });
+
+  // A skill file of the same ID replaces the plugin's whole (F121).
+  test('fail when one is read from a file elsewhere, and say where', () => {
+    const replaced = skill('package-map', '/fork/.opencode/skills/pd:package-map/SKILL.md');
+    const result = skillsVerdict([...BUILTIN, replaced], ['package-map']);
+    assert.equal(result.ok, false);
+    assert.match(result.detail, /read from elsewhere: pd:package-map \(\/fork\/\.opencode\/skills\/pd:package-map\/SKILL\.md\)$/);
+  });
+
+  test('fail on the built-in skills alone, on no listing, or with nothing to look for', () => {
+    assert.equal(skillsVerdict(BUILTIN, ['package-map']).ok, false);
+    assert.equal(skillsVerdict(undefined, ['package-map']).ok, false);
+    assert.equal(skillsVerdict(BUILTIN, []).ok, false);
   });
 });

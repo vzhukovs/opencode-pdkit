@@ -308,7 +308,7 @@ describe('every event of the table is registered and has a module', () => {
   before(async () => {
     dir = await realpath(await mkdtemp(join(tmpdir(), 'pdkit-wiring-')));
     log = join(dir, 'ran.jsonl');
-    for (const entry of ['opencode', 'lib', 'bin', 'defaults', 'agents', 'package.json']) {
+    for (const entry of ['opencode', 'lib', 'bin', 'defaults', 'agents', 'skills', 'package.json']) {
       await cp(join(ROOT, entry), join(dir, 'plugin', entry), { recursive: true });
     }
     for (const module of new Set(Object.values(HOOK_HANDLERS))) {
@@ -403,7 +403,7 @@ describe('an event of the table the bridge cannot place', () => {
   async function loadedWith(t, file, edit) {
     const dir = await mkdtemp(join(tmpdir(), 'pdkit-wiring-'));
     t.after(() => rm(dir, { recursive: true, force: true }));
-    for (const entry of ['opencode', 'lib', 'bin', 'defaults', 'agents', 'package.json']) {
+    for (const entry of ['opencode', 'lib', 'bin', 'defaults', 'agents', 'skills', 'package.json']) {
       await cp(join(ROOT, entry), join(dir, entry), { recursive: true });
     }
     const source = await readFile(join(dir, file), 'utf8');
