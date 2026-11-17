@@ -97,6 +97,7 @@ const DEFAULTS = Object.freeze({
   'pr-sync': 'claude-agent/opus#high',
   preflight: 'claude-agent/sonnet#medium',
   quickfix: 'claude-agent/sonnet#medium',
+  reset: 'claude-agent/sonnet#medium',
 });
 
 /**
