@@ -3,8 +3,7 @@ name: pr
 description: "Create branches and pull requests. The only command that writes to GitHub."
 argument-hint: "<issue-number> [slice]"
 disable-model-invocation: true
-model: sonnet
-effort: medium
+model: claude-agent/sonnet#medium
 ---
 
 The only command in this plugin that writes to someone else's repository.
@@ -66,8 +65,10 @@ merged together." Closing those is `/pd:pr-sync`'s job, after this one is open.
    once".
 
 4. **Body.** `pdkit render prBody --issue <n> --values <f> --strip-comments`.
-   Write it to a file. The four upstream headings are not ours to rearrange —
-   a podman-desktop reviewer scans for their own.
+   Write it to a file with `--path <file>`: it lands under
+   `$PDKIT_HOME/issues/<n>/`, where the axes of step 5 can read it. The four
+   upstream headings are not ours to rearrange — a podman-desktop reviewer
+   scans for their own.
 
    **The body is for the reviewer; the record is for us.** Anything needed only
    to service this pull request — R-IDs, the requirement trace, the review
@@ -124,8 +125,9 @@ merged together." Closing those is `/pd:pr-sync`'s job, after this one is open.
      changed files, the title, the body file and the issue's text, and is told
      this is our own pull request before publishing, so there are no threads.
      Together they cover all twelve sections of the rules;
-   - `pd-review-synth` on the four reports. It calibrates as the maintainer's
-     agent does and ends with the findings as JSON;
+   - wait for all four axis reports, then `pd-review-synth` on the four
+     reports. It calibrates as the maintainer's agent does and ends with the
+     findings as JSON;
    - `pdkit self-review record --issue <n> [--slice <i>] --findings <f.json>
      --body <file>`.
 

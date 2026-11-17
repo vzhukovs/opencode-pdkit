@@ -92,6 +92,7 @@ const DEFAULTS = Object.freeze({
   open: 'claude-agent/haiku#low',
   plan: 'claude-agent/opus#high',
   'plan-review': 'claude-agent/opus#high',
+  pr: 'claude-agent/sonnet#medium',
 });
 
 /**
