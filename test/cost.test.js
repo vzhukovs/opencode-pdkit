@@ -62,7 +62,6 @@ import {
   writeSnapshot,
 } from '../lib/cost.js';
 import { append as appendJournal } from '../lib/journal.js';
-import { readUsage } from '../lib/transcripts.js';
 
 const HOUR = 3_600_000;
 const T0 = Date.parse('2026-08-26T10:00:00Z');
@@ -112,16 +111,6 @@ describe('the scale', () => {
     assert.equal(unitsOf(usage, 'claude-sonnet-5'), 4000);
     assert.equal(unitsOf(usage, 'claude-opus-5'), 20_000);
     assert.equal(unitsOf(usage, 'claude-opus-5-5'), 20_000);
-  });
-
-  test('a usage line without cache fields reads as zeros, not NaN', () => {
-    const usage = readUsage({ input_tokens: 12, output_tokens: 3 });
-    assert.deepEqual(usage, { input: 12, cacheRead: 0, cacheWrite: 0, output: 3 });
-    assert.equal(unitsOf(usage, 'claude-sonnet-5'), 27);
-
-    const totals = tally([call({ usage }), call({ usage: readUsage(undefined) })]);
-    assert.equal(Number.isNaN(totals.units), false);
-    assert.equal(totals.units, 27);
   });
 
   test('sums, averages and the peak over a known set of calls', () => {
@@ -362,7 +351,7 @@ describe('the report', () => {
   });
 });
 
-describe('reading transcripts', () => {
+describe('reading the calls', () => {
   let dir;
 
   before(async () => {
@@ -661,10 +650,10 @@ describe('a comparison across sources', () => {
   });
 });
 
-// Transcripts are found by the path of the clone. Run from another repository
-// — this plugin's own checkout, say — the report read that one's sessions,
-// attributed them to the home's issues by time alone, and showed planning with
-// no calls at all. Refused there, and said why.
+// Sessions are picked by the directory they ran in. Run from another
+// repository — this plugin's own checkout, say — the report read that one's
+// sessions, attributed them to the home's issues by time alone, and showed
+// planning with no calls at all. Refused there, both reports, and said why.
 describe('run outside the configured clone', () => {
   const BIN = join(dirname(dirname(fileURLToPath(import.meta.url))), 'bin', 'pdkit');
   let root;
@@ -696,7 +685,7 @@ describe('run outside the configured clone', () => {
   });
 
   test('is refused, with which remote says so and the ways to name the clone', async () => {
-    for (const args of [['cost'], ['cost', '--db', join(root, 'opencode.db')]]) {
+    for (const args of [['cost'], ['cost', '--db', join(root, 'opencode.db')], ['cost', '--planning'], ['cost', '--planning', '--db', join(root, 'opencode.db')]]) {
       const out = await pdkit(args);
 
       assert.equal(out.code, 1);
@@ -707,23 +696,13 @@ describe('run outside the configured clone', () => {
     }
   });
 
-  test('planning, which still reads the transcripts, is refused the same way, and runs when they are named', async () => {
-    const refused = await pdkit(['cost', '--planning']);
-    assert.equal(refused.code, 1);
-    assert.match(refused.stderr, /--repo <clone>, set repo\.path, or name the directory with --transcripts <dir>/);
-
-    const out = await pdkit(['cost', '--planning', '--transcripts', join(root, 'claude', 'projects', 'x')]);
-    assert.equal(out.code, 0, out.stderr);
-  });
-
-  test('a flag naming the other report\'s source is refused, not ignored', async () => {
-    const transcripts = await pdkit(['cost', '--transcripts', join(root, 'claude', 'projects', 'x')]);
-    assert.equal(transcripts.code, 1);
-    assert.match(transcripts.stderr, /^pdkit cost: --transcripts applies only to --planning; the cost report reads Open Code's session database, named with --db <file>/);
-
-    const db = await pdkit(['cost', '--planning', '--db', join(root, 'opencode.db')]);
-    assert.equal(db.code, 1);
-    assert.match(db.stderr, /^pdkit cost: --db does not apply to --planning/);
+  test("Claude Code's --transcripts is gone from both reports, refused as any unknown flag", async () => {
+    for (const args of [['cost'], ['cost', '--planning']]) {
+      const out = await pdkit([...args, '--transcripts', join(root, 'claude', 'projects', 'x')]);
+      assert.equal(out.code, 1);
+      assert.match(out.stderr, /^pdkit cost: unknown flag --transcripts\n/);
+      assert.doesNotMatch(out.stderr, /takes .*--transcripts/);
+    }
   });
 });
 
@@ -783,5 +762,27 @@ describe('run inside the configured clone', () => {
     const compared = await pdkit(['cost', '--db', db, '--compare', today]);
     assert.equal(compared.code, 0, compared.stderr);
     assert.match(compared.stdout, /the scales differ:\n\s+calls before were read from Claude Code's transcripts, after from Open Code's session database/);
+  });
+
+  test("planning reads the same database from the same boundary, and keeps the day's planning snapshot from Claude Code's transcripts", async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const taken = new Date(Date.now() - 1000).toISOString();
+    await mkdir(join(root, 'home', 'cost', 'planning'), { recursive: true });
+    await writeFile(join(root, 'home', 'cost', `${today}.json`), `${JSON.stringify({ generatedAt: taken, transcripts: { dirs: [] }, issues: [], routes: [] })}\n`);
+    const theirs = join(root, 'home', 'cost', 'planning', `${today}.json`);
+    const kept = `${JSON.stringify({ generatedAt: taken, transcripts: { dirs: [], missing: [], skip: null }, issues: [] })}\n`;
+    await writeFile(theirs, kept);
+
+    const out = await pdkit(['cost', '--planning', '--db', db, '--snapshot']);
+
+    assert.equal(out.code, 0, out.stderr);
+    assert.match(out.stdout, /attribution {2}0 of 0 call\(s\) mapped to an issue; 0 to none/);
+    assert.match(out.stdout, new RegExp(`measured {5}since .*\\(cost/${today}\\.json\\);`));
+    assert.match(out.stdout, /source {7}Open Code's session database at .*opencode\.db, read as pdkit cost reads it/);
+    assert.match(out.stdout, new RegExp(`snapshot written to .*planning.${today}\\.opencode\\.json`));
+    assert.match(out.stderr, new RegExp(`holds the rounds measured before the move, so it is kept; this one is ${today}\\.opencode\\.json beside it\\n$`));
+    assert.equal(await readFile(theirs, 'utf8'), kept);
+    const ours = JSON.parse(await readFile(join(root, 'home', 'cost', 'planning', `${today}.opencode.json`), 'utf8'));
+    assert.deepEqual([ours.opencode.db, 'transcripts' in ours, ours.boundary.snapshot], [db, false, `${today}.json`]);
   });
 });

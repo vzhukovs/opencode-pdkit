@@ -25,22 +25,24 @@
 // of the output, a step taken in another project counted for this one, a
 // database of another schema read as zeros. Each is pinned here, on a small
 // database built from the schema of Open Code 2.3.0
-// (test/fixtures/opencode-schema-2.3.0.sql) in a temporary directory. Nothing
-// here opens the database Open Code keeps for the user.
+// (test/fixtures/opencode-schema-2.3.0.sql, test/helpers/opencode-db.js) in a
+// temporary directory. Nothing here opens the database Open Code keeps for the
+// user.
 
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
+import { tally, unitsOf } from '../lib/cost.js';
 import { databasePath, modelName, openReadOnly, read } from '../lib/opencode-sessions.js';
+import { database } from './helpers/opencode-db.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const SCHEMA = join(ROOT, 'test', 'fixtures', 'opencode-schema-2.3.0.sql');
 const MODULE = join(ROOT, 'lib', 'opencode-sessions.js');
 
 const T0 = Date.parse('2026-11-16T10:00:00Z');
@@ -67,33 +69,6 @@ const step = (at, usage, model = API) => ({
 const running = (at, model = API) => ({ time: { created: at }, agent: 'build', model });
 
 const moved = (at, from, to) => ({ time: { created: at }, location: { directory: to }, previous: { location: { directory: from } } });
-
-/**
- * A database of the 2.3.0 schema in WAL mode, as Open Code keeps its own.
- *
- * @param {string} file
- * @param {{sessions: object[], messages: object[]}} rows
- */
-async function database(file, rows) {
-  const { DatabaseSync } = await import('node:sqlite');
-  const db = new DatabaseSync(file);
-  db.exec(await readFile(SCHEMA, 'utf8'));
-  db.exec('pragma journal_mode = wal');
-  // node:sqlite enforces foreign keys, and every session belongs to a project.
-  db.prepare("insert into project (id, worktree, time_created, time_updated, sandboxes) values ('project-1', '/', 0, 0, '[]')").run();
-  const session = db.prepare(
-    'insert into session_v2 (id, project_id, parent_id, fork_session_id, fork_boundary, slug, directory, version, time_created, time_updated) ' +
-      "values (?, 'project-1', ?, ?, ?, 'slug', ?, '2.3.0', ?, ?)",
-  );
-  for (const row of rows.sessions) {
-    session.run(row.id, row.parent ?? null, row.forkOf ?? null, row.boundary ? JSON.stringify(row.boundary) : null, row.directory, row.created, row.created);
-  }
-  const message = db.prepare('insert into session_message (id, session_id, type, seq, time_created, time_updated, data) values (?, ?, ?, ?, ?, ?, ?)');
-  for (const row of rows.messages) {
-    message.run(row.id, row.session, row.type, row.seq, row.data.time.created, row.data.time.created, JSON.stringify(row.data));
-  }
-  db.close();
-}
 
 describe('where the database is', () => {
   test('OPENCODE_DB first, a relative name in the data directory, else opencode.db there', () => {
@@ -372,5 +347,42 @@ describe('what is a skip, never zeros', () => {
       },
     });
     assert.match(scan.skip.reason, /could not be read: no such built-in module/);
+  });
+});
+
+// Moved here from test/cost.test.js with Claude Code's reader: the rule is the
+// reader's, that a counter the source leaves out is a zero. `undefined + 1` is
+// NaN, which would poison every sum it reached without an error anywhere.
+describe('a counter a step does not carry', () => {
+  let dir;
+
+  before(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'pdkit-oc-counters-'));
+  });
+
+  after(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  test('reads as zero, not NaN: no cache, no reasoning, or no counter at all', async () => {
+    const file = join(dir, 'opencode.db');
+    await database(file, {
+      sessions: [{ id: 'top-1', directory: dir, created: T0 }],
+      messages: [
+        { id: 'm-1', session: 'top-1', type: 'assistant', seq: 1, data: step(T0 + 100, { input: 12, output: 3 }) },
+        { id: 'm-2', session: 'top-1', type: 'assistant', seq: 2, data: step(T0 + 200, {}) },
+      ],
+    });
+
+    const scan = await read({ db: file, repoRoot: dir });
+    assert.deepEqual(
+      scan.calls.map((entry) => entry.usage),
+      [
+        { input: 12, cacheRead: 0, cacheWrite: 0, output: 3 },
+        { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 },
+      ],
+    );
+    assert.equal(unitsOf(scan.calls[0].usage, scan.calls[0].model), 27);
+    assert.equal(tally(scan.calls).units, 27);
   });
 });

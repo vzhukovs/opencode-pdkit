@@ -96,11 +96,20 @@ fixes — see [RELEASING.md](RELEASING.md).
   reasoning, as Claude Code's `output_tokens` did; a step counts for the clone
   when it was taken in the clone or under `worktrees.root`, wherever the
   session moved. `--db <file>` names the database (Open Code's own by default,
-  `$OPENCODE_DB` honored) in place of `--transcripts <dir>`, which only
-  `--planning` still reads. A database of a schema it does not know is a skip
-  that names what is missing, never a report of zeros. What the database does
-  not give is printed: title and `generate` calls and steps a revert removed
-  are only in Open Code's session totals, and are not counted.
+  `$OPENCODE_DB` honored) in place of `--transcripts <dir>`, which is gone.
+  A database of a schema it does not know is a skip that names what is
+  missing, never a report of zeros. What the database does not give is
+  printed: title and `generate` calls and steps a revert removed are only in
+  Open Code's session totals, and are not counted.
+- **`pdkit cost --planning` reads the same database, from the same
+  boundary.** It takes `--db <file>`, and refuses outside the clone as the
+  cost report does. A window that opened before the boundary — the first plan
+  of an issue triaged in Claude Code, a round reviewed there, every round of a
+  plan approved there — reads `outside` and is listed as "outside Open Code
+  data, not measured", never as a round without calls; a call before the
+  boundary is not counted. A planning snapshot taken the day of one from
+  Claude Code's transcripts goes beside it as
+  `cost/planning/<date>.opencode.json`, never over it.
 - **Measuring starts where Claude Code stopped.** `$PDKIT_HOME` is shared with
   the Claude Code version, so the journal names work this database never saw.
   The newest snapshot taken from Claude Code's transcripts marks the boundary:

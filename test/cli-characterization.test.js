@@ -69,7 +69,6 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { COMMANDS } from '../lib/cli.js';
-import { slugOf } from '../lib/transcripts.js';
 import { initRepo, writeFiles, commitAll, cleanup } from './helpers/repo-fixture.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -149,11 +148,7 @@ function normalize(text, dirs) {
   /** @type {[string, string][]} */
   const pairs = [];
   for (const [name, dir] of Object.entries(dirs)) {
-    for (const form of spellings(dir)) {
-      pairs.push([form, `<${name}>`]);
-      // Claude Code's transcript directory is named after the working one.
-      pairs.push([slugOf(form), `<${name}_SLUG>`]);
-    }
+    for (const form of spellings(dir)) pairs.push([form, `<${name}>`]);
   }
   pairs.sort((a, b) => b[0].length - a[0].length);
 
