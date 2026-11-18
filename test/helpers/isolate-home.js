@@ -43,3 +43,11 @@ if (!process.env.PDKIT_HOME) {
   process.env.PDKIT_HOME = home;
   process.on('exit', () => rmSync(home, { recursive: true, force: true }));
 }
+
+// Nor the database Open Code keeps for the user. `pdkit task start` looks up
+// there which session its shell belongs to (lib/opencode-parents.js), and a
+// suite run from an Open Code session inherits that session's variable. A test
+// that names no database of its own gets one that is not there.
+if (!process.env.OPENCODE_DB) {
+  process.env.OPENCODE_DB = join(process.env.PDKIT_HOME, 'no-opencode.db');
+}

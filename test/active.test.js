@@ -32,11 +32,34 @@ import { join, resolve } from 'node:path';
 import { current, keyFor, list, start, stop } from '../lib/active.js';
 import { paths } from '../lib/config.js';
 import { read as readJournal } from '../lib/journal.js';
+import { CHAIN_LIMIT } from '../lib/opencode-parents.js';
+import { database } from './helpers/opencode-db.js';
 
 let home;
+// Open Code's database, as `pdkit task start` finds it from a shell: a file of
+// the 2.3.0 schema with the sessions the tests name, a few of them subagents'.
+let DB;
+// A chain one parent longer than a lookup follows: the link at index i has i
+// parents above it.
+const LINKS = Array.from({ length: CHAIN_LIMIT + 2 }, (_, i) => `ses_link_${i}`);
 
 before(async () => {
   home = await mkdtemp(join(tmpdir(), 'pdkit-active-'));
+  DB = join(home, 'opencode.db');
+  const top = (id) => ({ id, directory: '/work/fork', created: 1 });
+  const child = (id, parent) => ({ id, parent, directory: '/work/fork', created: 2 });
+  await database(DB, {
+    sessions: [
+      top('ses_from_env'),
+      top('ses_this_one'),
+      top('ses_person'),
+      child('ses_worker', 'ses_person'),
+      child('ses_nested', 'ses_worker'),
+      top(LINKS[0]),
+      ...LINKS.slice(1).map((id, i) => child(id, LINKS[i])),
+    ],
+    messages: [],
+  });
 });
 
 beforeEach(async () => {
@@ -84,7 +107,7 @@ describe('the pointer', () => {
   // the name is Open Code's, and a test that read it from the module under
   // test would pass with any name the module chose.
   test('records the session that started it, from the shell Open Code runs it in', async (t) => {
-    withEnv(t, { OPENCODE_SESSION_ID: 'ses_from_env', CLAUDE_CODE_SESSION_ID: undefined });
+    withEnv(t, { OPENCODE_SESSION_ID: 'ses_from_env', CLAUDE_CODE_SESSION_ID: undefined, OPENCODE_DB: DB });
 
     await start({ issue: 18248, taskId: 'T1', worktree: '/work/fork', home });
     assert.equal((await current({ worktree: '/work/fork', home })).session, 'ses_from_env');
@@ -99,7 +122,7 @@ describe('the pointer', () => {
   // from a Claude Code session, and naming that session. Recording it would
   // make this session's own agents look like another session's.
   test("does not take Claude Code's session variable for one", async (t) => {
-    withEnv(t, { OPENCODE_SESSION_ID: undefined, CLAUDE_CODE_SESSION_ID: 'e7fee23a-left-over' });
+    withEnv(t, { OPENCODE_SESSION_ID: undefined, CLAUDE_CODE_SESSION_ID: 'e7fee23a-left-over', OPENCODE_DB: DB });
 
     await start({ issue: 18248, taskId: 'T1', worktree: '/work/fork', home });
     assert.equal('session' in (await current({ worktree: '/work/fork', home })), false);
@@ -115,7 +138,7 @@ describe('the pointer', () => {
   // again from an Open Code session puts that session in its place. Whose
   // agents the old one holds meanwhile is test/task-completed.test.js's.
   test('a pointer the Claude Code version wrote is read as it is, until the task is started again here', async (t) => {
-    withEnv(t, { OPENCODE_SESSION_ID: 'ses_person', CLAUDE_CODE_SESSION_ID: undefined });
+    withEnv(t, { OPENCODE_SESSION_ID: 'ses_person', CLAUDE_CODE_SESSION_ID: undefined, OPENCODE_DB: DB });
     const written = {
       issue: 18248,
       taskId: 'T1',
@@ -130,6 +153,84 @@ describe('the pointer', () => {
 
     await start({ issue: 18248, taskId: 'T1', worktree: '/work/fork', home });
     assert.equal((await current({ worktree: '/work/fork', home })).session, 'ses_person');
+  });
+
+  // T7.17: a subagent's shell names the subagent's own session, and no stop
+  // names that one — the hook bridge gives the top of the stopping agent's
+  // chain of parents. In Claude Code a subagent's shell named its parent's
+  // session, so the pointer always named a session a stop could name.
+  describe('the session is the one at the top of the chain of parents', () => {
+    const startIn = async (t, session, db = DB) => {
+      withEnv(t, { OPENCODE_SESSION_ID: session, CLAUDE_CODE_SESSION_ID: undefined, OPENCODE_DB: db });
+      await start({ issue: 18248, taskId: 'T1', worktree: '/work/fork', home });
+      return current({ worktree: '/work/fork', home });
+    };
+
+    test("from a subagent's shell, the session that started the subagent", async (t) => {
+      assert.equal((await startIn(t, 'ses_worker')).session, 'ses_person');
+    });
+
+    test("from a subagent's subagent's, the session at the top", async (t) => {
+      assert.equal((await startIn(t, 'ses_nested')).session, 'ses_person');
+      assert.equal((await startIn(t, LINKS[CHAIN_LIMIT])).session, LINKS[0], `${CHAIN_LIMIT} parents up is still found`);
+    });
+
+    test('from the top, itself', async (t) => {
+      assert.equal((await startIn(t, 'ses_person')).session, 'ses_person');
+    });
+
+    // The pointer then holds the implementer of any session — the gate's
+    // default — and never names a session no stop can name.
+    describe('when the top cannot be found, no session is recorded, not the shell\'s own', () => {
+      const none = async (t, session, db) => {
+        const pointer = await startIn(t, session, db);
+        assert.equal(pointer.taskId, 'T1', 'the task is started all the same');
+        assert.equal('session' in pointer, false, JSON.stringify(pointer));
+      };
+
+      test('no database', async (t) => {
+        await none(t, 'ses_worker', join(home, 'absent.db'));
+      });
+
+      test('a database Open Code keeps in memory only', async (t) => {
+        await none(t, 'ses_worker', ':memory:');
+      });
+
+      test('no row for the session', async (t) => {
+        await none(t, 'ses_not_in_the_database', DB);
+      });
+
+      test('no row for a parent on the way up', async (t) => {
+        const db = join(home, 'orphan.db');
+        await database(db, { sessions: [{ id: 'ses_orphan', directory: '/work/fork', created: 1 }], messages: [] });
+        const { DatabaseSync } = await import('node:sqlite');
+        const handle = new DatabaseSync(db);
+        // Foreign keys off for this one write: a parent that is gone is what is being made.
+        handle.exec('pragma foreign_keys = off');
+        handle.prepare("update session_v2 set parent_id = 'ses_gone' where id = 'ses_orphan'").run();
+        handle.close();
+        await none(t, 'ses_orphan', db);
+      });
+
+      test('a database of another schema', async (t) => {
+        const db = join(home, 'other-schema.db');
+        const { DatabaseSync } = await import('node:sqlite');
+        const handle = new DatabaseSync(db);
+        handle.exec("create table session_v2 (id text primary key); insert into session_v2 (id) values ('ses_worker')");
+        handle.close();
+        await none(t, 'ses_worker', db);
+      });
+
+      test(`a chain longer than ${CHAIN_LIMIT} parents`, async (t) => {
+        await none(t, LINKS[CHAIN_LIMIT + 1], DB);
+      });
+    });
+
+    test('a session the caller names is recorded as it is, without a lookup', async (t) => {
+      withEnv(t, { OPENCODE_SESSION_ID: 'ses_worker', OPENCODE_DB: DB });
+      await start({ issue: 18248, taskId: 'T1', worktree: '/work/fork', session: 'ses_worker', home });
+      assert.equal((await current({ worktree: '/work/fork', home })).session, 'ses_worker');
+    });
   });
 
   test('a tree with nothing running has no pointer', async () => {

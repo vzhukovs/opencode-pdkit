@@ -251,6 +251,15 @@ fixes — see [RELEASING.md](RELEASING.md).
   the Claude Code version opened still passes `pr-body-template` when
   `/pd:pr-sync` or `/pd:resume` checks its body again, without an edit to it
   upstream.
+- **`pdkit task start` records the session at the top of its shell's chain
+  of parents.** In Open Code a subagent's shell names the subagent's own
+  session, and the receipt gate compares an agent's stop with the session at
+  the top of the agent's chain. A task started from a subagent's shell named
+  a session no stop names, and every implementer of it was let through
+  without a receipt. In Claude Code a subagent's shell named the session that
+  started it. The session is looked up in Open Code's database, read-only, as
+  `pdkit cost` reads it; when it cannot be found, none is recorded, and the
+  implementer of any session is held.
 
 ### Removed
 

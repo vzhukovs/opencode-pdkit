@@ -32,7 +32,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
-import { start, stop } from '../lib/active.js';
+import { current, start, stop } from '../lib/active.js';
 import { record as recordAttempt, unblock as unblockTask } from '../lib/attempts.js';
 import { issueDir, paths } from '../lib/config.js';
 import { writeReceipt } from '../lib/evidence.js';
@@ -44,6 +44,7 @@ import { read as readJournal } from '../lib/journal.js';
 import { TRANSITIONS, setOwns, transition } from '../lib/state.js';
 import { WIRING } from '../opencode/bridge/hooks.js';
 import { subagentStop as subagentStopPayloads } from '../opencode/bridge/payload.js';
+import { database } from './helpers/opencode-db.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -263,15 +264,34 @@ describe('who the gate is for', () => {
   // Code's.
   describe('the session, as Open Code names it on each side', () => {
     const PERSON = 'ses_person';
+    // A subagent of PERSON's with a shell — any agent can run `pdkit task start`.
+    const WORKER = 'ses_worker';
+
+    // Open Code's database, where `pdkit task start` looks up the top of its
+    // shell's chain of parents (lib/opencode-parents.js).
+    let DB;
+    before(async () => {
+      DB = join(home, 'opencode.db');
+      await database(DB, {
+        sessions: [
+          { id: PERSON, directory: WORKTREE, created: 1 },
+          { id: WORKER, parent: PERSON, directory: WORKTREE, created: 2 },
+        ],
+        messages: [],
+      });
+    });
 
     /** `pdkit task start` from the shell of `session`, as /pd:exec runs it. */
-    const startFrom = async (t, session) => {
-      const saved = process.env.OPENCODE_SESSION_ID;
+    const startFrom = async (t, session, db = DB) => {
+      const saved = { OPENCODE_SESSION_ID: process.env.OPENCODE_SESSION_ID, OPENCODE_DB: process.env.OPENCODE_DB };
       t.after(() => {
-        if (saved === undefined) delete process.env.OPENCODE_SESSION_ID;
-        else process.env.OPENCODE_SESSION_ID = saved;
+        for (const [name, value] of Object.entries(saved)) {
+          if (value === undefined) delete process.env[name];
+          else process.env[name] = value;
+        }
       });
       process.env.OPENCODE_SESSION_ID = session;
+      process.env.OPENCODE_DB = db;
       await start({ issue: ISSUE, taskId: 'T1', worktree: WORKTREE, home });
     };
 
@@ -304,6 +324,32 @@ describe('who the gate is for', () => {
 
       assert.equal(decision.block, false);
       assert.match((await lastRun()).detail, /^agent task ses_child_elsewhere; pd-implementer; from another session than the one running T1$/);
+    });
+
+    // T7.17: any agent with a shell can run `pdkit task start`, and its shell
+    // names its own session. Open Code nests one level by default, so the
+    // implementers of the task are that agent's siblings, not its children:
+    // the pointer has to name their common parent, as the Claude Code version's
+    // did — there a subagent's shell named its parent's session.
+    test("started from a subagent's shell, the task holds the implementer its parent started", async (t) => {
+      await startFrom(t, WORKER);
+      assert.equal((await current({ worktree: WORKTREE, home })).session, PERSON);
+
+      const decision = await taskCompleted(stopOf('ses_child_sibling'), { event: 'subagent-stop', pluginRoot: '' });
+
+      assert.equal(decision.block, true);
+      assert.match(decision.reason, /there is no receipt/);
+      assert.match((await lastRun()).detail, /^agent task ses_child_sibling; pd-implementer; while T1 was active$/);
+    });
+
+    test("when the top of the chain cannot be found, the subagent's own session is not recorded, and the implementer is held", async (t) => {
+      await startFrom(t, WORKER, join(home, 'absent.db'));
+      assert.equal('session' in (await current({ worktree: WORKTREE, home })), false);
+
+      const decision = await taskCompleted(stopOf('ses_child_unknown_top'), { event: 'subagent-stop', pluginRoot: '' });
+
+      assert.equal(decision.block, true);
+      assert.match(decision.reason, /there is no receipt/);
     });
 
     // D10 (condition 6): $PDKIT_HOME is shared, and a task the Claude Code

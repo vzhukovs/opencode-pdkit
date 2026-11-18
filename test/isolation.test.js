@@ -47,4 +47,13 @@ describe('the run is isolated from the live $PDKIT_HOME', () => {
   test('so resolveHome does not reach the default home', () => {
     assert.notEqual(resolveHome(), expandTilde(DEFAULT_HOME), HOW);
   });
+
+  // `pdkit task start` reads Open Code's database (lib/opencode-parents.js).
+  test("and Open Code's database is not the person's either", () => {
+    const inside = relative(tmpdir(), process.env.OPENCODE_DB ?? '');
+    assert.ok(
+      inside && !inside.startsWith('..') && !isAbsolute(inside),
+      `OPENCODE_DB is ${process.env.OPENCODE_DB}, outside ${tmpdir()}. ${HOW}`,
+    );
+  });
 });
