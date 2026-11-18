@@ -60,10 +60,12 @@ languages:
   review_report: en
 
 # There is no `routing:` block here, and its absence is deliberate. Model
-# selection lives in the `model:` frontmatter of skills and agents — see
-# section 5 of docs/specification/. A skill's own model can only be set
-# there, so a second copy in this file would be a lever that moves nothing
-# half the time and disagrees with the frontmatter the rest of it.
+# selection lives in Open Code's config: the `model:` frontmatter of skills
+# and agents is the default, the `models` option of the plugin's entry in
+# opencode.json the user's choice, and an agent's `agents.<id>.model` there
+# overrides both — see section 5 of docs/specification/. The plugin sets
+# models inside the Open Code server, which does not read this file, so a
+# copy here would be a lever that moves nothing and disagrees with the rest.
 
 slicing:
   strategy: prefer-independent   # prefer-independent | stack | single
@@ -143,7 +145,7 @@ exec:
 # of 400 turns costs four times what four phases of 100 do. This is not a
 # refusal and cannot be one — no command can see how many turns a session has
 # taken. It is the number a skill names to the person when it suggests stopping;
-# the SessionStart summary prints the one for the phase it opens.
+# the session-start summary prints the one for the phase it opens.
 budget:
   turns:
     triage: 40
@@ -214,7 +216,7 @@ editor:
 
 journal:
   path: journal/
-  reanchor_scope: issue        # SessionStart injects the active issue only
+  reanchor_scope: issue        # session-start injects the active issue only
 
 review:
   # Logins, not just accounts GitHub marks with a [bot] suffix — several of
