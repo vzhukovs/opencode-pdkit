@@ -78,14 +78,14 @@ const SUBSCRIPTION = ['opus', 'sonnet', 'haiku'].map((id) => ({
 }));
 
 /**
- * The default of each command ported so far (decisions/T5.B): the class of its
- * Claude Code `model:` through a Claude subscription, its `effort:` as the
+ * The default of each command a person invokes (decisions/T5.B): the class of
+ * its Claude Code `model:` through a Claude subscription, its `effort:` as the
  * variant.
- * TODO(T6.01–T6.24): a row per port; with all 21, the alias branch below goes.
  */
 const DEFAULTS = Object.freeze({
   audit: 'claude-agent/sonnet#high',
   close: 'claude-agent/sonnet#medium',
+  doctor: 'claude-agent/sonnet#medium',
   editor: 'claude-agent/haiku#low',
   exec: 'claude-agent/sonnet#medium',
   knowledge: 'claude-agent/opus#medium',
@@ -514,20 +514,18 @@ describe('the model of each phase a state leads to', () => {
     assert.deepEqual(missing, []);
   });
 
-  test('each switches the session to it, or still names the Claude Code alias its port replaces', async () => {
+  test('each switches the session to it', async () => {
     const { report } = await register();
     const byName = new Map(report.commands.map((command) => [command.name, command]));
     for (const name of phases()) {
       const ref = modelRef(await skillModel(name));
-      if (ref) {
-        assert.deepEqual(byName.get(`${PREFIX}${name}`).model?.ref, ref, name);
-      } else {
-        // TODO(T6.01–T6.24): no command is left on this branch once each
-        // one's model: is provider/model#variant (decisions/T5.B).
-        const unread = report.unread.find((line) => line.startsWith(`skills/${name}/SKILL.md: `));
-        assert.match(unread ?? '', /: model "(opus|sonnet|haiku)" is not provider\/model#variant$/, name);
-      }
+      assert.ok(ref, name);
+      assert.deepEqual(byName.get(`${PREFIX}${name}`).model?.ref, ref, name);
     }
+  });
+
+  test('each is one of the defaults the commands ship with', () => {
+    assert.deepEqual(phases().filter((name) => !Object.hasOwn(DEFAULTS, name)), []);
   });
 
   test("it is read from the frontmatter in Open Code's form, and a Claude Code alias is none", async () => {
@@ -557,6 +555,16 @@ describe('the model of each phase a state leads to', () => {
 });
 
 describe('the defaults the commands ship with', () => {
+  // None is left on a Claude Code alias, which would put it on whatever model
+  // the session runs; the three the model may load name none, as decided.
+  test('every command a person invokes names one, as provider/model#variant', async () => {
+    const { report } = await register();
+    const invoked = (await skillNames(ROOT)).filter((name) => !PHRASE.includes(name));
+
+    assert.deepEqual(Object.keys(DEFAULTS).sort(), invoked.sort());
+    assert.deepEqual(report.unread, []);
+  });
+
   test('a ported command names the one decided for it, and only a ported command names one', async () => {
     const named = [];
     for (const name of await skillNames(ROOT)) if (modelRef(await skillModel(name))) named.push(name);

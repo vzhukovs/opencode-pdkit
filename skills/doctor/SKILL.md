@@ -2,8 +2,7 @@
 name: doctor
 description: "Check the pdkit environment: required tools, optional MCP servers, hook wiring, and gate self-test."
 disable-model-invocation: true
-model: sonnet
-effort: medium
+model: claude-agent/sonnet#medium
 ---
 
 Report what is present, what is missing, and what degrades as a result. Never
@@ -11,7 +10,7 @@ report a capability as available without checking it.
 
 ```
 pdkit doctor                  # required tools, config layers, $PDKIT_HOME, hooks, MCP
-pdkit doctor --gate-selftest  # plus: drive the real hooks the manifest registers
+pdkit doctor --gate-selftest  # plus: drive the real hooks, the way the plugin runs them
 pdkit doctor --repo <path>    # act on a repository other than the current one
 ```
 
@@ -38,9 +37,9 @@ probe and takes a few seconds. Run it **after installing, after upgrading, and
 after touching anything under `lib/hooks/`**.
 
 It is the only check that answers "is the protection actually on". Every unit
-test in the suite stays green while a plugin with a broken manifest gates
-nothing at all, so this one drives real commands through the binary the manifest
-names: seventeen for the push gate, two for the ownership hook.
+test in the suite stays green while the hook a session starts cannot run, so
+this one drives real commands through the binary the plugin runs: eighteen for
+the push gate, two for the ownership hook.
 
 If it reports a miss, nothing else in the report matters until it is fixed.
 
@@ -59,8 +58,8 @@ Do not offer to "fix" these — say what they mean and let the user decide:
   `--cdp-endpoint`, or aimed at a port other than `validation.app.debug_port`,
   is a warning: the server is healthy and looking at a browser of its own, which
   reads as working until a validation run finds nothing there. The detail
-  carries the command to fix it, `-s user` included — local scope is keyed by
-  directory and no worktree would see it.
+  carries the command to fix it, `--global` included — without it the server
+  goes into the project's `opencode.json`, and no worktree would see it.
 - **`validate:app`** — a different problem with a different fix. The server can
   be configured perfectly and validation still have nothing to drive, because
   the working tree was never built.

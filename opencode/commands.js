@@ -314,10 +314,9 @@ export async function registerCommands(ctx, plugin) {
   const root = resolve(plugin.root);
   const { skills, problems } = await readSkills(root);
   const { models, dropped, unread } = commandModels(skills, plugin.settings?.models ?? {});
-  // A command whose model: is a Claude Code alias is named in `unread`, and
-  // that is not logged: it runs on the session's model.
-  // TODO(T6.01–T6.24): every command shipped names its default, which a test
-  // holds, once each one's model: is provider/model#variant.
+  // A command whose model: is not provider/model#variant (a Claude Code alias,
+  // say) is named in `unread`, and that is not logged: it runs on the session's
+  // model. Every command shipped names its default, which a test holds.
   for (const line of [...problems, ...dropped]) plugin.log(line);
 
   /** @type {Definition[]} */
