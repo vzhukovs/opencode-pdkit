@@ -758,7 +758,8 @@ describe('re-anchoring', () => {
     // Read from the transition table rather than pinned as a string: this line
     // exists to prove the summary offers the moves the machine allows, and a
     // literal copy of them turns every edge added to section 1 into a failing
-    // test about nothing. `answered` was the edge that showed it (0.27).
+    // test about nothing. `answered` was the edge that showed it (2026-08-07,
+    // in the Claude Code version).
     assert.match(decision.message, new RegExp(`next {4}: ${TRANSITIONS['triaged'].join(', ')}`));
   });
 

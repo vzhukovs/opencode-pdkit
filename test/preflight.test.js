@@ -525,8 +525,9 @@ describe('the upstream rule checks', () => {
     assert.doesNotMatch(result.remedy, /rebase -i(?! *,? *which)/);
   });
 
-  // The 0.3 correction, at the point where it would otherwise reject valid
-  // work every week.
+  // The design's correction against podman-desktop's own commitlint
+  // (2026-07-30, in the Claude Code version), at the point where it would
+  // otherwise reject valid work every week.
   test('conventional-commits: a missing scope passes with a note', async () => {
     const result = await only('conventional-commits', {
       commits: [{ sha, subject: 'fix: guard the empty case', body: '', trailers: signed }],

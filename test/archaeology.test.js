@@ -82,9 +82,10 @@ function fakeGh(data, calls = []) {
         data: { repository: { pullRequest: { reviewThreads: { pageInfo: {}, nodes: data.views?.[numberOf(args)]?.threads ?? [] } } } },
       });
       // Same reason: the discussion query selects `pullRequest(number: $number)`
-      // too. It moved off `pr view --json reviews,comments` in 0.20, because
-      // that call reports an app account as a plain login and every bot it did
-      // not know by name arrived looking like a person.
+      // too. It moved off `pr view --json reviews,comments` on 2026-08-02, in
+      // the Claude Code version, because that call reports an app account as a
+      // plain login and every bot it did not know by name arrived looking like
+      // a person.
     } else if (joined.includes('reviews(first:')) {
       const view = data.views?.[numberOf(args)] ?? {};
       answer({

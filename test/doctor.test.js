@@ -1543,11 +1543,14 @@ describe('the validation and config-drift checks', () => {
 // `pdkit init` copies the shipped config whole, so a key retired afterwards
 // survives in personal configs looking like a setting somebody chose.
 describe('retired config keys', () => {
+  // A release, all three parts of it. `gates.require_states` once said
+  // "deleted in 0.6", a revision of the design document numbered before the
+  // first release, which release 0.6.0 later made read as itself.
   test('every entry names the version and says what to do', () => {
     assert.ok(RETIRED_KEYS.length >= 1);
     for (const entry of RETIRED_KEYS) {
       assert.match(entry.key, /^[\w.]+$/);
-      assert.match(entry.why, /no longer read \(deleted in \d+\.\d+\)/, `${entry.key} does not say when`);
+      assert.match(entry.why, /no longer read \(deleted (?:in|before) \d+\.\d+\.\d+\)/, `${entry.key} does not say when`);
     }
   });
 
@@ -1580,12 +1583,13 @@ describe('retired config keys', () => {
   });
 });
 
-// Section 8.2 claimed this check verified the endpoint. Until 0.21 it verified
-// the name: a Playwright server started without `--cdp-endpoint` launches a
-// browser of its own, never sees the application pdkit started, and reported
-// `connected` exactly like one wired correctly. The command line comes from
-// the config documents Open Code read (lib/opencode-api.js mcpServers,
-// test/opencode-api.test.js); this is what doctor makes of it.
+// Section 8.2 claimed this check verified the endpoint. Until 2026-08-02, in
+// the Claude Code version, it verified the name: a Playwright server started
+// without `--cdp-endpoint` launches a browser of its own, never sees the
+// application pdkit started, and reported `connected` exactly like one wired
+// correctly. The command line comes from the config documents Open Code read
+// (lib/opencode-api.js mcpServers, test/opencode-api.test.js); this is what
+// doctor makes of it.
 describe('the Playwright wiring', () => {
   test('a server aimed at the configured port is the only green case', () => {
     assert.equal(playwrightCdp('npx @playwright/mcp@latest --cdp-endpoint http://127.0.0.1:9222', 9222).ok, true);

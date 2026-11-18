@@ -24,9 +24,10 @@
 // token exists for that branch, that allowing spends it, and that a failure
 // anywhere in that chain refuses instead of allowing.
 //
-// The last one is the reason this file exists. lib/cli.js allows a Bash call
-// when a handler throws, on purpose; if that policy reached inside the gate, a
-// crash would read as consent.
+// The last one is the reason this file exists: a crash inside the gate must
+// read as "no". lib/cli.js refuses a pre-bash handler that throws as well
+// (FAIL_CLOSED), but without the gate's reason and without a journal entry;
+// the refusal asserted here is the gate's own.
 
 import { test, describe, before, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -254,10 +255,10 @@ describe('failing closed', () => {
     }
   });
 
-  // The case cli.js's fail-open policy would get wrong: a valid token exists,
-  // the rule matched, and then something breaks. That must read as "no", not
-  // as "yes". The token file is made read-only so spending it throws — a real
-  // failure inside the gate rather than a simulated one.
+  // A valid token exists, the rule matched, and then something breaks. That
+  // must read as "no", and as the gate's no rather than a handler that failed.
+  // The token file is made read-only so spending it throws — a real failure
+  // inside the gate rather than a simulated one.
   test('a failure while spending the token refuses', async () => {
     await gate.open({ issue: 2001, branch: BRANCH, home });
     const file = join(home, 'gates', `${encodeURIComponent(`push:${BRANCH}`)}.json`);
@@ -336,9 +337,10 @@ describe('writes that belong to a pull request rather than a branch', () => {
   });
 });
 
-// Until 0.23 a refusal left no trace anywhere. That made the two failures
-// section 13 cares about indistinguishable after the fact: a gate that fired,
-// and a gate that was never wired to fire. An empty journal meant both.
+// Until 2026-08-02, in the Claude Code version, a refusal left no trace
+// anywhere. That made the two failures section 13 cares about
+// indistinguishable after the fact: a gate that fired, and a gate that was
+// never wired to fire. An empty journal meant both.
 describe('a refusal is written down', () => {
   test('a blocked push reaches the journal, with the rule and the command', async () => {
     const before = (await journal.read({ event: 'denied' }, { home })).length;

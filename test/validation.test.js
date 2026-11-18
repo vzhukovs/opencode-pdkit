@@ -1243,8 +1243,9 @@ setTimeout(() => {
   });
 
   // Found by leaving one behind. An application that holds the port and answers
-  // nothing is not the same as a free port, and until 0.22 the difference cost
-  // a full startup_timeout of silence and a message blaming the build.
+  // nothing is not the same as a free port, and until 2026-08-02, in the Claude
+  // Code version, the difference cost a full startup_timeout of silence and a
+  // message blaming the build.
   test('a port held by something that never answers is refused, and quickly', async () => {
     const port = await freePort();
     const wedged = createServer(() => {

@@ -239,9 +239,9 @@ review:
 
 gates:
   push_ttl: 10m
-  # require_states used to live here and was deleted in 0.6 — that is what
-  # closed open item B, and it closed by removal rather than by finding the key
-  # a job.
+  # require_states used to live here and was deleted before 0.1.0 — that is
+  # what closed open item B, and it closed by removal rather than by finding
+  # the key a job.
   #
   # Which states a token may be issued from now lives in state.GATE_ELIGIBLE,
   # keyed by what is being written: push only from preflight-green, reply from

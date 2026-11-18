@@ -162,9 +162,10 @@ describe('registering', () => {
 });
 
 describe('a merge that happened in the browser', () => {
-  // It reaches the plugin through refresh and no other call. Until 0.16 that
-  // changed prs.json silently: state.json says where the work is, the journal
-  // says why and when, and a merge is exactly what it is read back for.
+  // It reaches the plugin through refresh and no other call. Until 2026-08-02,
+  // in the Claude Code version, that changed prs.json silently: state.json
+  // says where the work is, the journal says why and when, and a merge is
+  // exactly what it is read back for.
   test('is journaled once, when the state actually changes', async () => {
     const WEB = 4500;
     await pr.register({ issue: WEB, number: 700, branch: 'DESKTOP-4500/one', home });
@@ -248,10 +249,11 @@ describe('the merge rollup', () => {
     assert.ok(entries.some((entry) => entry.event === 'pr-closed' && entry.detail.includes('split')));
   });
 
-  // A rework closes its first attempt and opens a second (0.14). Without this
-  // the superseded pull request sits in the rollup forever and the issue can
-  // never reach `merged` — and the one distinction that matters, rejected
-  // versus replaced, would live in a reason field nothing reads.
+  // A rework closes its first attempt and opens a second (the `rework` edge,
+  // section 1). Without this the superseded pull request sits in the rollup
+  // forever and the issue can never reach `merged` — and the one distinction
+  // that matters, rejected versus replaced, would live in a reason field
+  // nothing reads.
   describe('a pull request that was replaced rather than rejected', () => {
     const REWORK = 4400;
 

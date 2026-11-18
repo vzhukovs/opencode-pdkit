@@ -272,6 +272,9 @@ fixes — see [RELEASING.md](RELEASING.md).
   started it. The session is looked up in Open Code's database, read-only, as
   `pdkit cost` reads it; when it cannot be found, none is recorded, and the
   implementer of any session is held.
+- **`pdkit doctor` says `gates.require_states` was deleted before 0.1.0**,
+  where it said "deleted in 0.6". That number was a revision of the design
+  document, not a release: release 0.6.0 came later and did not touch the key.
 
 ### Removed
 

@@ -143,9 +143,11 @@ describe('validateCommit', () => {
     assert.deepEqual(result.problems, []);
   });
 
-  // The 0.3 correction. Blocking on a missing scope would reject work upstream
-  // accepts every week, and would make /pd:review-pr complain about other
-  // people's PRs for following their own repository's rules.
+  // The design's correction against podman-desktop's own commitlint
+  // (2026-07-30, in the Claude Code version). Blocking on a missing scope would
+  // reject work upstream accepts every week, and would make /pd:review-pr
+  // complain about other people's PRs for following their own repository's
+  // rules.
   test('a missing scope is a note, not a problem', () => {
     const result = validateCommit({ subject: 'fix: guard the empty case', trailers: signed });
     assert.equal(result.ok, true);
