@@ -29,7 +29,7 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { basename, dirname, join, posix } from 'node:path';
+import { basename, dirname, join, posix, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 const LIB = fileURLToPath(new URL('../lib/', import.meta.url));
@@ -200,17 +200,27 @@ describe('the hook table has one owner', () => {
 // exactly the one place the two vocabularies diverge.
 //
 // Two properties are pinned here, because neither is visible in any behavior
-// test: that every `/pd:x` written down resolves to a skill, and that every
-// state a person can be standing in says what to run from it.
+// test: that every `/pd:x` written down is a command the plugin registers, and
+// that every state a person can be standing in says what to run from it.
 describe('the handoff between skills', () => {
-  /** Every skill directory that exists. */
+  /**
+   * The skills a person can run, as the plugin registers them: `/pd:<name>`
+   * for each skills/<name>/SKILL.md (opencode/commands.js). A directory with
+   * no SKILL.md registers nothing, so a `/pd:` that names it names nothing.
+   */
   async function skillNames() {
-    return (await readdir(join(ROOT, 'skills'), { withFileTypes: true }))
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name);
+    const { skillNames: registered } = await import('../opencode/commands.js');
+    return registered(ROOT);
   }
 
-  test('every /pd:<skill> named anywhere resolves to a real skill', async () => {
+  test('every /pd:<skill> named anywhere is a command the plugin registers', async () => {
+    // The pattern below is what a person types: `/`, the prefix the plugin
+    // gives every command, the skill's name. It is decision D6 of the
+    // migration, and a registrar that named the commands otherwise would leave
+    // every `/pd:` below pointing at nothing while this test still passed.
+    const { PREFIX } = await import('../opencode/commands.js');
+    assert.equal(PREFIX, 'pd:', `the plugin registers its commands as /${PREFIX}<skill>, and the pattern below looks for /pd:<skill>`);
+
     const known = new Set(await skillNames());
     // Prose is included rather than only code spans, unlike the `pdkit` test
     // below, and the difference is the point: `/pd:x` is never English, so any
@@ -241,36 +251,59 @@ describe('the handoff between skills', () => {
       }
     }
 
-    assert.deepEqual(problems, [], `these name skills that do not exist:\n  ${problems.join('\n  ')}`);
+    assert.deepEqual(problems, [], `these name commands the plugin does not register:\n  ${problems.join('\n  ')}`);
   });
 
   test('every plugin file an agent or skill names is reached from the plugin root', async () => {
     // Agents and skills run in the podman-desktop checkout, not in this one, so
     // a bare `knowledge/maintainer-rules.md` resolves against the wrong tree.
     // On DESKTOP-19818 the implementer looked for it there, found nothing, and
-    // wrote two tasks without the maintainer's rules. Claude Code substitutes
-    // ${CLAUDE_PLUGIN_ROOT} in agent and skill bodies; that prefix is the only
-    // spelling that reaches the file wherever the plugin is installed. The
-    // directories are the ones a session reads from: the knowledge base, the
-    // templates it fills, and the skill and agent files that hand off to
-    // each other. Paths inside podman-desktop (`packages/…`, `tests/…`) have
-    // none of these roots, so they are not caught here.
+    // wrote two tasks without the maintainer's rules. Open Code has no
+    // variable for the plugin's directory. A prompt names it the way Claude
+    // Code expanded it, ${CLAUDE_PLUGIN_ROOT}, which is now the plugin's own
+    // placeholder (ROOT_TOKEN), and the registrars put the absolute root in
+    // its place in the body of every agent, command and skill they register
+    // (opencode/agents.js, opencode/commands.js). That prefix is the only
+    // spelling that reaches the file wherever the plugin is installed, and
+    // only in the body: the frontmatter goes to Open Code as written, as does
+    // a plugin file the model reads for itself. The directories are the ones
+    // a session reads from: the knowledge base, the templates it fills, and
+    // the skill and agent files that hand off to each other. Paths inside
+    // podman-desktop (`packages/…`, `tests/…`) have none of these roots, so
+    // they are not caught here.
+    const { ROOT_TOKEN, readPrompt, spellRoot } = await import('../opencode/prompts.js');
+    const root = resolve(ROOT); // as the registrars take it
     const agents = (await readdir(join(ROOT, 'agents'))).filter((name) => name.endsWith('.md')).map((name) => join(ROOT, 'agents', name));
     const skills = (await skillNames()).map((name) => join(ROOT, 'skills', name, 'SKILL.md'));
-    const reference = /(\$\{CLAUDE_PLUGIN_ROOT\}\/)?(?<![\w./-])((?:knowledge|templates|skills|agents)\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]*(?:\.md)?)/g;
+    // A path under one of those directories, either right after a placeholder
+    // and a slash or where nothing before it continues a path. Any placeholder
+    // is taken, not only ROOT_TOKEN: one the registrars do not spell out
+    // reaches the model as written, and the path after it is then no
+    // reference to anything.
+    const reference = /(?:(\$\{[^}\s]*\}|\$\w+)\/|(?<![\w./-]))((?:knowledge|templates|skills|agents)\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]*(?:\.md)?)/g;
 
     const problems = [];
     for (const file of [...agents, ...skills]) {
+      const name = file.slice(ROOT.length);
       const text = await readFile(file, 'utf8');
-      for (const [whole, prefix, path] of text.matchAll(reference)) {
-        if (!prefix) {
-          problems.push(`${file.slice(ROOT.length)}: ${whole} has no \${CLAUDE_PLUGIN_ROOT}/ prefix`);
+      const { data, body } = readPrompt(text) ?? { data: {}, body: text };
+
+      for (const [whole] of JSON.stringify(data).matchAll(reference)) {
+        problems.push(`${name}: ${whole} is in the frontmatter, which no registrar spells out`);
+      }
+      for (const [whole, placeholder] of body.matchAll(reference)) {
+        if (placeholder === undefined) {
+          problems.push(`${name}: ${whole} has no ${ROOT_TOKEN}/ prefix`);
+          continue;
+        }
+        if (placeholder !== ROOT_TOKEN) {
+          problems.push(`${name}: ${whole} starts with ${placeholder}; the registrars spell out ${ROOT_TOKEN} and leave this as written`);
           continue;
         }
         try {
-          await stat(join(ROOT, path));
+          await stat(spellRoot(whole, root));
         } catch {
-          problems.push(`${file.slice(ROOT.length)}: ${whole} does not exist`);
+          problems.push(`${name}: ${whole} does not exist`);
         }
       }
     }

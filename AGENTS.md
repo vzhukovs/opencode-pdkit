@@ -86,10 +86,14 @@ Do not reopen a split the round-2 review rejected without new facts.
   resolves against the wrong repository. Open Code has no such variable: the
   name is kept from Claude Code as the plugin's own placeholder
   (`ROOT_TOKEN`, `opencode/prompts.js`), and the plugin replaces it with its
-  absolute root when it registers an agent, a command or a skill. A plugin
-  file the model reads for itself arrives as written, placeholder included, as
-  it did in Claude Code.
-  `test/invariants.test.js` holds the prefix.
+  absolute root in the body of each agent, command and skill it registers.
+  The frontmatter reaches Open Code as written, so a reference belongs in the
+  body. A plugin file the model reads for itself arrives as written,
+  placeholder included, as it did in Claude Code.
+  `test/invariants.test.js` holds it: in an agent or a skill, every path
+  under `knowledge/`, `templates/`, `skills/` or `agents/` sits in the body,
+  starts with that placeholder and no other, and names a file that exists
+  once the root is put in.
 - **A skip is never a pass**, and a message is never wider than what was
   measured.
 - **Comments say why, and must stay true.** When code moves, update or remove
