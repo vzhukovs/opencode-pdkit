@@ -56,6 +56,7 @@ import {
 import { HOOK_HANDLERS } from '../lib/hooks/events.js';
 import { append as appendJournal } from '../lib/journal.js';
 import { WRAPPERS } from '../lib/hooks/command-parse.js';
+import { DIRECTORY_HEADER, NOT_RUNNING } from '../lib/opencode-api.js';
 import { modelText } from '../lib/opencode-models.js';
 import { unavailableSummary } from '../lib/opencode-version.js';
 import { create } from '../lib/worktree.js';
@@ -2351,6 +2352,79 @@ describe('the commands and skills under the plugin’s names', () => {
 
     assert.equal(ids.indexOf('commands'), ids.indexOf('models') + 1);
     assert.deepEqual(find(report.checks, 'commands'), { id: 'commands', level: 'optional', status: 'skip', detail: 'cannot tell: no Open Code server in this test' });
+  });
+});
+
+// `opencode api` starts Open Code's background service when it is not running,
+// and a service that starts takes over, as its own, every session another Open
+// Code server is in the middle of a turn in: a /pd:doctor in a session of
+// `opencode run` or of the person's own `opencode serve` cut its own turn short
+// so, and a doctor from the terminal someone else's (F328, F333). The doctor
+// asks only a service that runs, and `opencode service status` only looks.
+describe('the server, asked only when the background service runs', () => {
+  /**
+   * The `opencode` the doctor runs for its questions to the server: `service
+   * status` prints `status`; `api` answers HTTP 500, so a question that went
+   * out shows in its line. It keeps every call.
+   */
+  function opencode(status) {
+    const calls = [];
+    const exec = (command, args, options, callback) => {
+      calls.push(args);
+      const fails = args[0] === 'api' ? Object.assign(new Error('Command failed: opencode api'), { code: 1 }) : null;
+      setImmediate(() => callback(fails, args[0] === 'api' ? '{}' : `${status}\n`, args[0] === 'api' ? 'HTTP 500 Internal Server Error\n' : ''));
+    };
+    return { exec, calls };
+  }
+  const ASKING = ['plugin', 'models', 'commands', 'mcp'];
+
+  test('stopped: nothing is asked, and each line that would ask says why, as for a server it cannot reach', async () => {
+    const { exec, calls } = opencode('stopped');
+    const report = await diagnose({ pluginRoot: process.cwd(), env: {}, db: null, exec });
+
+    assert.deepEqual(calls, [['service', 'status']]);
+    for (const id of ASKING) {
+      assert.deepEqual(find(report.checks, id), { id, level: id === 'plugin' ? 'required' : 'optional', status: 'skip', detail: `cannot tell: ${NOT_RUNNING}` });
+    }
+    assert.deepEqual(
+      report.checks.filter((entry) => entry.detail?.includes(NOT_RUNNING)).map((entry) => entry.id),
+      ASKING,
+    );
+  });
+
+  // In a session of a server that is not the service — `opencode run` with no
+  // service, `--standalone`, the person's own `opencode serve` — the service is
+  // stopped, and starting it would cut this very turn short.
+  test('stopped, from a session: the plugin line is the plugin’s own word; the rest say why', async () => {
+    const { exec, calls } = opencode('stopped');
+    const report = await diagnose({ pluginRoot: process.cwd(), env: labeled(), db: null, exec });
+
+    assert.deepEqual(calls, [['service', 'status']]);
+    assert.deepEqual(find(report.checks, 'plugin'), { id: 'plugin', level: 'required', status: 'ok', detail: 'opencode-pdkit runs in this session: it labels every command here' });
+    for (const id of ['models', 'commands', 'mcp']) assert.equal(find(report.checks, id).detail, `cannot tell: ${NOT_RUNNING}`);
+  });
+
+  test('running: the service is asked about the directory, and looked at once', async () => {
+    const { exec, calls } = opencode('http://127.0.0.1:4096');
+    const report = await diagnose({ pluginRoot: process.cwd(), env: {}, db: null, exec });
+
+    assert.deepEqual(calls[0], ['service', 'status']);
+    assert.equal(calls.filter((args) => args[0] === 'service').length, 1);
+    assert.deepEqual(calls[1], ['api', 'GET', '/api/plugin', '-H', `${DIRECTORY_HEADER}:${report.repo}`]);
+    assert.deepEqual(find(report.checks, 'plugin'), { id: 'plugin', level: 'required', status: 'skip', detail: 'cannot tell: opencode api GET /api/plugin: HTTP 500 Internal Server Error' });
+    assert.equal(find(report.checks, 'models').detail, 'cannot tell: opencode api GET /api/config: HTTP 500 Internal Server Error');
+  });
+
+  test('when it cannot tell whether the service runs, nothing is asked, and the lines say why', async () => {
+    const calls = [];
+    const exec = (command, args, options, callback) => {
+      calls.push(args);
+      setImmediate(() => callback(Object.assign(new Error('spawn opencode ENOENT'), { code: 'ENOENT' }), '', ''));
+    };
+    const report = await diagnose({ pluginRoot: process.cwd(), env: {}, db: null, exec });
+
+    assert.deepEqual(calls, [['service', 'status']]);
+    for (const id of ASKING) assert.equal(find(report.checks, id).detail, 'cannot tell: opencode: not found');
   });
 });
 

@@ -275,6 +275,17 @@ fixes — see [RELEASING.md](RELEASING.md).
 - **`pdkit doctor` says `gates.require_states` was deleted before 0.1.0**,
   where it said "deleted in 0.6". That number was a revision of the design
   document, not a release: release 0.6.0 came later and did not touch the key.
+- **`pdkit doctor` no longer starts Open Code's background service.** It asks
+  the service about the directory only when `opencode service status` says it
+  runs. A service that starts takes over every session another Open Code
+  server is in the middle of a turn in — the session is told "The server
+  restarted while you were working" and its turn is cut short — so
+  `/pd:doctor` and `/pd:sync` in a session of `opencode run` with no service
+  running, of `--standalone`, or of your own `opencode serve` cut their own
+  turn, and a doctor from the terminal could cut someone else's. With the
+  service stopped, the lines that ask it — `plugin` from a terminal,
+  `models`, `commands`, `mcp` — are "cannot tell", with why and how to get an
+  answer.
 
 ### Removed
 

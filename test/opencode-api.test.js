@@ -28,8 +28,10 @@ import assert from 'node:assert/strict';
 
 import {
   DIRECTORY_HEADER,
+  NOT_RUNNING,
   agentModels,
   agentRules,
+  askRunning,
   catalog,
   commands,
   configuredAgents,
@@ -38,6 +40,7 @@ import {
   mcpStatuses,
   pluginEntry,
   plugins,
+  serviceStatus,
   skills,
   takenBy,
   toolPrefix,
@@ -128,6 +131,119 @@ describe('waiting for a directory the server is still loading', () => {
 
     assert.deepEqual(result, { ok: false, error: 'opencode: not found', settled: false });
     assert.equal(count(), 1);
+  });
+});
+
+/**
+ * An execFile stand-in for the two commands the module runs: `opencode service
+ * status` gets `status`, `opencode api` gets `api`. It keeps every call.
+ */
+function cli({ status, api = { stdout: '[]' } }) {
+  const calls = [];
+  const runner = (command, args, options, callback) => {
+    calls.push({ command, args, options });
+    const reply = args[0] === 'service' ? status : api;
+    setImmediate(() => callback(reply.error ?? null, reply.stdout ?? '', reply.stderr ?? ''));
+  };
+  return { runner, calls };
+}
+
+// `opencode api` starts the background service when it is not running, and a
+// service that starts takes over every session another Open Code server is in
+// the middle of a turn in (F328, F331, F332). `opencode service status` only
+// looks: it prints the service's URL, or `stopped`.
+describe('whether the background service runs', () => {
+  test('is `opencode service status`: a URL is a service that runs', async () => {
+    const { runner, calls } = cli({ status: { stdout: 'http://127.0.0.1:4096\n' } });
+
+    assert.deepEqual(await serviceStatus({ exec: runner }), { ok: true, running: true, url: 'http://127.0.0.1:4096' });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].command, 'opencode');
+    assert.deepEqual(calls[0].args, ['service', 'status']);
+  });
+
+  test('stopped is a service that does not run', async () => {
+    const { runner } = cli({ status: { stdout: 'stopped\n' } });
+
+    assert.deepEqual(await serviceStatus({ exec: runner }), { ok: true, running: false });
+  });
+
+  test('no opencode is said in those words', async () => {
+    const error = Object.assign(new Error('spawn opencode ENOENT'), { code: 'ENOENT' });
+    const { runner } = cli({ status: { error } });
+
+    assert.deepEqual(await serviceStatus({ exec: runner }), { ok: false, error: 'opencode: not found' });
+  });
+
+  test('a failure is the first line the CLI put on stderr', async () => {
+    const error = Object.assign(new Error('Command failed: opencode service status'), { code: 1 });
+    const { runner } = cli({ status: { error, stderr: '\nError: Failed to read service config\n    at …\n' } });
+
+    assert.deepEqual(await serviceStatus({ exec: runner }), { ok: false, error: 'opencode service status: Error: Failed to read service config' });
+  });
+
+  test('anything else it prints is not an answer', async () => {
+    const { runner } = cli({ status: { stdout: 'starting\n' } });
+
+    assert.deepEqual(await serviceStatus({ exec: runner }), {
+      ok: false,
+      error: 'opencode service status printed "starting", neither "stopped" nor a URL',
+    });
+  });
+});
+
+describe('asking only a background service that runs', () => {
+  test('a stopped service is neither asked nor started: each question fails with why, after one look', async () => {
+    const { runner, calls } = cli({ status: { stdout: 'stopped\n' } });
+    const ask = askRunning({ directory: '/fork', exec: runner });
+
+    assert.deepEqual(await ask('/api/plugin'), { ok: false, error: NOT_RUNNING });
+    assert.deepEqual(await ask('/api/config'), { ok: false, error: NOT_RUNNING });
+    assert.deepEqual(
+      calls.map((call) => call.args),
+      [['service', 'status']],
+    );
+  });
+
+  test('says why it does not ask, and how to get an answer', () => {
+    assert.match(NOT_RUNNING, /^Open Code’s background service is not running/);
+    assert.match(NOT_RUNNING, /does not start it/);
+    assert.match(NOT_RUNNING, /takes over/);
+    assert.match(NOT_RUNNING, /opencode service start/);
+    assert.match(NOT_RUNNING, /run pdkit doctor again$/);
+  });
+
+  test('a service that runs is asked, and looked at once', async () => {
+    const { runner, calls } = cli({ status: { stdout: 'http://127.0.0.1:4096\n' }, api: { stdout: '{"data":[]}' } });
+    const ask = askRunning({ directory: '/fork', exec: runner });
+
+    assert.deepEqual(await ask('/api/plugin'), { ok: true, data: { data: [] } });
+    assert.deepEqual(await ask('/api/mcp'), { ok: true, data: { data: [] } });
+    assert.deepEqual(
+      calls.map((call) => call.args),
+      [
+        ['service', 'status'],
+        ['api', 'GET', '/api/plugin', '-H', `${DIRECTORY_HEADER}:/fork`],
+        ['api', 'GET', '/api/mcp', '-H', `${DIRECTORY_HEADER}:/fork`],
+      ],
+    );
+  });
+
+  test('questions asked together look once', async () => {
+    const { runner, calls } = cli({ status: { stdout: 'stopped\n' } });
+    const ask = askRunning({ directory: '/fork', exec: runner });
+    await Promise.all([ask('/api/config'), ask('/api/agent'), ask('/api/model')]);
+
+    assert.equal(calls.length, 1);
+  });
+
+  test('when it cannot tell whether the service runs, it asks nothing, and says why', async () => {
+    const error = Object.assign(new Error('spawn opencode ENOENT'), { code: 'ENOENT' });
+    const { runner, calls } = cli({ status: { error } });
+    const ask = askRunning({ directory: '/fork', exec: runner });
+
+    assert.deepEqual(await ask('/api/plugin'), { ok: false, error: 'opencode: not found' });
+    assert.equal(calls.length, 1);
   });
 });
 
