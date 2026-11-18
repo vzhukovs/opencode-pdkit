@@ -258,11 +258,11 @@ worktrees:
   root: ../pd-worktrees
   copy_files: [".env", ".env.local"]
 
-# Expected MCP servers. The plugin ships no .mcp.json and does not start these:
-# a plugin-level declaration loads for everyone, which would make them mandatory
-# rather than optional. /pd:doctor checks what is present and degrades
-# gracefully. Which agents can see a server's tools is set by the `tools:` field
-# in agents/*.md, not here.
+# Expected MCP servers. The plugin declares no MCP server and does not start
+# these: a server a plugin declares loads for everyone, which would make them
+# mandatory rather than optional. /pd:doctor checks what Open Code reports and
+# degrades gracefully. Which agents can see a server's tools is set by the
+# `tools:` field in agents/*.md, not here.
 mcp:
   playwright: auto             # auto | on | off
   context7: off

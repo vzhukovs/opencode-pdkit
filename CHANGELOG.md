@@ -129,6 +129,22 @@ fixes — see [RELEASING.md](RELEASING.md).
   built-in `node:sqlite`, which needs no flag from 22.13.0. `pdkit doctor`
   compares the whole version to that minimum, not only the major, so a 22.12
   fails the `node` check.
+- **`pdkit doctor` asks Open Code about the MCP servers**, for the directory
+  it runs in: the config Open Code read (whether a server is on, and its
+  command line), what each server is doing, and the tools `pd-validator` is
+  offered. The command it prints to connect Playwright is
+  `opencode mcp add playwright --global -- npx @playwright/mcp@latest
+  --cdp-endpoint http://127.0.0.1:<port>`; `--global`, because without it the
+  server goes into the directory's own `opencode.json` and no worktree sees
+  it. A server Open Code reports failed, or waiting for authorization, is now
+  a warning with the server's error; it used to read as connected. One still
+  starting is "cannot tell", after up to five seconds of asking.
+- **`mcp:playwright` also warns when `pd-validator` is not offered its
+  Playwright tools.** A top-level `permissions` rule in an Open Code config —
+  `playwright_* deny`, say, meant for the main session — is added to every
+  agent's rules after the plugin's own and takes them away without a word;
+  validation then produces a checklist. The line names the tools and the
+  rule.
 
 ### Removed
 
