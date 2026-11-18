@@ -19,7 +19,8 @@
 // scripts/check-plugin-load.js decides what CI reports about whether the
 // package loads in Open Code. Starting a server is the CI job's part; what the
 // script makes of the server's answer is pinned here, on records shaped like
-// the ones GET /api/plugin returns.
+// the ones GET /api/plugin returns. The reading of the plugin's own record is
+// scripts/plugin-server.js's, shared with the receipt gate's check.
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -27,7 +28,8 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { agentsVerdict, commandsVerdict, findPlugin, minimumOpenCode, skillsVerdict, verdict } from '../scripts/check-plugin-load.js';
+import { agentsVerdict, commandsVerdict, minimumOpenCode, skillsVerdict } from '../scripts/check-plugin-load.js';
+import { findPlugin, verdict } from '../scripts/plugin-server.js';
 import { readAgents } from '../opencode/agents.js';
 import { PREFIX, readSkills } from '../opencode/commands.js';
 
