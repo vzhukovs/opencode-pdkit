@@ -35,6 +35,7 @@ import { delimiter, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import plugin from '../opencode/server.js';
+import { HOOK_HANDLERS } from '../lib/hooks/events.js';
 import { minimumVersion } from '../lib/opencode-version.js';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -666,6 +667,75 @@ describe('a registration that fails', () => {
       whats.forEach((what, n) => assert.match(log()[n], new RegExp(`cannot register its ${what} \\(${failing} is unavailable\\)`)));
     });
   }
+});
+
+// What the doctor reads from a session about the hooks (lib/doctor.js `hooks`,
+// D11): every event that stood, and none whose point the host refused. The
+// one that matters most is subagent-stop: without it the receipt gate is off,
+// and nothing else would say so.
+describe('what every shell command is told about the hooks', () => {
+  /** The labels a shell command gets after setup() with these registrations failing. */
+  async function labels(t, fail = []) {
+    logOf(t);
+    const { ctx, callbacks } = host({ fail });
+    await plugin.setup(ctx);
+    const created = { command: 'pdkit doctor', cwd: '/work/project', timeout: 120000, shell: '/bin/zsh', env: { PATH: '/usr/bin' } };
+    for (const before of callbacks('shell.hook create.before')) await before(created);
+    return created.env;
+  }
+
+  test('a plugin that loaded in full lists every event of the table, in its order', async (t) => {
+    const env = await labels(t);
+
+    assert.equal(env.PDKIT_HOOKS, Object.keys(HOOK_HANDLERS).join(','));
+  });
+
+  test('and the node its hooks start, asked once of the PATH the server has', async (t) => {
+    const env = await labels(t);
+
+    assert.match(env.PDKIT_HOOK_NODE, /^v\d+\.\d+\.\d+$/);
+  });
+
+  for (const [failing, missing] of [
+    ['session.hook experimental.idle', ['subagent-stop']],
+    ['tool.hook execute.after', ['post-write', 'post-bash', 'post-read', 'post-claim']],
+    ['session.hook prompt', ['session-start', 'prompt-submit']],
+    ['session.hook fork', ['session-start']],
+    ['session.hook compaction', ['pre-compact']],
+  ]) {
+    test(`a point the host refuses takes its events off the list: ${failing}`, async (t) => {
+      const env = await labels(t, [failing]);
+
+      assert.equal(env.PDKIT_HOOKS, Object.keys(HOOK_HANDLERS).filter((event) => !missing.includes(event)).join(','));
+    });
+  }
+
+  // pre-write stands on the gate's point. The bridge registers its own
+  // callback there; refused, it takes pre-write off, and the gate — the entry
+  // point's, registered before the bridge was loaded — stays on the list.
+  test("the gate stays on it as long as the entry point's registration stood", async (t) => {
+    logOf(t);
+    let calls = 0;
+    const { ctx, callbacks } = host();
+    const hook = ctx.tool.hook;
+    ctx.tool.hook = async (name, callback) => {
+      if (name === 'execute.before' && (calls += 1) > 1) throw new Error('execute.before is unavailable');
+      return hook(name, callback);
+    };
+    await plugin.setup(ctx);
+    const created = { command: 'pdkit doctor', cwd: '/work/project', timeout: 120000, shell: '/bin/zsh', env: {} };
+    for (const before of callbacks('shell.hook create.before')) await before(created);
+
+    assert.equal(created.env.PDKIT_HOOKS, Object.keys(HOOK_HANDLERS).filter((event) => event !== 'pre-write').join(','));
+  });
+
+  test('below the minimum, nothing is said: the plugin registers no shell environment there', async (t) => {
+    logOf(t);
+    const { ctx, callbacks } = host({ app: OLD });
+    await plugin.setup(ctx);
+
+    assert.deepEqual(callbacks('shell.hook create.before'), []);
+  });
 });
 
 describe('cleanup', () => {

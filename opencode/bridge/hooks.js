@@ -296,10 +296,19 @@ async function linesOf(file) {
  *   preCompact: (event: {sessionID?: string, result?: unknown}) => Promise<void>,
  *   promptSubmit: (event: {sessionID?: string, prompt?: {files?: unknown}, metadata?: unknown}) => Promise<void>,
  *   register: () => Promise<void>,
+ *   registered: () => readonly string[],
  *   cleanup: () => Promise<void>,
  * }}
  */
 export function createBridge(ctx, plugin) {
+  /**
+   * The events of HOOK_HANDLERS that stand on every point WIRING gives them,
+   * in the table's order: what register() managed. Empty until it has run.
+   *
+   * @type {readonly string[]}
+   */
+  let stood = Object.freeze([]);
+
   /**
    * Write what the runs of one call let through without saying to anyone,
    * each distinct line once. Never throws: the decision is made, and a line
@@ -834,35 +843,67 @@ export function createBridge(ctx, plugin) {
      * on each point, which runs every event that stands there, in the order
      * of HOOK_HANDLERS; the points in the order the events first name them.
      *
-     * Each point on its own: a point the host does not have — experimental.idle
-     * may be renamed in a later Open Code (F57) — leaves the others
-     * registered, and so does an event that has no point here. What failed is
-     * thrown after the rest, for the entry point to report.
+     * Each point on its own: a point whose registration fails leaves the
+     * others registered, and so does an event that has no point here. What
+     * failed is thrown after the rest, for the entry point to report; what
+     * stood is registered()'s to say. A point the host does not have is not
+     * among the failures: Open Code 2.3.0 takes a hook of any name and calls
+     * only the ones it has (F304), so were experimental.idle renamed in a
+     * later version (F57), its registration here would stand, and be idle.
      */
     async register() {
       const failures = [];
       /** @type {Map<string, Array<(event: object) => Promise<unknown>>>} */
       const standing = new Map();
+      /** Events with a row the bridge cannot stand on: none of those stood. */
+      const unplaced = new Set();
       for (const name of Object.keys(HOOK_HANDLERS)) {
         const where = Object.hasOwn(WIRING, name) ? WIRING[name] : [];
-        if (where.length === 0) failures.push(`the "${name}" hook has no point in Open Code`);
+        if (where.length === 0) {
+          failures.push(`the "${name}" hook has no point in Open Code`);
+          unplaced.add(name);
+        }
         for (const { point, run, entry } of where) {
           if (entry) continue;
           if (!Object.hasOwn(points, point) || typeof bridge[run] !== 'function') {
             failures.push(`the "${name}" hook cannot stand on ${point}`);
+            unplaced.add(name);
             continue;
           }
           standing.set(point, [...(standing.get(point) ?? []), (event) => bridge[run](event)]);
         }
       }
+      const registeredPoints = new Set();
       for (const [point, runs] of standing) {
         try {
           await points[point].register(points[point].callback(runs));
+          registeredPoints.add(point);
         } catch (error) {
           failures.push(reason(error));
         }
       }
+      // An entry row stood before this module was loaded: the entry point
+      // registers the gate first and loads the bridge only after that
+      // registration returned (opencode/server.js), so a bridge exists only
+      // where the gate is on.
+      stood = Object.freeze(
+        Object.keys(HOOK_HANDLERS).filter(
+          (name) => !unplaced.has(name) && WIRING[name].every(({ point, entry }) => entry === true || registeredPoints.has(point)),
+        ),
+      );
       if (failures.length > 0) throw new Error(failures.join('; '));
+    },
+
+    /**
+     * The events whose every point register() stood on — the gate's
+     * included — in the order of HOOK_HANDLERS. What the plugin tells a shell
+     * command it registered (opencode/environment.js), and so what
+     * `pdkit doctor` holds to the table from inside a session.
+     *
+     * @returns {readonly string[]}
+     */
+    registered() {
+      return stood;
     },
 
     /**

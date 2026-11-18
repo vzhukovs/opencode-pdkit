@@ -145,6 +145,30 @@ fixes — see [RELEASING.md](RELEASING.md).
   agent's rules after the plugin's own and takes them away without a word;
   validation then produces a checklist. The line names the tools and the
   rule.
+- **`pdkit doctor` checks that Open Code runs the plugin at all** (`plugin`,
+  required). Open Code says nothing when a config turns a plugin off — and
+  without the plugin there is no gate on writes upstream. From a session the
+  plugin answers for itself; from a terminal the doctor asks Open Code which
+  plugins it runs for the directory and, when this one is not among them,
+  names where the config turns it off: `-opencode-pdkit` in a document's
+  `plugins`, a `plugin.use` policy, or no document naming it at all. A
+  plugin that failed to load is a failure with Open Code's error. A newer
+  published version, which Open Code notices and does not install, is a
+  warning with the command that does: `opencode plugin update`.
+- **`hooks` holds the plugin's registrations to the table of events** when
+  `pdkit doctor` runs in a session (`/pd:doctor`). Every shell command the
+  plugin runs now says which hook events it registered (`PDKIT_HOOKS`), and
+  an event missing there fails the check — `subagent-stop`, on a point Open
+  Code calls experimental, with the receipt gate named as what is off.
+- **`hooks:node` checks the `node` every hook runs with** (required): the
+  one on the Open Code server's PATH, which the plugin reports on every
+  shell command it runs (`PDKIT_HOOK_NODE`). Without it every command is
+  refused; below `engines.node` the check fails, as `node` does. From a
+  terminal the check is skipped: only the plugin sees that PATH.
+- **`hooks:agent-done` counts only Open Code's own entries.** The journal is
+  shared with the Claude Code version of the plugin, whose `agent-done`
+  entries would otherwise keep the check green for a month while the hook in
+  Open Code never ran; they are counted aside.
 
 ### Removed
 

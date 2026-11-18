@@ -28,8 +28,12 @@
 //     for a subagent the server's — can hold another pdkit, the Claude Code
 //     plugin's among them, and the one a skill of this plugin means is this
 //     plugin's own;
-//   - the version of the Open Code server running the plugin goes beside it,
-//     for `pdkit doctor`: that server is the one the minimum is about.
+//   - what `pdkit doctor` needs to know about the server and cannot see from
+//     a shell goes beside it, as labels: the version of the Open Code server
+//     running the plugin (the minimum is about that server), the hook events
+//     the plugin registered there, and the `node` on the server's PATH, which
+//     every hook runs with. A label missing from a session's command tells the
+//     doctor as much as one present: no plugin set it.
 //
 // The hook runs for the model's commands, in the foreground and in the
 // background, for a subagent's, and for a person's `!` command in the TUI. It
@@ -50,6 +54,8 @@ import { lstat, mkdir, readlink, rename, rm, symlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { delimiter as hostDelimiter, isAbsolute, join, resolve } from 'node:path';
 
+import { REGISTERED_VARIABLE } from '../lib/hooks/events.js';
+import { NODE_VARIABLE, nodeLabel, nodeVersion } from '../lib/hooks/runner.js';
 import { SERVER_VERSION_VARIABLE } from '../lib/opencode-version.js';
 
 /**
@@ -59,8 +65,8 @@ import { SERVER_VERSION_VARIABLE } from '../lib/opencode-version.js';
 const reason = (error) => (error instanceof Error ? error.message : String(error));
 
 /**
- * Put `bin` first on the PATH of `env` and the server's version beside it.
- * Changes `env` in place, which is how the hook hands a change back.
+ * Put `bin` first on the PATH of `env` and the labels beside it. Changes `env`
+ * in place, which is how the hook hands a change back.
  *
  * An empty or missing PATH becomes `bin` alone, not `bin` and an empty entry:
  * the shell reads an empty entry as the working directory. An entry equal to
@@ -68,16 +74,20 @@ const reason = (error) => (error instanceof Error ? error.message : String(error
  * already prepared does not carry it twice. Every other entry keeps its place.
  *
  * A `bin` whose path holds the delimiter leaves PATH as it was (see
- * onPath). A version that is not a non-empty string removes the variable
- * rather than leaving one the environment came with: that one would describe
- * some other server.
+ * onPath). A label without a value — a version that is not a non-empty
+ * string, `hooks` that are not a list, a `node` that is not a non-empty
+ * string — removes the variable rather than leaving one the environment came
+ * with: that one would describe some other server, or another instance of
+ * the plugin.
  *
  * @param {Record<string, string | undefined>} env
- * @param {{bin: string, version: unknown, delimiter?: string, windows?: boolean}} options
- *   `delimiter` and `windows` default to the host's; tests pass another's
+ * @param {{bin: string, version: unknown, hooks?: unknown, node?: unknown, delimiter?: string, windows?: boolean}} options
+ *   `version` is the server's; `hooks`, the events the plugin registered;
+ *   `node`, what NODE_VARIABLE says (lib/hooks/runner.js). `delimiter` and
+ *   `windows` default to the host's; tests pass another's
  * @returns {Record<string, string | undefined>} env
  */
-export function prepare(env, { bin, version, delimiter = hostDelimiter, windows = process.platform === 'win32' }) {
+export function prepare(env, { bin, version, hooks, node, delimiter = hostDelimiter, windows = process.platform === 'win32' }) {
   if (onPath(bin, delimiter)) {
     // Windows matches variable names without regard to case, and its PATH
     // usually arrives as `Path`. A second variable named `PATH` beside it would
@@ -90,6 +100,12 @@ export function prepare(env, { bin, version, delimiter = hostDelimiter, windows 
 
   if (typeof version === 'string' && version !== '') env[SERVER_VERSION_VARIABLE] = version;
   else delete env[SERVER_VERSION_VARIABLE];
+
+  if (Array.isArray(hooks)) env[REGISTERED_VARIABLE] = hooks.join(',');
+  else delete env[REGISTERED_VARIABLE];
+
+  if (typeof node === 'string' && node !== '') env[NODE_VARIABLE] = node;
+  else delete env[NODE_VARIABLE];
 
   return env;
 }
@@ -226,6 +242,22 @@ async function pathEntry(plugin, { cache, windows }) {
 }
 
 /**
+ * What NODE_VARIABLE says for this server: the `node` the hooks start, asked
+ * once, here. The server's PATH does not change while it runs, and asking on
+ * every command would start a process for each. Never throws.
+ *
+ * @param {() => Promise<{ok: true, version: string} | {ok: false, detail: string}>} probe
+ * @returns {Promise<string>}
+ */
+async function nodeOfHooks(probe) {
+  try {
+    return nodeLabel(await probe());
+  } catch (error) {
+    return nodeLabel({ ok: false, detail: `it could not be asked (${reason(error)})` });
+  }
+}
+
+/**
  * Register the create.before callback.
  *
  * The callback does not throw, and a stand-in that cannot be made does not
@@ -235,17 +267,36 @@ async function pathEntry(plugin, { cache, windows }) {
  *
  * @param {object} ctx the plugin context setup() received
  * @param {{root: string, log: (line: string) => void}} plugin
- * @param {{cache?: string, windows?: boolean}} [options]
+ * @param {{
+ *   cache?: string,
+ *   windows?: boolean,
+ *   hooks?: () => readonly string[] | undefined,
+ *   probe?: () => Promise<{ok: true, version: string} | {ok: false, detail: string}>,
+ * }} [options]
  *   where a stand-in goes (cacheHome when not given) and whether this is
- *   Windows (the host's answer when not given); tests pass their own
+ *   Windows (the host's answer when not given); `hooks`, the events the
+ *   plugin registered, read on every command (the bridge's registered(); none
+ *   given, no label); `probe`, how the `node` of the hooks is asked
+ *   (nodeVersion with the server's environment when not given). Tests pass
+ *   their own
  */
-export async function registerEnvironment(ctx, plugin, { cache, windows = process.platform === 'win32' } = {}) {
+export async function registerEnvironment(ctx, plugin, { cache, windows = process.platform === 'win32', hooks = () => undefined, probe = nodeVersion } = {}) {
   const bin = await pathEntry(plugin, { cache, windows });
   const version = ctx.app?.version;
+  const node = await nodeOfHooks(probe);
+
+  // A list that cannot be read is no label, not a command without bin/.
+  const registered = () => {
+    try {
+      return hooks();
+    } catch {
+      return undefined;
+    }
+  };
 
   await ctx.shell.hook('create.before', (event) => {
     try {
-      if (event?.env !== null && typeof event?.env === 'object') prepare(event.env, { bin, version });
+      if (event?.env !== null && typeof event?.env === 'object') prepare(event.env, { bin, version, hooks: registered(), node });
     } catch (error) {
       plugin.log(`cannot put bin/ on the PATH of a shell command (${reason(error)}); it runs without it`);
     }

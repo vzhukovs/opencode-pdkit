@@ -420,26 +420,31 @@ describe('an event of the table the bridge cannot place', () => {
     const plugin = (await import(pathToFileURL(join(dir, 'opencode', 'server.js')).href)).default;
     const cleanup = await plugin.setup(stand.ctx);
     t.after(() => cleanup?.());
-    return { registered: hooksOf(stand.order), log: error.mock.calls.map((call) => call.arguments.join(' ')) };
+    // What a shell command is then told stood (opencode/environment.js).
+    const created = { command: 'pdkit doctor', cwd: dir, timeout: 120000, shell: '/bin/sh', env: {} };
+    for (const callback of stand.callbacks('shell create.before')) await callback(created);
+    return { registered: hooksOf(stand.order), log: error.mock.calls.map((call) => call.arguments.join(' ')), stood: created.env.PDKIT_HOOKS };
   }
 
   const named = () => new Set(Object.values(WIRING).flatMap((rows) => rows.map((row) => row.point)));
 
   test('one with no point is a registration that fails, reported, and the rest are registered', async (t) => {
     const row = "  'prompt-submit': 'prompt-submit.js',\n";
-    const { registered, log } = await loadedWith(t, 'lib/hooks/events.js', (source) => source.replace(row, `${row}  'pre-fetch': 'owns.js',\n`));
+    const { registered, log, stood } = await loadedWith(t, 'lib/hooks/events.js', (source) => source.replace(row, `${row}  'pre-fetch': 'owns.js',\n`));
 
     assert.deepEqual(log, ['opencode-pdkit: cannot register its hooks (the "pre-fetch" hook has no point in Open Code); the gate and the rest are unaffected']);
     assert.deepEqual(new Set(registered), named());
+    assert.equal(stood, Object.keys(HOOK_HANDLERS).join(','), 'the events that stood, and not the one that has no point');
   });
 
   test('one on a point the bridge cannot stand on is too', async (t) => {
     const row = "  'pre-compact': rows({ point: COMPACTION, run: 'preCompact' }),";
-    const { registered, log } = await loadedWith(t, 'opencode/bridge/hooks.js', (source) =>
+    const { registered, log, stood } = await loadedWith(t, 'opencode/bridge/hooks.js', (source) =>
       source.replace(row, "  'pre-compact': rows({ point: 'session nowhere', run: 'preCompact' }),"),
     );
 
     assert.deepEqual(log, ['opencode-pdkit: cannot register its hooks (the "pre-compact" hook cannot stand on session nowhere); the gate and the rest are unaffected']);
     assert.deepEqual(new Set(registered), new Set([...named()].filter((point) => point !== 'session compaction')));
+    assert.equal(stood, Object.keys(HOOK_HANDLERS).filter((event) => event !== 'pre-compact').join(','));
   });
 });

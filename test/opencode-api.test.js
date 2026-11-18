@@ -26,7 +26,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { DIRECTORY_HEADER, agentRules, get, mcpServers, mcpStatuses, takenBy, toolPrefix, waitFor, wildcard } from '../lib/opencode-api.js';
+import { DIRECTORY_HEADER, agentRules, get, mcpServers, mcpStatuses, plugins, takenBy, toolPrefix, turnedOff, waitFor, wildcard } from '../lib/opencode-api.js';
 
 /** An execFile stand-in that replies once, as given, and keeps what it was asked to run. */
 function exec(reply) {
@@ -227,5 +227,93 @@ describe('Open Code’s names and rules', () => {
     assert.equal(takenBy('playwright_browser_navigate', [denyAll, allow, denyServer, allow]), undefined);
     assert.equal(takenBy('playwright_browser_navigate', [allow, { action: 'playwright_*', resource: '/x/*', effect: 'deny' }]), undefined);
     assert.equal(takenBy('playwright_browser_navigate', []), undefined);
+  });
+});
+
+// GET /api/plugin, as Open Code 2.3.0 answered it (research/T7.6-raw): Open
+// Code's own and the config's, in the order of their hooks; one that failed to
+// load has no ID.
+describe('the plugins the server runs for a directory', () => {
+  test('each with where it comes from and its state, in order', () => {
+    const answer = {
+      location: { directory: '/fork' },
+      data: [
+        { id: 'opencode.tool.input.repair', source: { type: 'builtin' }, features: { server: true }, state: { status: 'active' } },
+        { id: 'opencode-pdkit', source: { type: 'local', path: '/src/opencode-pdkit' }, features: { server: true }, state: { status: 'active' } },
+        { id: 'opencode-pdkit', source: { type: 'package', target: 'opencode-pdkit', version: '0.16.0', outdated: true }, state: { status: 'active' } },
+        { source: { type: 'local', path: '/src/broken' }, features: { server: true }, state: { status: 'failed', error: 'Plugin failed to load', ref: 'err_78288714' } },
+        { id: null, source: { type: 'package', target: 'opencode-pdkit' }, state: { status: 'failed', error: 'Plugin failed to load', ref: 'err_a81b3f27' } },
+      ],
+    };
+
+    assert.deepEqual(plugins(answer), [
+      { id: 'opencode.tool.input.repair', builtin: true, source: '', status: 'active' },
+      { id: 'opencode-pdkit', builtin: false, source: '/src/opencode-pdkit', status: 'active' },
+      { id: 'opencode-pdkit', builtin: false, source: 'opencode-pdkit', version: '0.16.0', outdated: true, status: 'active' },
+      { builtin: false, source: '/src/broken', status: 'failed', error: 'Plugin failed to load', ref: 'err_78288714' },
+      { builtin: false, source: 'opencode-pdkit', status: 'failed', error: 'Plugin failed to load', ref: 'err_a81b3f27' },
+    ]);
+  });
+
+  test('a directory still loading has none', () => {
+    for (const answer of [{ location: { directory: '/fork' }, data: [] }, {}, null, { data: 'x' }]) {
+      assert.deepEqual(plugins(answer), [], JSON.stringify(answer));
+    }
+  });
+});
+
+describe('where a config turns a plugin off', () => {
+  const doc = (path, info) => ({ type: 'document', path, info });
+
+  test('a directive with its ID, in any document; another ID is not it', () => {
+    const off = turnedOff(
+      [doc('/g.json', { plugins: ['/src/opencode-pdkit', '-other'] }), { type: 'directory', path: '/g', info: { plugins: ['-opencode-pdkit'] } }, doc('/p.json', { plugins: ['-opencode-pdkit'] })],
+      'opencode-pdkit',
+    );
+
+    assert.deepEqual(off.removed, ['/p.json']);
+    assert.deepEqual(off.added, [{ document: '/g.json', target: '/src/opencode-pdkit' }]);
+    assert.deepEqual(off.denied, []);
+  });
+
+  test('an entry that adds it by name: the package, with a version, a tarball, a directory, an object', () => {
+    const { added } = turnedOff(
+      [
+        doc('/g.json', {
+          plugins: ['opencode-pdkit', 'opencode-pdkit@0.16.0', 'file:/pack/opencode-pdkit-0.16.0.tgz', '/src/opencode-pdkit', { package: 'opencode-pdkit', options: {} }, 'other', { package: 7 }],
+        }),
+      ],
+      'opencode-pdkit',
+    );
+
+    assert.deepEqual(
+      added.map((entry) => entry.target),
+      ['opencode-pdkit', 'opencode-pdkit@0.16.0', 'file:/pack/opencode-pdkit-0.16.0.tgz', '/src/opencode-pdkit', 'opencode-pdkit'],
+    );
+  });
+
+  test('a policy only where its last word on an entry is deny', () => {
+    const deny = (resource) => ({ action: 'plugin.use', resource, effect: 'deny' });
+    const allow = (resource) => ({ action: 'plugin.use', resource, effect: 'allow' });
+    const { denied } = turnedOff(
+      [
+        doc('/g.json', { plugins: ['opencode-pdkit@1.0.0', '/src/opencode-pdkit'], policies: [deny('opencode-pdkit'), { action: 'tool.use', resource: '*', effect: 'deny' }] }),
+        doc('/p.json', { policies: [allow('opencode-pdkit'), deny('/src/*')] }),
+      ],
+      'opencode-pdkit',
+    );
+
+    // The package: the global document's deny is read last, so it holds. The
+    // path: only the project document names it.
+    assert.deepEqual(denied, [
+      { document: '/g.json', resource: 'opencode-pdkit', target: 'opencode-pdkit@1.0.0' },
+      { document: '/p.json', resource: '/src/*', target: '/src/opencode-pdkit' },
+    ]);
+  });
+
+  test('nothing to read is nothing found', () => {
+    for (const documents of [undefined, null, {}, [], [doc('/g.json', {})], [doc('/g.json', { plugins: 'opencode-pdkit', policies: 'x' })]]) {
+      assert.deepEqual(turnedOff(documents, 'opencode-pdkit'), { removed: [], denied: [], added: [] }, JSON.stringify(documents));
+    }
   });
 });

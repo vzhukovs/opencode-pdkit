@@ -37,7 +37,8 @@
 //      unregistered, which is how the other hooks fail: open;
 //   3. compares the running Open Code with engines.opencode in package.json,
 //      the one place the minimum is written (Open Code ignores the field);
-//   4. registers hooks, the shell environment that puts `pdkit` on PATH,
+//   4. registers hooks, the shell environment that puts `pdkit` on PATH (and
+//      tells every command which hooks stood, for the doctor),
 //      the answer that keeps the plugin's own files readable, agents (with
 //      the session hooks that keep from their models the tools Claude Code
 //      did not give them), commands (with the hooks that let one run what its
@@ -227,7 +228,10 @@ export default {
     }
 
     await register('hooks', () => loaded.bridge.register());
-    await register('shell environment', () => loaded.registerEnvironment(ctx, loaded.plugin));
+    // After the hooks: every shell command says which of them stood (doctor's `hooks`).
+    await register('shell environment', () =>
+      loaded.registerEnvironment(ctx, loaded.plugin, { hooks: () => loaded.bridge.registered() }),
+    );
     await register('access to its own files', () => loaded.registerAccess(ctx, loaded.plugin));
     await register('agents', () => loaded.registerAgents(ctx, loaded.plugin));
     await register('commands and skills', () => loaded.registerCommands(ctx, loaded.plugin));

@@ -37,7 +37,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
-import { DEADLINE_MS, decide, invoke, refusal, run } from '../lib/hooks/runner.js';
+import { DEADLINE_MS, decide, invoke, nodeLabel, nodeVersion, readNodeLabel, refusal, run } from '../lib/hooks/runner.js';
 import { FAIL_CLOSED } from '../lib/hooks/events.js';
 import { handle } from '../lib/hooks/dispatch.js';
 import { handle as handleOwns } from '../lib/hooks/owns.js';
@@ -1154,5 +1154,83 @@ describe("a refusal for want of an answer reads like runHook's", () => {
     } finally {
       await writeFile(file, original);
     }
+  });
+});
+
+// The `node` run() starts, asked for its version the way run() finds it: the
+// plugin says what it heard on every shell command, for `pdkit doctor`
+// (opencode/environment.js, lib/doctor.js `hooks:node`).
+describe('the node the hooks start', () => {
+  const POSIX_ONLY = { skip: process.platform === 'win32' ? 'stand-in executables are shell scripts' : false };
+
+  /** A directory holding one executable `node`, a shell script with this body. */
+  async function standIn(t, body) {
+    const dir = await mkdtemp(join(tmpdir(), 'pdkit-node-'));
+    t.after(() => rm(dir, { recursive: true, force: true }));
+    await writeFile(join(dir, 'node'), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+    return dir;
+  }
+
+  test('is the one on the PATH it is given, by its version', async () => {
+    const answer = await nodeVersion();
+
+    assert.equal(answer.ok, true);
+    assert.match(answer.version, /^v\d+\.\d+\.\d+$/);
+  });
+
+  test('none on that PATH is ENOENT, said plainly', async (t) => {
+    const empty = await mkdtemp(join(tmpdir(), 'pdkit-no-node-'));
+    t.after(() => rm(empty, { recursive: true, force: true }));
+
+    assert.deepEqual(await nodeVersion({ env: { PATH: empty } }), {
+      ok: false,
+      detail: '"node" is not on the PATH of the process that runs hooks (ENOENT)',
+    });
+  });
+
+  test('another node first on PATH is the one asked', POSIX_ONLY, async (t) => {
+    const dir = await standIn(t, 'echo v20.20.0');
+
+    assert.deepEqual(await nodeVersion({ env: { PATH: `${dir}:${process.env.PATH}` } }), { ok: true, version: 'v20.20.0' });
+  });
+
+  test('an answer that is not a version is no version', POSIX_ONLY, async (t) => {
+    const dir = await standIn(t, 'echo "not node"');
+
+    assert.deepEqual(await nodeVersion({ env: { PATH: dir } }), { ok: false, detail: '"node --version" answered "not node" (exit 0)' });
+  });
+
+  test('nor is a version with a failing exit', POSIX_ONLY, async (t) => {
+    const dir = await standIn(t, 'echo v24.22.1; exit 3');
+
+    assert.equal((await nodeVersion({ env: { PATH: dir } })).ok, false);
+  });
+
+  test('one that does not answer is stopped at the deadline', POSIX_ONLY, async (t) => {
+    const dir = await standIn(t, 'exec /bin/sleep 30');
+    const started = Date.now();
+
+    const answer = await nodeVersion({ env: { PATH: dir }, deadlineMs: 200 });
+
+    assert.deepEqual(answer, { ok: false, detail: '"node --version" gave no answer within 0.2s' });
+    assert.ok(Date.now() - started < 5000);
+  });
+
+  test('a spawn that throws is an answer too', async () => {
+    const answer = await nodeVersion({
+      spawn: () => {
+        throw Object.assign(new Error('spawn EACCES'), { code: 'EACCES' });
+      },
+    });
+
+    assert.deepEqual(answer, { ok: false, detail: '"node" did not start (EACCES)' });
+  });
+
+  test('the label says the version, or none and why, and reads back', () => {
+    assert.equal(nodeLabel({ ok: true, version: 'v24.22.1' }), 'v24.22.1');
+    assert.equal(nodeLabel({ ok: false, detail: 'x (ENOENT)' }), 'none: x (ENOENT)');
+    assert.deepEqual(readNodeLabel('v24.22.1'), { version: 'v24.22.1' });
+    assert.deepEqual(readNodeLabel('none: x (ENOENT)'), { none: 'x (ENOENT)' });
+    assert.deepEqual(readNodeLabel('v24'), { none: 'v24' });
   });
 });

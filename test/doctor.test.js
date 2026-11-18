@@ -26,7 +26,7 @@
 // It runs against a copy of the plugin, so breaking the gate to prove the
 // check notices does not mean editing the plugin under the test runner.
 
-import { test, describe, before, after } from 'node:test';
+import { test, describe, before, after, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { access, cp, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
@@ -35,7 +35,19 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { cleanup, commitAll, initRepo } from './helpers/repo-fixture.js';
-import { GATE_PROBES, RETIRED_KEYS, checkAgentRuns, checkHooks, checkMcp, checkNode, diagnose, gateSelftest, playwrightCdp } from '../lib/doctor.js';
+import {
+  GATE_PROBES,
+  RETIRED_KEYS,
+  checkAgentRuns,
+  checkHookNode,
+  checkHooks,
+  checkMcp,
+  checkNode,
+  checkPlugin,
+  diagnose,
+  gateSelftest,
+  playwrightCdp,
+} from '../lib/doctor.js';
 import { HOOK_HANDLERS } from '../lib/hooks/events.js';
 import { append as appendJournal } from '../lib/journal.js';
 import { WRAPPERS } from '../lib/hooks/command-parse.js';
@@ -51,6 +63,33 @@ const find = (checks, id) => checks.find((entry) => entry.id === id);
 // every MCP server of the person's config once more for each. The MCP check
 // has its own tests below, with the server's answers written out.
 const offline = async () => ({ ok: false, error: 'no Open Code server in this test' });
+
+/**
+ * A server that gives, for each path, the answers listed, one per question
+ * and the last one again after that, and keeps what it was asked.
+ */
+function serverWith(answers) {
+  const asked = [];
+  const ask = async (path) => {
+    asked.push(path);
+    const list = answers[path];
+    if (list === undefined) throw new Error(`doctor asked ${path}, which this test does not answer`);
+    return list[Math.min(asked.filter((entry) => entry === path).length, list.length) - 1];
+  };
+  return { ask, asked };
+}
+
+/** No real waiting: the clock moves by each pause. */
+function clock() {
+  let time = 0;
+  return { now: () => time, pause: async (ms) => void (time += ms) };
+}
+
+// What a shell of an Open Code session carries, as the doctor reads it: the
+// session the shell tool names, and the plugin's labels (opencode/environment.js).
+const SESSION = { OPENCODE_SESSION_ID: 'ses_e1ab4dbd8ffeAGRhkvVT6EWLR0' };
+const EVENTS = Object.keys(HOOK_HANDLERS);
+const labeled = (hooks = EVENTS, more = {}) => ({ ...SESSION, PDKIT_HOOKS: hooks.join(','), ...more });
 
 before(async () => {
   plugin = await mkdtemp(join(tmpdir(), 'pdkit-doctor-'));
@@ -181,12 +220,16 @@ describe('the self-test', () => {
 // install's, beside the table, but the plugin's own doing, by the table
 // (test/opencode-wiring.test.js holds it to that).
 describe('the hook table', () => {
-  test('passes on an intact plugin, counting the events of the table', async () => {
-    const [entry] = await checkHooks(plugin);
+  test('passes on an intact plugin, counting the events of the table, and says where registrations show', async () => {
+    const [entry] = await checkHooks(plugin, {});
 
     assert.equal(entry.id, 'hooks');
+    assert.equal(entry.level, 'required');
     assert.equal(entry.status, 'ok');
-    assert.equal(entry.detail, `${Object.keys(HOOK_HANDLERS).length} events, every one has a handler`);
+    assert.equal(
+      entry.detail,
+      `${EVENTS.length} events, every one has a handler; which ones the plugin registered shows only in a session (/pd:doctor)`,
+    );
   });
 
   test('names each event whose module is missing, and fails', async () => {
@@ -197,7 +240,7 @@ describe('the hook table', () => {
     }
 
     try {
-      const [entry] = await checkHooks(plugin);
+      const [entry] = await checkHooks(plugin, {});
 
       assert.equal(entry.status, 'fail');
       assert.equal(entry.level, 'required');
@@ -217,10 +260,89 @@ describe('the hook table', () => {
     await rename(join(plugin, 'hooks'), join(plugin, 'hooks.away'));
 
     try {
-      assert.equal((await checkHooks(plugin))[0].status, 'ok');
+      assert.equal((await checkHooks(plugin, {}))[0].status, 'ok');
     } finally {
       await rename(join(plugin, 'hooks.away'), join(plugin, 'hooks'));
     }
+  });
+});
+
+// From a session the plugin says which events stood (PDKIT_HOOKS), and the
+// table is held to that. The event that matters most is subagent-stop: when
+// its point refuses it, the receipt gate is off while everything else looks
+// fine (D11). A point a later Open Code renames is not refused (F304); that
+// shows in the agent-done check below.
+describe('the hooks the plugin registered in the session', () => {
+  test('every event of the table: ok, and it says so', async () => {
+    const [entry] = await checkHooks(plugin, labeled());
+
+    assert.equal(entry.status, 'ok');
+    assert.equal(entry.detail, `${EVENTS.length} events, every one has a handler and is registered in this session`);
+  });
+
+  test('the order the plugin lists them in does not matter', async () => {
+    assert.equal((await checkHooks(plugin, labeled([...EVENTS].reverse())))[0].status, 'ok');
+  });
+
+  test('no subagent-stop is a failure that says the receipt gate is off', async () => {
+    const [entry] = await checkHooks(plugin, labeled(EVENTS.filter((event) => event !== 'subagent-stop')));
+
+    assert.equal(entry.status, 'fail');
+    assert.equal(entry.level, 'required');
+    assert.equal(
+      entry.detail,
+      'not registered in this session: subagent-stop (no receipt gate, and no agent-done is written) — the Open Code ' +
+        'server’s stderr says why ("opencode-pdkit: cannot register its hooks (…)")',
+    );
+  });
+
+  test('each missing event is named, in the order of the table, what guards something with what is off', async () => {
+    const [entry] = await checkHooks(plugin, labeled(['pre-bash', 'post-write', 'post-bash', 'post-claim', 'subagent-stop', 'pre-compact', 'prompt-submit']));
+
+    assert.equal(entry.status, 'fail');
+    assert.match(
+      entry.detail,
+      /^not registered in this session: pre-write \(no check of writes against the task’s Owns\), post-read, session-start — /,
+    );
+  });
+
+  test('an empty list registers nothing', async () => {
+    const [entry] = await checkHooks(plugin, { ...SESSION, PDKIT_HOOKS: '' });
+
+    assert.equal(entry.status, 'fail');
+    assert.ok(entry.detail.includes('pre-bash (no gate on writes upstream)'), entry.detail);
+  });
+
+  test('a missing module and a missing registration are both reported', async () => {
+    await rename(join(plugin, 'lib', 'hooks', 'post-read.js'), join(plugin, 'post-read.js.away'));
+    try {
+      const [entry] = await checkHooks(plugin, labeled(EVENTS.filter((event) => event !== 'subagent-stop')));
+
+      assert.equal(entry.status, 'fail');
+      assert.match(entry.detail, /^post-read -> lib\/hooks\/post-read\.js is missing; not registered in this session: subagent-stop /);
+    } finally {
+      await rename(join(plugin, 'post-read.js.away'), join(plugin, 'lib', 'hooks', 'post-read.js'));
+    }
+  });
+
+  // §13 DV1: a session without the plugin has no gate, and nothing in Open
+  // Code says so. The doctor run from it is the one place that can.
+  test('a session whose commands carry no label fails: the plugin is not running there', async () => {
+    const [entry] = await checkHooks(plugin, SESSION);
+
+    assert.equal(entry.status, 'fail');
+    assert.equal(
+      entry.detail,
+      'this session’s commands carry no PDKIT_HOOKS: opencode-pdkit is not running here, and neither is the gate on ' +
+        'writes upstream — or it runs below its minimum Open Code, with the gate alone (see plugin)',
+    );
+  });
+
+  // A `!` command in the TUI names no session, but the plugin labels it.
+  test('a label is read without a session too', async () => {
+    const [entry] = await checkHooks(plugin, { PDKIT_HOOKS: EVENTS.join(',') });
+
+    assert.equal(entry.detail, `${EVENTS.length} events, every one has a handler and is registered in this session`);
   });
 });
 
@@ -230,15 +352,23 @@ describe('the hook table', () => {
 // A hook that never connected looks exactly like one with nothing to catch.
 // The receipt gate sat on an event subagents never raise for four months and
 // every other check here was green, so this one reads what only a live hook
-// writes.
+// writes — and only what this harness's hook writes: the journal is shared
+// with the Claude Code version (D10), whose entries would otherwise keep the
+// check green for a month while the hook here never ran.
 describe('the agent-done liveness check', () => {
+  const DAY = 24 * 60 * 60 * 1000;
   let home;
 
-  before(async () => {
+  // Open Code's form (the bridge passes the subagent's session as the run,
+  // F91) and Claude Code's, as each writes them (task-completed.js).
+  const OPEN_CODE = 'agent task ses_e1ab4cdafffd9uGCEIYqzzA0zh; pd-implementer; while T1 was active';
+  const CLAUDE_CODE = 'agent task ac7658da6ee90e084; pd:pd-plan-critic';
+
+  beforeEach(async () => {
     home = await mkdtemp(join(tmpdir(), 'pdkit-doctor-agents-'));
   });
 
-  after(async () => {
+  afterEach(async () => {
     await rm(home, { recursive: true, force: true });
   });
 
@@ -247,21 +377,404 @@ describe('the agent-done liveness check', () => {
 
     assert.equal(entry.status, 'warn');
     assert.notEqual(entry.level, 'required');
-    assert.match(entry.detail, /SubagentStop hook is not connected/);
+    assert.equal(
+      entry.detail,
+      'no agent-done of Open Code’s in the journal for 30d. If subagents ran in Open Code in that time, the ' +
+        'subagent-stop hook is not connected and the receipt gate is off; run any subagent, then ' +
+        '`pdkit journal --event agent-done`',
+    );
   });
 
-  test('an entry older than the window still warns', async () => {
-    await appendJournal({ issue: 1, event: 'agent-done', detail: 'agent task old' }, { home });
+  test("Claude Code's entries, however recent, still warn — and are counted aside", async () => {
+    for (let n = 0; n < 3; n += 1) await appendJournal({ issue: 1, event: 'agent-done', detail: CLAUDE_CODE }, { home });
+    await appendJournal({ issue: 1, event: 'agent-done', detail: 'agent task unnamed; pd-scout' }, { home });
 
-    const [entry] = await checkAgentRuns(home, Date.now() + 31 * 24 * 60 * 60 * 1000);
+    const [entry] = await checkAgentRuns(home, Date.now());
+
     assert.equal(entry.status, 'warn');
+    assert.match(entry.detail, /^no agent-done of Open Code’s in the journal for 30d \(4 more not counted: Claude Code’s, or with no run ID\)\. /);
   });
 
-  test('a recent one is green, with the count', async () => {
+  test("Open Code's, recent, are green, with the count and the latest", async () => {
+    await appendJournal({ issue: 1, event: 'agent-done', detail: OPEN_CODE }, { home });
+    await appendJournal({ issue: 1, event: 'agent-done', detail: 'agent task ses_e1ab4d3c7ffeYCqjow47esP8tm; pd-scout' }, { home });
+
     const [entry] = await checkAgentRuns(home, Date.now());
 
     assert.equal(entry.status, 'ok');
-    assert.match(entry.detail, /^1 in the last 30d/);
+    assert.match(entry.detail, /^2 in the last 30d, latest \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+  });
+
+  test('beside the other harness, only its own are counted, and the rest is said', async () => {
+    await appendJournal({ issue: 1, event: 'agent-done', detail: CLAUDE_CODE }, { home });
+    await appendJournal({ issue: 1, event: 'agent-done', detail: OPEN_CODE }, { home });
+    await appendJournal({ issue: 1, event: 'agent-done', detail: CLAUDE_CODE }, { home });
+
+    const [entry] = await checkAgentRuns(home, Date.now());
+
+    assert.equal(entry.status, 'ok');
+    assert.match(entry.detail, /^1 in the last 30d, latest \S+; 2 more not counted: Claude Code’s, or with no run ID$/);
+  });
+
+  test('an entry of its own older than the window still warns', async () => {
+    await appendJournal({ issue: 1, event: 'agent-done', detail: OPEN_CODE }, { home });
+
+    const [entry] = await checkAgentRuns(home, Date.now() + 31 * DAY);
+    assert.equal(entry.status, 'warn');
+  });
+
+  // The run's ID is the only mark, so an ID of another shape is not this
+  // harness's. Open Code changing its IDs reads as a hook that does not run:
+  // a warning to look, never a green check about work nobody did.
+  test('a run whose ID has another shape is not counted', async () => {
+    await appendJournal({ issue: 1, event: 'agent-done', detail: 'agent task session-01HZY; pd-scout' }, { home });
+
+    assert.equal((await checkAgentRuns(home, Date.now()))[0].status, 'warn');
+  });
+
+  // T4.11 writes a receipt with the run in it: not an agent-done.
+  test('a receipt that names its run is not a run', async () => {
+    await appendJournal({ issue: 1, event: 'task-receipt', detail: 'T1 accepted; agent task ses_e1ab4cdafffd9uGCEIYqzzA0zh' }, { home });
+
+    assert.equal((await checkAgentRuns(home, Date.now()))[0].status, 'warn');
+  });
+});
+
+// Every hook is `node bin/pdkit hook <event>`, started inside the Open Code
+// server from the server's PATH, which no shell of the session sees. The
+// plugin asks that node its version and labels every command with it
+// (PDKIT_HOOK_NODE); the minimum is the one `node` is held to.
+describe('the node the hooks run with', () => {
+  const RANGE = '>=22.13.0';
+
+  test('outside a session there is nothing to read: skip, and where it shows', () => {
+    const entry = checkHookNode(RANGE, {});
+
+    assert.equal(entry.id, 'hooks:node');
+    assert.equal(entry.level, 'required');
+    assert.equal(entry.status, 'skip');
+    assert.equal(entry.detail, 'shows only in a session (/pd:doctor): the hooks run on the node of the Open Code server’s PATH, which no terminal sees');
+  });
+
+  test('in a session the plugin said nothing in: skip, and why', () => {
+    const entry = checkHookNode(RANGE, SESSION);
+
+    assert.equal(entry.status, 'skip');
+    assert.equal(entry.detail, 'opencode-pdkit set nothing on this session’s commands (see hooks)');
+  });
+
+  test('a node at the minimum or newer is ok, with its version', () => {
+    for (const version of ['v22.13.0', 'v24.22.1', 'v25.0.0']) {
+      const entry = checkHookNode(RANGE, labeled(EVENTS, { PDKIT_HOOK_NODE: version }));
+      assert.equal(entry.status, 'ok', version);
+      assert.equal(entry.detail, `${version} on the Open Code server’s PATH, which every hook runs with`);
+    }
+  });
+
+  // F256: node 20 runs the hooks right, but below the minimum is below it —
+  // the same answer `node` gives the CLI's.
+  test('an older one fails, with the minimum', () => {
+    for (const version of ['v20.20.0', 'v22.12.0']) {
+      const entry = checkHookNode(RANGE, labeled(EVENTS, { PDKIT_HOOK_NODE: version }));
+      assert.equal(entry.status, 'fail', version);
+      assert.equal(entry.detail, `${version} on the Open Code server’s PATH, which every hook runs with; need >= 22.13.0`);
+    }
+  });
+
+  test('none on the PATH fails: every command is refused, and what to do', () => {
+    const entry = checkHookNode(RANGE, { PDKIT_HOOK_NODE: 'none: "node" is not on the PATH of the process that runs hooks (ENOENT)' });
+
+    assert.equal(entry.status, 'fail');
+    assert.equal(
+      entry.detail,
+      'no node the hooks can start on the Open Code server’s PATH ("node" is not on the PATH of the process that runs ' +
+        'hooks (ENOENT)): every command the model runs is refused. Restart the server from a shell whose PATH has node >= 22.13.0',
+    );
+  });
+
+  test('a minimum it cannot read fails, as `node` does', () => {
+    const entry = checkHookNode('^22', labeled(EVENTS, { PDKIT_HOOK_NODE: 'v24.22.1' }));
+
+    assert.equal(entry.status, 'fail');
+    assert.match(entry.detail, /package\.json engines\.node is "\^22", not ">=X\.Y\.Z"$/);
+  });
+
+  // The label the plugin writes, read back by the check that reads it.
+  test('reads what the plugin writes', async () => {
+    const { nodeLabel } = await import('../lib/hooks/runner.js');
+
+    assert.equal(checkHookNode(RANGE, { PDKIT_HOOK_NODE: nodeLabel({ ok: true, version: 'v24.22.1' }) }).status, 'ok');
+    const none = checkHookNode(RANGE, { PDKIT_HOOK_NODE: nodeLabel({ ok: false, detail: 'it could not be asked (x)' }) });
+    assert.equal(none.status, 'fail');
+    assert.match(none.detail, /\(it could not be asked \(x\)\)/);
+  });
+});
+
+// §13 DV1: without the plugin there is no gate, and Open Code says nothing —
+// a plugin the config turns off is not failed but absent (F212, F213). The
+// answers below have the shapes Open Code 2.3.0 gave (research/T7.6-raw).
+describe('whether Open Code runs the plugin', () => {
+  const ID = 'opencode-pdkit';
+  const FORK = '/work/fork';
+  const answer = (data) => ({ ok: true, data });
+  const builtin = (id) => ({ id, source: { type: 'builtin' }, features: { server: true }, state: { status: 'active' } });
+  /** GET /api/plugin: Open Code's own, the config's in their place, Open Code's own after. */
+  const listed = (...added) => ({
+    location: { directory: FORK },
+    data: [builtin('opencode.tool.input.repair'), builtin('opencode.tool.shell'), ...added, builtin('opencode.config.policy')],
+  });
+  const LOCAL = { id: ID, source: { type: 'local', path: '/src/opencode-pdkit' }, features: { server: true }, state: { status: 'active' } };
+  const PACKAGE = { id: ID, source: { type: 'package', target: 'opencode-pdkit', version: '0.16.0' }, features: { server: true, tui: true }, state: { status: 'active' } };
+  /** GET /api/config: documents, by path, with what they say. */
+  const documents = (...files) => [
+    ...files.map(([path, info]) => ({ type: 'document', path, info })),
+    { type: 'directory', path: '/home/.config/opencode', info: {} },
+  ];
+  const GLOBAL = '/home/.config/opencode/opencode.json';
+
+  const run = (answers, env = {}, wait = 5000) => {
+    const server = serverWith(answers);
+    return checkPlugin({ id: ID, directory: FORK, env, ask: server.ask, wait, ...clock() }).then((entry) => ({ entry, asked: server.asked }));
+  };
+
+  test("from a session it runs in, the plugin's own word; the server is asked once, for a newer version only", async () => {
+    const { entry, asked } = await run({ '/api/plugin': [answer(listed(LOCAL))] }, labeled());
+
+    assert.deepEqual(entry, { id: 'plugin', level: 'required', status: 'ok', detail: 'opencode-pdkit runs in this session: it labels every command here' });
+    assert.deepEqual(asked, ['/api/plugin']);
+  });
+
+  // The label is the word of the plugin that runs this very command; the
+  // service `opencode api` reaches may be another server, or none.
+  test('from a session, what the server says otherwise does not count against it', async () => {
+    for (const reply of [{ ok: false, error: 'opencode: not found' }, answer(listed()), answer({ data: [] })]) {
+      const { entry, asked } = await run({ '/api/plugin': [reply] }, labeled());
+      assert.equal(entry.status, 'ok', JSON.stringify(reply));
+      assert.deepEqual(asked, ['/api/plugin'], 'asked once, not waited on');
+    }
+  });
+
+  // Open Code looks for a newer version when it loads the plugin and once a
+  // day, marks it, and installs nothing (F220, D4).
+  test('a newer version published is a warning with the command that installs it, from anywhere', async () => {
+    const outdated = { ...PACKAGE, source: { ...PACKAGE.source, version: '0.16.0', outdated: true } };
+
+    const terminal = await run({ '/api/plugin': [answer(listed(outdated))] });
+    assert.equal(terminal.entry.status, 'warn');
+    assert.equal(
+      terminal.entry.detail,
+      'opencode-pdkit is active in Open Code for /work/fork (opencode-pdkit 0.16.0); a newer version is published — update it with: opencode plugin update',
+    );
+
+    const session = await run({ '/api/plugin': [answer(listed(outdated))] }, labeled());
+    assert.equal(session.entry.status, 'warn');
+    assert.equal(
+      session.entry.detail,
+      'opencode-pdkit runs in this session: it labels every command here; a newer version is published — update it with: opencode plugin update',
+    );
+  });
+
+  test('active for the directory is ok, with where it comes from', async () => {
+    const local = await run({ '/api/plugin': [answer(listed(LOCAL))] });
+    assert.equal(local.entry.status, 'ok');
+    assert.equal(local.entry.detail, 'opencode-pdkit is active in Open Code for /work/fork (/src/opencode-pdkit)');
+
+    const pkg = await run({ '/api/plugin': [answer(listed(PACKAGE))] });
+    assert.equal(pkg.entry.detail, 'opencode-pdkit is active in Open Code for /work/fork (opencode-pdkit 0.16.0)');
+    assert.deepEqual(pkg.asked, ['/api/plugin']);
+  });
+
+  // F210: the order of the list is the order of the hooks. A plugin of the
+  // config after this one sees a command after the gate let it through (DV2).
+  test('a plugin of the config after it is named; one before it, or Open Code’s own, is not', async () => {
+    const before = { id: 'earlier', source: { type: 'package', target: 'earlier' }, state: { status: 'active' } };
+    const after = { id: 'later', source: { type: 'package', target: 'later' }, state: { status: 'active' } };
+    const broken = { source: { type: 'local', path: '/src/broken' }, state: { status: 'failed', error: 'Plugin failed to load', ref: 'err_1' } };
+    const { entry } = await run({ '/api/plugin': [answer(listed(before, LOCAL, after, broken))] });
+
+    assert.equal(entry.status, 'ok');
+    assert.equal(
+      entry.detail,
+      'opencode-pdkit is active in Open Code for /work/fork (/src/opencode-pdkit); after it, later, /src/broken — whose ' +
+        'hooks see a command after its gate, and can change it',
+    );
+  });
+
+  test('an empty list is a directory still loading: asked again until it is not', async () => {
+    const { entry, asked } = await run({ '/api/plugin': [answer({ location: { directory: FORK }, data: [] }), answer(listed(LOCAL))] });
+
+    assert.equal(entry.status, 'ok');
+    assert.deepEqual(asked, ['/api/plugin', '/api/plugin']);
+  });
+
+  test('still empty when the time is up: cannot tell, and what to do', async () => {
+    const { entry } = await run({ '/api/plugin': [answer({ location: { directory: FORK }, data: [] })] });
+
+    assert.deepEqual(entry, {
+      id: 'plugin',
+      level: 'required',
+      status: 'skip',
+      detail: 'cannot tell: Open Code listed no plugin for /work/fork within 5 s — run pdkit doctor again',
+    });
+  });
+
+  test('a server that cannot be asked is "cannot tell", in its own words', async () => {
+    const { entry } = await run({ '/api/plugin': [{ ok: false, error: 'opencode api GET /api/plugin: Error: Could not reach server at http://127.0.0.1:1' }] });
+
+    assert.equal(entry.status, 'skip');
+    assert.equal(entry.detail, 'cannot tell: opencode api GET /api/plugin: Error: Could not reach server at http://127.0.0.1:1');
+  });
+
+  // A plugin that failed to load has no ID in the list: it is known by where
+  // it comes from.
+  test('failed to load: fail, with the error and where the log has it', async () => {
+    const failed = { source: { type: 'package', target: 'opencode-pdkit' }, features: { server: true }, state: { status: 'failed', error: 'Plugin failed to load', ref: 'err_a81b3f27' } };
+    const other = { source: { type: 'local', path: '/src/broken' }, state: { status: 'failed', error: 'Plugin failed to load', ref: 'err_2' } };
+    const { entry, asked } = await run({ '/api/plugin': [answer(listed(other, failed))] });
+
+    assert.equal(entry.status, 'fail');
+    assert.equal(
+      entry.detail,
+      'Open Code failed to load opencode-pdkit for /work/fork — no plugin, no gate on writes upstream: opencode-pdkit: ' +
+        'Plugin failed to load (err_a81b3f27 in the server’s log)',
+    );
+    assert.deepEqual(asked, ['/api/plugin']);
+  });
+
+  test('another plugin that failed is not this one', async () => {
+    const other = { source: { type: 'local', path: '/src/broken' }, state: { status: 'failed', error: 'Plugin failed to load', ref: 'err_2' } };
+    const { entry } = await run({
+      '/api/plugin': [answer(listed(other))],
+      '/api/config': [answer(documents([GLOBAL, { plugins: ['/src/broken'] }]))],
+    });
+
+    assert.equal(entry.status, 'fail');
+    assert.match(entry.detail, /^Open Code does not load opencode-pdkit for \/work\/fork — no plugin, no gate on writes upstream: no config document it reads names opencode-pdkit\. Add it with: opencode plugin add opencode-pdkit$/);
+  });
+
+  test('removed by a directive: fail, naming the document', async () => {
+    const { entry, asked } = await run({
+      '/api/plugin': [answer(listed())],
+      '/api/config': [answer(documents([GLOBAL, { plugins: ['/src/opencode-pdkit'] }], ['/work/fork/opencode.json', { plugins: ['-opencode-pdkit'] }]))],
+    });
+
+    assert.equal(entry.status, 'fail');
+    assert.equal(
+      entry.detail,
+      'Open Code does not load opencode-pdkit for /work/fork — no plugin, no gate on writes upstream: "-opencode-pdkit" in ' +
+        'the plugins of /work/fork/opencode.json',
+    );
+    assert.deepEqual(asked, ['/api/plugin', '/api/config']);
+  });
+
+  test('kept from loading by a policy on its path: fail, naming the policy and its document', async () => {
+    const { entry } = await run({
+      '/api/plugin': [answer(listed())],
+      '/api/config': [answer(documents([GLOBAL, { plugins: ['/src/opencode-pdkit'], policies: [{ action: 'plugin.use', resource: '/src/*', effect: 'deny' }] }]))],
+    });
+
+    assert.equal(entry.status, 'fail');
+    assert.match(entry.detail, /: a plugin\.use policy in \/home\/\.config\/opencode\/opencode\.json denies \/src\/opencode-pdkit \(\/src\/\*\)$/);
+  });
+
+  // Open Code checks a package without its version, and a relative path from
+  // the document it is in (F212, src/plugin/module.ts).
+  test('a policy is matched as Open Code matches it', async () => {
+    const pkg = await run({
+      '/api/plugin': [answer(listed())],
+      '/api/config': [answer(documents([GLOBAL, { plugins: ['opencode-pdkit@0.16.0'], policies: [{ action: 'plugin.use', resource: 'opencode-pdkit', effect: 'deny' }] }]))],
+    });
+    assert.match(pkg.entry.detail, /denies opencode-pdkit@0\.16\.0 \(opencode-pdkit\)$/);
+
+    const relative = await run({
+      '/api/plugin': [answer(listed())],
+      '/api/config': [answer(documents(['/work/fork/opencode.json', { plugins: ['../opencode-pdkit'], policies: [{ action: 'plugin.use', resource: '/work/opencode-pdkit', effect: 'deny' }] }]))],
+    });
+    assert.match(relative.entry.detail, /denies \.\.\/opencode-pdkit \(\/work\/opencode-pdkit\)$/);
+  });
+
+  // Measured: a policy on the package's name does not stop the same plugin
+  // added by its path (research/T7.6-raw, policy-name).
+  test('a policy on the name does not stop a path, nor an allow after a deny in the same document', async () => {
+    const byName = await run({
+      '/api/plugin': [answer(listed())],
+      '/api/config': [answer(documents([GLOBAL, { plugins: ['/src/opencode-pdkit'], policies: [{ action: 'plugin.use', resource: 'opencode-pdkit', effect: 'deny' }] }]))],
+    });
+    assert.match(byName.entry.detail, /: \/src\/opencode-pdkit in the plugins of \/home\/\.config\/opencode\/opencode\.json, and nothing there turns it off — /);
+
+    const allowed = await run({
+      '/api/plugin': [answer(listed())],
+      '/api/config': [
+        answer(
+          documents([
+            GLOBAL,
+            {
+              plugins: ['/src/opencode-pdkit'],
+              policies: [
+                { action: 'plugin.use', resource: '*', effect: 'deny' },
+                { action: 'plugin.use', resource: '/src/opencode-pdkit', effect: 'allow' },
+              ],
+            },
+          ]),
+        ),
+      ],
+    });
+    assert.doesNotMatch(allowed.entry.detail, /policy/);
+  });
+
+  // Open Code reads every document's policies, the earliest document's last.
+  test("across documents, the earliest document's policy is the one that holds", async () => {
+    const { entry } = await run({
+      '/api/plugin': [answer(listed())],
+      '/api/config': [
+        answer(
+          documents(
+            [GLOBAL, { plugins: ['/src/opencode-pdkit'], policies: [{ action: 'plugin.use', resource: '/src/opencode-pdkit', effect: 'deny' }] }],
+            ['/work/fork/opencode.json', { policies: [{ action: 'plugin.use', resource: '*', effect: 'allow' }] }],
+          ),
+        ),
+      ],
+    });
+
+    assert.match(entry.detail, /a plugin\.use policy in \/home\/\.config\/opencode\/opencode\.json denies/);
+  });
+
+  test('named nowhere: fail, with the command that adds it', async () => {
+    const { entry } = await run({
+      '/api/plugin': [answer(listed())],
+      '/api/config': [answer(documents([GLOBAL, { plugins: [] }]))],
+    });
+
+    assert.equal(
+      entry.detail,
+      'Open Code does not load opencode-pdkit for /work/fork — no plugin, no gate on writes upstream: no config document ' +
+        'it reads names opencode-pdkit. Add it with: opencode plugin add opencode-pdkit',
+    );
+  });
+
+  test('when the config cannot be read either, the absence is still a failure', async () => {
+    const { entry } = await run({ '/api/plugin': [answer(listed())], '/api/config': [{ ok: false, error: 'HTTP 500' }] });
+
+    assert.equal(entry.status, 'fail');
+    assert.equal(
+      entry.detail,
+      'Open Code does not load opencode-pdkit for /work/fork — no plugin, no gate on writes upstream; its config could not be read (HTTP 500)',
+    );
+  });
+
+  // In a session where the plugin is not running, its word is missing: the
+  // server is asked, as from a terminal.
+  test('a session without its label asks the server', async () => {
+    const { entry, asked } = await run({ '/api/plugin': [answer(listed())], '/api/config': [answer(documents([GLOBAL, { plugins: ['/src/opencode-pdkit', '-opencode-pdkit'] }]))] }, SESSION);
+
+    assert.equal(entry.status, 'fail');
+    assert.deepEqual(asked, ['/api/plugin', '/api/config']);
+  });
+
+  test('a status it does not know is "cannot tell"', async () => {
+    const { entry } = await run({ '/api/plugin': [answer(listed({ ...LOCAL, state: { status: 'loading' } }))] });
+
+    assert.deepEqual(entry, { id: 'plugin', level: 'required', status: 'skip', detail: 'cannot tell: Open Code reports opencode-pdkit loading' });
   });
 });
 
@@ -534,27 +1047,6 @@ describe('the MCP servers Open Code reports', () => {
     const validator = (await readAgents(process.cwd())).agents.find((agent) => agent.id === 'pd-validator');
     validatorRules = [...permissionsFor(validator.tools, ['/plugin', '/pdkit-home']).rules, ...BUILT_IN_TAIL];
   });
-
-  /**
-   * A server that gives, for each path, the answers listed, one per question
-   * and the last one again after that, and keeps what it was asked.
-   */
-  function serverWith(answers) {
-    const asked = [];
-    const ask = async (path) => {
-      asked.push(path);
-      const list = answers[path];
-      if (list === undefined) throw new Error(`doctor asked ${path}, which this test does not answer`);
-      return list[Math.min(asked.filter((entry) => entry === path).length, list.length) - 1];
-    };
-    return { ask, asked };
-  }
-
-  /** No real waiting: the clock moves by each pause. */
-  function clock() {
-    let time = 0;
-    return { now: () => time, pause: async (ms) => void (time += ms) };
-  }
 
   const run = (answers, config = CONFIG, wait = 5000) => {
     const server = serverWith(answers);

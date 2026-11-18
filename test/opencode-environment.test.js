@@ -17,7 +17,9 @@
  ***********************************************************************/
 
 // The environment the shell create.before hook gives every shell command:
-// the plugin's bin/ first on PATH, and the server's version beside it.
+// the plugin's bin/ first on PATH, and beside it the labels `pdkit doctor`
+// reads — the server's version, the hook events that stood, the `node` the
+// hooks start.
 //
 // The events are stand-ins shaped like the ones Open Code 2.3.0 sends
 // (`{ command, cwd, timeout, shell, env }`, no session). The last block runs a
@@ -490,12 +492,18 @@ describe('the create.before callback', () => {
   // neither sets one nor removes the one Claude Code may have left.
   test('sets no session variable of its own and leaves the others alone', async () => {
     const { ctx, registered, plugin } = ours();
-    await registerEnvironment(ctx, plugin);
+    await registerEnvironment(ctx, plugin, { hooks: () => ['pre-bash'] });
     const created = event({ PATH: '/usr/bin', CLAUDE_CODE_SESSION_ID: 'e7fee23a-left-over' });
 
     await registered[0].callback(created);
 
-    assert.deepEqual(Object.keys(created.env).sort(), ['CLAUDE_CODE_SESSION_ID', 'PATH', 'PDKIT_OPENCODE_VERSION']);
+    assert.deepEqual(Object.keys(created.env).sort(), [
+      'CLAUDE_CODE_SESSION_ID',
+      'PATH',
+      'PDKIT_HOOKS',
+      'PDKIT_HOOK_NODE',
+      'PDKIT_OPENCODE_VERSION',
+    ]);
   });
 
   test('without a version from the host, still puts bin/ on PATH', async () => {
@@ -532,6 +540,137 @@ describe('the create.before callback', () => {
   });
 });
 
+// What the plugin registered in the server, said where a shell can read it:
+// `pdkit doctor` in a session holds it to the table of events (lib/doctor.js).
+// The names are the doctor's to read, so they are pinned here rather than
+// taken from the modules that define them.
+describe('the hook events that stood', () => {
+  const ours = () => host(ROOT);
+
+  test('go into PDKIT_HOOKS, joined by commas, as the list gives them', () => {
+    const hooks = ['pre-bash', 'pre-write', 'subagent-stop'];
+    assert.equal(prepare({}, { bin: '/plugin/bin', version: '2.3.0', hooks, ...POSIX }).PDKIT_HOOKS, 'pre-bash,pre-write,subagent-stop');
+  });
+
+  test('replace a list the command inherited, and with none given, remove it', () => {
+    const inherited = { PDKIT_HOOKS: 'pre-bash,subagent-stop' };
+    assert.equal(prepare({ ...inherited }, { bin: '/plugin/bin', version: '2.3.0', hooks: ['pre-bash'], ...POSIX }).PDKIT_HOOKS, 'pre-bash');
+    for (const hooks of [undefined, null, 'pre-bash', 3]) {
+      const env = prepare({ ...inherited }, { bin: '/plugin/bin', version: '2.3.0', hooks, ...POSIX });
+      assert.equal('PDKIT_HOOKS' in env, false, `${JSON.stringify(hooks)} left the inherited value`);
+    }
+  });
+
+  test('are read on every command, so a registration that comes later is in the next one', async () => {
+    const { ctx, registered, plugin } = ours();
+    let stood = ['pre-bash'];
+    await registerEnvironment(ctx, plugin, { hooks: () => stood });
+
+    const first = event({ PATH: '/usr/bin' });
+    await registered[0].callback(first);
+    stood = ['pre-bash', 'subagent-stop'];
+    const second = event({ PATH: '/usr/bin' });
+    await registered[0].callback(second);
+
+    assert.equal(first.env.PDKIT_HOOKS, 'pre-bash');
+    assert.equal(second.env.PDKIT_HOOKS, 'pre-bash,subagent-stop');
+  });
+
+  test('are no label when they cannot be read, and the command keeps bin/ on PATH', async () => {
+    const { ctx, registered, plugin, lines } = ours();
+    await registerEnvironment(ctx, plugin, {
+      hooks: () => {
+        throw new Error('the bridge is gone');
+      },
+    });
+    const created = event({ PATH: '/usr/bin', PDKIT_HOOKS: 'pre-bash' });
+
+    await registered[0].callback(created);
+
+    assert.equal(created.env.PATH, [BIN, '/usr/bin'].join(delimiter));
+    assert.equal('PDKIT_HOOKS' in created.env, false);
+    assert.deepEqual(lines, []);
+  });
+});
+
+// The `node` every hook starts is the one on the server's PATH, which no shell
+// of the session can see (lib/hooks/runner.js NODE_VARIABLE).
+describe('the node of the hooks', () => {
+  const ours = () => host(ROOT);
+  const answers = (answer) => {
+    const asked = [];
+    return { asked, probe: async () => (asked.push(1), answer) };
+  };
+
+  test('goes into PDKIT_HOOK_NODE as its version', async () => {
+    const { ctx, registered, plugin } = ours();
+    const { probe } = answers({ ok: true, version: 'v24.22.1' });
+    await registerEnvironment(ctx, plugin, { probe });
+    const created = event({ PATH: '/usr/bin' });
+
+    await registered[0].callback(created);
+
+    assert.equal(created.env.PDKIT_HOOK_NODE, 'v24.22.1');
+  });
+
+  test('is asked once, when the callback is registered, not on every command', async () => {
+    const { ctx, registered, plugin } = ours();
+    const { asked, probe } = answers({ ok: true, version: 'v24.22.1' });
+    await registerEnvironment(ctx, plugin, { probe });
+
+    for (let n = 0; n < 3; n += 1) await registered[0].callback(event({ PATH: '/usr/bin' }));
+
+    assert.equal(asked.length, 1);
+  });
+
+  test('that did not answer is `none:` and why', async () => {
+    const { ctx, registered, plugin } = ours();
+    const { probe } = answers({ ok: false, detail: '"node" is not on the PATH of the process that runs hooks (ENOENT)' });
+    await registerEnvironment(ctx, plugin, { probe });
+    const created = event({ PATH: '/usr/bin' });
+
+    await registered[0].callback(created);
+
+    assert.equal(created.env.PDKIT_HOOK_NODE, 'none: "node" is not on the PATH of the process that runs hooks (ENOENT)');
+  });
+
+  test('that could not be asked is `none:` too, and the callback is registered all the same', async () => {
+    const { ctx, registered, plugin, lines } = ours();
+    await registerEnvironment(ctx, plugin, {
+      probe: async () => {
+        throw new Error('spawn is broken');
+      },
+    });
+    const created = event({ PATH: '/usr/bin' });
+
+    await registered[0].callback(created);
+
+    assert.equal(created.env.PATH, [BIN, '/usr/bin'].join(delimiter));
+    assert.equal(created.env.PDKIT_HOOK_NODE, 'none: it could not be asked (spawn is broken)');
+    assert.deepEqual(lines, []);
+  });
+
+  test('replaces one the command inherited, and with none given, removes it', () => {
+    assert.equal(prepare({ PDKIT_HOOK_NODE: 'v20.20.0' }, { bin: '/plugin/bin', version: '2.3.0', node: 'v24.22.1', ...POSIX }).PDKIT_HOOK_NODE, 'v24.22.1');
+    for (const node of [undefined, '', 22]) {
+      const env = prepare({ PDKIT_HOOK_NODE: 'v20.20.0' }, { bin: '/plugin/bin', version: '2.3.0', node, ...POSIX });
+      assert.equal('PDKIT_HOOK_NODE' in env, false, `${JSON.stringify(node)} left the inherited value`);
+    }
+  });
+
+  // Not a stand-in: the probe the plugin uses, against the PATH this test runs
+  // with, where a `node` is (it runs this file).
+  test('is, by default, what the node on PATH says', async () => {
+    const { ctx, registered, plugin } = ours();
+    await registerEnvironment(ctx, plugin);
+    const created = event({ PATH: '/usr/bin' });
+
+    await registered[0].callback(created);
+
+    assert.match(created.env.PDKIT_HOOK_NODE, /^v\d+\.\d+\.\d+$/);
+  });
+});
+
 // A shell started with the environment the hook built, as Open Code starts
 // one: `<shell> -c <command>`, no login, no rc files. POSIX only: on Windows
 // bin/pdkit is not a command a shell runs by name.
@@ -552,5 +691,13 @@ describe('in a real shell', { skip: process.platform === 'win32' ? 'bin/pdkit ru
     assert.equal(await shell('command -v pdkit'), join(BIN, 'pdkit'));
     assert.match(await shell('pdkit --help'), /^  pdkit <command> \[options\]$/m);
     assert.equal(await shell('printf %s "$PDKIT_OPENCODE_VERSION"'), '2.3.0');
+  });
+
+  test('the labels read back as they were set', async () => {
+    const env = prepare({ ...process.env }, { bin: BIN, version: '2.3.0', hooks: ['pre-bash', 'subagent-stop'], node: 'v24.22.1' });
+    const shell = async (command) => (await run('/bin/sh', ['-c', command], { env })).stdout.trim();
+
+    assert.equal(await shell('printf %s "$PDKIT_HOOKS"'), 'pre-bash,subagent-stop');
+    assert.equal(await shell('printf %s "$PDKIT_HOOK_NODE"'), 'v24.22.1');
   });
 });
