@@ -17,7 +17,7 @@
  ***********************************************************************/
 
 // Tests for lib/harness.js: telling this harness's journal entries from the
-// other's.
+// other's, and the call that moves a session.
 //
 // The journal is shared with the Claude Code version of the plugin, and the
 // doctor's agent-done check reads it to see whether the subagent hook is
@@ -30,7 +30,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { isOwnRun } from '../lib/harness.js';
+import { MOVE_TOOL, isOwnRun, moveCall } from '../lib/harness.js';
 import { append, read } from '../lib/journal.js';
 import { handle } from '../lib/hooks/task-completed.js';
 
@@ -114,6 +114,33 @@ describe('an agent-done of this harness', () => {
       );
     } finally {
       await rm(cwd, { recursive: true, force: true });
+    }
+  });
+});
+
+// The hooks and `pdkit task start` tell the model to move its session into an
+// issue's tree, as Claude Code's hooks told it to call EnterWorktree. In Open
+// Code the model writes the call into the code it gives the execute tool, so
+// the text is code: what it names must reach Open Code as it is.
+describe('the call that moves a session', () => {
+  /** What session_move receives when the model runs the call as given. */
+  const received = (call) => new Function('tools', `return ${call};`)({ opencode: { session_move: (input) => input } });
+
+  test('is session_move through the execute tool, with the directory', () => {
+    assert.equal(MOVE_TOOL, 'execute');
+    assert.equal(moveCall('/work/pd-worktrees/DESKTOP-42'), 'tools.opencode.session_move({ directory: "/work/pd-worktrees/DESKTOP-42" })');
+  });
+
+  // A Windows path written bare in a JavaScript string loses its backslashes.
+  test('hands the directory over as it is, whatever it holds', () => {
+    for (const directory of [
+      '/work/pd-worktrees/DESKTOP-42',
+      'C:\\Users\\dev\\pd-worktrees\\DESKTOP-42',
+      '/work/a "quoted" name/DESKTOP-42',
+      '/work/with space/DESKTOP-42',
+      '/work/ünïcödé/DESKTOP-42',
+    ]) {
+      assert.deepEqual(received(moveCall(directory)), { directory }, directory);
     }
   });
 });

@@ -998,8 +998,9 @@ describe('the plugin directory comes from import.meta.url', () => {
 // names a session, the shape of a run's ID — belong to the harness, and they
 // changed when the harness did. lib/harness.js holds them and the rest of lib/
 // reads them from there, so that the next change is one file and not a search.
-// Comments count, as above: a comment that names the variable is where a second
-// reading of it starts.
+// The call the hooks and commands tell the model to make to move its session
+// is the harness's too, and changed with it. Comments count, as above: a
+// comment that names the variable is where a second reading of it starts.
 describe('harness identifiers have one owner', () => {
   const OWNER = 'lib/harness.js';
 
@@ -1009,6 +1010,8 @@ describe('harness identifiers have one owner', () => {
     ['CLAUDE_CODE_SESSION_ID', /\bCLAUDE_CODE_SESSION_ID\b/g],
     ['CLAUDE_PID', /\bCLAUDE_PID\b/g],
     ['ses_ (an Open Code session ID)', /\bses_/g],
+    ['tools.opencode.session_move (the call that moves a session)', /\btools\.opencode\.session_move\b/g],
+    ["EnterWorktree, ExitWorktree (Claude Code's tools for it)", /\b(?:Enter|Exit)Worktree\b/g],
   ];
 
   test(`no module of lib/ but ${OWNER} names one`, async () => {

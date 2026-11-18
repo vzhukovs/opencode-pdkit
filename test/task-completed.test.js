@@ -756,7 +756,13 @@ describe('re-anchoring', () => {
         assert.match(message, new RegExp(`this is the main checkout, standing on ${branch} — issue ${ISSUE}'s, triaged`));
         assert.match(message, new RegExp(`^ +git -C ${esc(WORKTREE)} switch main$`, 'm'));
         assert.match(message, new RegExp(`^ +pdkit worktree create --issue ${ISSUE} --branch ${branch}$`, 'm'));
-        assert.match(message, new RegExp(`EnterWorktree tool with path: ${esc(join(dirname(WORKTREE), 'pd-worktrees', `DESKTOP-${ISSUE}`))}$`, 'm'));
+        assert.match(
+          message,
+          new RegExp(
+            `^ +Then call the execute tool with tools\\.opencode\\.session_move\\(\\{ directory: ${esc(JSON.stringify(join(dirname(WORKTREE), 'pd-worktrees', `DESKTOP-${ISSUE}`)))} \\}\\)$`,
+            'm',
+          ),
+        );
         assert.doesNotMatch(message, /run {5}:/);
       } finally {
         await execFileAsync('git', ['symbolic-ref', 'HEAD', 'refs/heads/main'], { cwd: WORKTREE });

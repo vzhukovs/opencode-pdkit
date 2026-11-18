@@ -492,7 +492,8 @@ describe('the tasks an amendment writes', () => {
     assert.notEqual(out.code, 0);
     assert.match(out.stderr, /DESKTOP-18915 has no tree yet, and a task does not run in .*, the main checkout/);
     assert.match(out.stderr, /pdkit worktree create --issue 18915 --slug <slug>/);
-    assert.match(out.stderr, /EnterWorktree path: .*DESKTOP-18915/);
+    assert.match(out.stderr, /move the session there with the execute tool, and start the task again/);
+    assert.match(out.stderr, /^ {4}tools\.opencode\.session_move\(\{ directory: ".*DESKTOP-18915" \}\)$/m);
     assert.equal((await pdkit('task', 'show')).stdout, 'no task is running in any working tree\n');
   });
 

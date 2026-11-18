@@ -180,6 +180,18 @@ fixes — see [RELEASING.md](RELEASING.md).
   shared with the Claude Code version of the plugin, whose `agent-done`
   entries would otherwise keep the check green for a month while the hook in
   Open Code never ran; they are counted aside.
+- **The session moves into an issue's tree with `session_move`.** Where
+  Claude Code's hooks told Claude to call `EnterWorktree`, a pdkit command
+  typed outside its issue's tree, a session started in the main checkout on an
+  issue's branch, and `pdkit task start` with no tree yet now tell the model to
+  call the `execute` tool with
+  `tools.opencode.session_move({ directory: "<tree>" })`. The move takes
+  effect from the model's next step, and subagents started after it work in
+  the tree too. The commands that change a checkout are still shown to you
+  first. A session in one tree of the issue while its pull request's branch
+  is in another is still told to end, and you start `opencode` in the main
+  checkout, as you started `claude` there before: one session goes from the
+  fork into one tree.
 
 ### Removed
 
