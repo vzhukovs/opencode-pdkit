@@ -245,7 +245,8 @@ describe('the rule of 06-hooks.md for post-read, on the read and grep tools', ()
   });
 
   // Claude Code's Grep had two windows: context around a match, and a cap on
-  // the matches. The grep tool has the cap alone (F51).
+  // the matches. The grep tool has the cap alone (F51), and the rule names it
+  // by the tool's own parameter, the one a model widening it can pass.
   test('HK-15: a search the limit cut that ends inside a block gets the rule, in the result', async (t) => {
     const { ran: hooks, log } = await loaded(t);
     const lines = CUT.split('\n');
@@ -253,8 +254,8 @@ describe('the rule of 06-hooks.md for post-read, on the read and grep tools', ()
     const { before, now } = await hooked(hooks, grep({ pattern: 'env|appName', path: 'api.d.ts', limit: 2 }, lines, true));
 
     const said = added(before, now);
-    assert.equal(said, SAYS(['Grep head_limit 2'], matched(lines)));
-    assert.match(said, /`Grep head_limit 2`/);
+    assert.equal(said, SAYS(['grep limit 2'], matched(lines)));
+    assert.match(said, /`grep limit 2`/);
     assert.deepEqual(log(), []);
   });
 
@@ -451,7 +452,7 @@ describe('what only Open Code has', () => {
 
     const { before, now } = await hooked(hooks, grep({ pattern: 'export' }, lines, true));
 
-    assert.equal(added(before, now), SAYS(['Grep head_limit 100'], matched(lines)));
+    assert.equal(added(before, now), SAYS(['grep limit 100'], matched(lines)));
   });
 
   // Open Code strips the keys a model sends for context before any hook (F51,
@@ -484,7 +485,7 @@ describe('what only Open Code has', () => {
     const search = grep({ pattern: 'env', limit: 2 }, CUT.split('\n'), true);
     search.result.content = [text(`Found 2 matches\n/work/{weird}}/api.d.ts:\n  Line 1: ${CUT}`)];
     const grepCut = await hooked(hooks, search);
-    assert.equal(added(grepCut.before, grepCut.now), SAYS(['Grep head_limit 2'], matched(CUT.split('\n'))));
+    assert.equal(added(grepCut.before, grepCut.now), SAYS(['grep limit 2'], matched(CUT.split('\n'))));
   });
 
   // The read tool notes that lines follow, before the hook (F50); the rule

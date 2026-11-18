@@ -74,8 +74,16 @@ describe('readWindow', () => {
 describe('grepWindows', () => {
   test('names context options and an applied cap', () => {
     assert.deepEqual(grepWindows({ '-A': 60 }, {}), ['Grep -A 60']);
-    assert.deepEqual(grepWindows({ context: 5 }, { appliedLimit: 30 }), ['Grep -C 5', 'Grep head_limit 30']);
+    assert.deepEqual(grepWindows({ context: 5 }, { appliedLimit: 30 }), ['Grep -C 5', 'grep limit 30']);
     assert.deepEqual(grepWindows({}, {}), []);
+  });
+
+  // The window the rule tells the model to widen has to be one it can: the
+  // grep tool takes `limit`, and drops a key it does not have, `head_limit`
+  // included, before it runs (F51).
+  test("names the cap by the grep tool's own parameter", () => {
+    assert.deepEqual(grepWindows({ pattern: 'env' }, { appliedLimit: 100 }), ['grep limit 100']);
+    assert.doesNotMatch(grepWindows({ pattern: 'env' }, { appliedLimit: 100 }).join(), /head_limit/);
   });
 });
 

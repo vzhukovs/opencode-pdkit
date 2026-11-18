@@ -192,6 +192,12 @@ fixes — see [RELEASING.md](RELEASING.md).
   is in another is still told to end, and you start `opencode` in the main
   checkout, as you started `claude` there before: one session goes from the
   fork into one tree.
+- **A search cut inside a block is named by `grep`'s own `limit`.** When the
+  grep tool stops at its limit and the matches end inside an open block, the
+  rule the model gets names the window `grep limit <n>` instead of Claude
+  Code's `Grep head_limit <n>`. Open Code's grep drops a `head_limit` it does
+  not have, so a model widening the window by that name got the same matches
+  back.
 
 ### Removed
 
