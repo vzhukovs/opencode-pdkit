@@ -507,7 +507,10 @@ describe('a runner that gets no answer: pre-bash refuses, and every other hook l
   ]) {
     test(what, { skip }, async (t) => {
       const dir = await realpath(await mkdtemp(join(tmpdir(), 'pdkit-wiring-')));
-      t.after(() => rm(dir, { recursive: true, force: true }));
+      // The runner settles at its deadline without waiting for the process it
+      // stopped to be gone, and on Windows a process that is still going holds
+      // its working directory, here under `dir`: EBUSY for a moment.
+      t.after(() => rm(dir, { recursive: true, force: true, maxRetries: 10 }));
       for (const entry of ['opencode', 'lib', 'bin', 'defaults', 'agents', 'skills', 'package.json']) {
         await cp(join(ROOT, entry), join(dir, 'plugin', entry), { recursive: true });
       }
