@@ -44,6 +44,7 @@ import plugin from '../opencode/server.js';
 import { start, stop } from '../lib/active.js';
 import * as journal from '../lib/journal.js';
 import { setOwns, withdrawTask } from '../lib/state.js';
+import { logOf } from './helpers/server-log.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -132,12 +133,6 @@ const TOOLS = {
   edit: (path) => call('edit', { path, oldString: 'a', newString: 'b' }),
   patch: (path) => patchOf(`*** Update File: ${path}`, '@@', '-a', '+b'),
 };
-
-/** What setup() and the callbacks write to the server's stderr. */
-function logOf(t) {
-  const error = t.mock.method(console, 'error', () => {});
-  return () => error.mock.calls.map((entry) => entry.arguments.join(' '));
-}
 
 /** The write checks of the plugin in this checkout, loaded in `directory`. */
 async function loaded(t, directory) {
@@ -415,7 +410,7 @@ async function broken(t, files) {
     else await writeFile(file, typeof change === 'function' ? change(await readFile(file, 'utf8')) : change);
   }
   const copy = (await import(pathToFileURL(join(dir, 'opencode', 'server.js')).href)).default;
-  const log = logOf(t);
+  const log = logOf(t, { watch: false });
   const { ctx, check } = host(repo);
   await copy.setup(ctx);
   return { check, log };

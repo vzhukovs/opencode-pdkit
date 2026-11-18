@@ -21,7 +21,13 @@
 // What it protects: the same miss post-bash exists for, made through the
 // tools the model is told to prefer. A plain Read of a long declaration file
 // returns its first 2000 lines, and the newest namespace members are past
-// them. The payload shapes are Claude Code's documented tool responses.
+// them. The payload shapes are Claude Code's documented tool responses, which
+// the handler still reads: the hook bridge builds them from what Open Code's
+// read and grep returned (postRead() in opencode/bridge/payload.js) — a page
+// as Read's `file` with its `startLine`, `numLines` and `totalLines`, matches
+// cut at the limit as Grep's content mode with `appliedLimit`. The rest of
+// these shapes — Grep's -A/-B/-C, a Read cut at its token cap — Open Code's
+// tools never produce, and their cases stay for the handler as written.
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';

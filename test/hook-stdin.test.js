@@ -21,9 +21,16 @@
 // This is asserted against the real binary rather than against a function,
 // because the defect it guards lived between the two. `readHookPayload` was
 // four correct-looking lines, every handler had tests, and the first time the
-// plugin was installed for real it hung Claude Code at startup — the read
-// waited for the END of stdin while what a hook needs is the payload, and a
-// host that writes the JSON and keeps the pipe open is an ordinary host.
+// plugin was installed for real — in its Claude Code days, before the port to
+// Open Code — it hung Claude Code at startup: the read waited for the END of
+// stdin while what a hook needs is the payload, and a host that writes the
+// JSON and keeps the pipe open is an ordinary host.
+//
+// In Open Code the host of `pdkit hook` is the plugin's hook bridge, and it
+// ends the pipe once the payload is written (run() in lib/hooks/runner.js),
+// so no session waits on this today. The property is runHook's all the same:
+// `pdkit hook <event>` is a command any process can pipe a payload to, and
+// its protocol did not change with the host. So it stays pinned here.
 //
 // Two things had to be true for that to happen, so both are pinned here: the
 // decision has to be reached without waiting for the writer, and the process

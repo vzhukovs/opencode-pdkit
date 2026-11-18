@@ -50,6 +50,7 @@ import { writeReceipt } from '../lib/evidence.js';
 import { IMPLEMENTER, STALL_LIMIT, handle } from '../lib/hooks/task-completed.js';
 import { read as readJournal } from '../lib/journal.js';
 import { setOwns, transition } from '../lib/state.js';
+import { logOf } from './helpers/server-log.js';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const POSIX = process.platform !== 'win32';
@@ -214,12 +215,6 @@ const child = (id, agent = IMPLEMENTER, { parentID = PERSON, directory = repo } 
 
 /** The person's session: no parent, and no agent recorded (F54). */
 const person = (id = PERSON) => ({ id, projectID: 'global', title: 'Session', location: { directory: repo } });
-
-/** What setup() and the callbacks write to the server's stderr. */
-function logOf(t) {
-  const error = t.mock.method(console, 'error', () => {});
-  return () => error.mock.calls.map((entry) => entry.arguments.join(' '));
-}
 
 /** The plugin in this checkout, loaded, with the sessions given. */
 async function loaded(t, options) {
@@ -396,6 +391,20 @@ describe('the rules of 06-hooks.md for subagent-stop, on experimental.idle', () 
     const again = await stop(id);
     assert.equal(again.length, 1, 'the first stop of the next round is held again');
     assert.equal(again[0].text, first[0].text);
+  });
+
+  test('HK-21: after pdkit task unblock the implementer is held as before the ceiling', async (t) => {
+    await writeReceipt({ issue: ISSUE, taskId: 'T1', run: run({ exitCode: 1 }), home });
+    for (let i = 0; i < 3; i += 1) await recordAttempt({ issue: ISSUE, taskId: 'T1', exitCode: 1, home });
+    await unblockTask({ issue: ISSUE, taskId: 'T1', reason: 'plan amended: A1', home });
+    const reason = await said();
+    const { id, stop } = await oneImplementer(t);
+
+    const added = await stop(id);
+
+    heldWith(added, id, reason);
+    assert.match(reason, /valid receipt for a command that failed \(exit 1\)/);
+    assert.doesNotMatch(reason, /is blocked/);
   });
 
   // Agents of the host's own (Claude Code's prompt suggestions): Open Code
@@ -580,7 +589,7 @@ async function broken(t, files, options) {
     else await writeFile(file, typeof change === 'function' ? change(await readFile(file, 'utf8')) : change);
   }
   const copy = (await import(pathToFileURL(join(dir, 'opencode', 'server.js')).href)).default;
-  const log = logOf(t);
+  const log = logOf(t, { watch: false });
   const stand = host(options);
   await copy.setup(stand.ctx);
   return { ...stand, log };

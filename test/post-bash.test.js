@@ -150,9 +150,12 @@ describe('handle', () => {
 });
 
 describe('through bin/pdkit', () => {
-  // The handler can be right while nothing reaches the model: after a tool,
-  // Claude Code drops plain stdout into the debug log and passes on only
-  // additionalContext. This runs the real binary and reads what it prints.
+  // The handler can be right while nothing reaches the model. After a tool,
+  // Claude Code dropped plain stdout into its debug log and passed on only
+  // additionalContext, so runHook sends the message there; the hook bridge
+  // reads that field back (decide() in lib/hooks/runner.js) and adds it to
+  // the shell call's result (opencode/bridge/answer.js). This runs the real
+  // binary and reads what it prints.
   test('the message reaches the host as additionalContext', () => {
     const run = spawnSync('node', [BIN, 'hook', 'post-bash'], {
       input: JSON.stringify(payload('sed -n 1555,1600p loader.ts', CUT_NAMESPACE)),

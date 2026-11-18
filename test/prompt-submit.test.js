@@ -44,6 +44,7 @@ import { FAIL_CLOSED, HOOK_HANDLERS } from '../lib/hooks/events.js';
 import { argumentKind, handle, parseCommand } from '../lib/hooks/prompt-submit.js';
 import { escapeRegExp as esc } from '../lib/globs.js';
 import { transition } from '../lib/state.js';
+import { logOf } from './helpers/server-log.js';
 
 const execFileAsync = promisify(execFile);
 const git = (args, cwd) => execFileAsync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd });
@@ -416,7 +417,7 @@ describe('in Open Code: the prompt a pdkit command sends, through the hook bridg
    * typed, at the same moment; what the server's log got besides.
    */
   const both = async (t, command, args, cwd) => {
-    const error = t.mock.method(console, 'error', () => {});
+    const log = logOf(t);
     const { ctx, hooks } = host(cwd);
     const cleanup = await plugin.setup(ctx);
     t.after(() => cleanup?.());
@@ -424,7 +425,7 @@ describe('in Open Code: the prompt a pdkit command sends, through the hook bridg
     const event = sent(command, args);
     assert.equal(await hooks.get('prompt')(event), undefined);
     const typed = await handle({ prompt: `/${command} ${args}`.trimEnd(), cwd }, context());
-    return { event, texts: attached(event), message: typed.message, log: error.mock.calls.map((entry) => entry.arguments.join(' ')) };
+    return { event, texts: attached(event), message: typed.message, log: log() };
   };
 
   const withPullRequest = async () => {
@@ -494,7 +495,7 @@ describe('in Open Code: the prompt a pdkit command sends, through the hook bridg
   // A `/pd:` line that arrives as text was not run as a command — what
   // `opencode run` sends (F78) — and the hook looks at nothing unlabeled (D6).
   test('the same line as text, without the label, gets nothing', async (t) => {
-    const error = t.mock.method(console, 'error', () => {});
+    const log = logOf(t);
     const { ctx, hooks } = host(MAIN);
     const cleanup = await plugin.setup(ctx);
     t.after(() => cleanup?.());
@@ -503,7 +504,7 @@ describe('in Open Code: the prompt a pdkit command sends, through the hook bridg
     await hooks.get('prompt')(event);
 
     assert.deepEqual(event.prompt, { text: `/pd:preflight ${AWAY}` });
-    assert.deepEqual(error.mock.calls, []);
+    assert.deepEqual(log(), []);
   });
 });
 

@@ -48,6 +48,7 @@ import { record as recordAttempt, unblock as unblockTask } from '../lib/attempts
 import { issueDir, paths } from '../lib/config.js';
 import { handle } from '../lib/hooks/session-start.js';
 import { setOwns, transition } from '../lib/state.js';
+import { assertNoNotice, logOf, watchNotices } from './helpers/server-log.js';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const POSIX = process.platform !== 'win32';
@@ -236,12 +237,6 @@ function stream(options, streams) {
   };
 }
 
-/** What setup() and the callbacks write to the server's stderr. */
-function logOf(t) {
-  const error = t.mock.method(console, 'error', () => {});
-  return () => error.mock.calls.map((entry) => entry.arguments.join(' '));
-}
-
 /** The plugin in this checkout, loaded, with the sessions given. */
 async function loaded(t, options) {
   const log = logOf(t);
@@ -255,8 +250,9 @@ async function loaded(t, options) {
  * starts and does not wait on — a compaction on the stream — called and
  * waited on here.
  */
-function bridgeOf(options) {
+function bridgeOf(t, options) {
   const lines = [];
+  watchNotices(t, lines);
   const stand = host(options);
   const bridge = createBridge(stand.ctx, { root: ROOT, settings: { models: {} }, log: (line) => lines.push(line) });
   return { ...stand, bridge, log: () => lines };
@@ -433,9 +429,9 @@ describe('when it runs', () => {
     assert.deepEqual(log(), []);
   });
 
-  test('after a compaction whose summary is now empty: the entry is withdrawn', async () => {
+  test('after a compaction whose summary is now empty: the entry is withdrawn', async (t) => {
     await stopTask({ worktree: repo, home });
-    const { bridge, done } = bridgeOf({ sessions: { [PERSON]: ran() } });
+    const { bridge, done } = bridgeOf(t, { sessions: { [PERSON]: ran() } });
 
     await bridge.startOnCompaction({ type: 'session.compaction.ended', data: { sessionID: PERSON } });
     assert.deepEqual(done, [{ op: 'remove', sessionID: PERSON, key: KEY }]);
@@ -443,9 +439,9 @@ describe('when it runs', () => {
 
   // Every loaded instance sees every session's events (F137): the one of the
   // session's directory runs it, once.
-  test("not after a compaction of another directory's session: that instance runs it", async () => {
+  test("not after a compaction of another directory's session: that instance runs it", async (t) => {
     await tokens();
-    const { bridge, done, log } = bridgeOf({ sessions: { [PERSON]: ran(PERSON, { directory: linked }) } });
+    const { bridge, done, log } = bridgeOf(t, { sessions: { [PERSON]: ran(PERSON, { directory: linked }) } });
 
     await bridge.startOnCompaction({ type: 'session.compaction.ended', data: { sessionID: PERSON } });
     assert.deepEqual(done, []);
@@ -453,9 +449,9 @@ describe('when it runs', () => {
     assert.equal((await outstanding()).length, 2, 'no process');
   });
 
-  test("not after a subagent's compaction", async () => {
+  test("not after a subagent's compaction", async (t) => {
     const child = 'ses_child';
-    const { bridge, done, log } = bridgeOf({ sessions: { [child]: ran(child, { parentID: PERSON }) } });
+    const { bridge, done, log } = bridgeOf(t, { sessions: { [child]: ran(child, { parentID: PERSON }) } });
 
     await bridge.startOnCompaction({ type: 'session.compaction.ended', data: { sessionID: child } });
     assert.deepEqual(done, []);
@@ -463,8 +459,8 @@ describe('when it runs', () => {
   });
 
   // Asked of the host; not relied on. A compaction that failed changed nothing.
-  test('not on any other event the stream sends', async () => {
-    const { bridge, done, looked } = bridgeOf({ sessions: { [PERSON]: ran() } });
+  test('not on any other event the stream sends', async (t) => {
+    const { bridge, done, looked } = bridgeOf(t, { sessions: { [PERSON]: ran() } });
 
     for (const type of ['session.compaction.started', 'session.compaction.failed', 'session.execution.succeeded']) {
       await bridge.startOnCompaction({ type, data: { sessionID: PERSON } });
@@ -500,7 +496,7 @@ async function broken(t, files, options) {
     else await writeFile(file, typeof change === 'function' ? change(await readFile(file, 'utf8')) : change);
   }
   const copy = (await import(pathToFileURL(join(dir, 'opencode', 'server.js')).href)).default;
-  const log = logOf(t);
+  const log = logOf(t, { watch: false });
   const stand = host(options);
   await copy.setup(stand.ctx);
   return { ...stand, log };
@@ -596,6 +592,9 @@ describe('no answer leaves the entry as it was, lets the prompt through, and say
 
     instructed(await prompt(PERSON), PERSON, 'pdkit: a summary');
     assert.deepEqual(log(), ['opencode-pdkit: session-start notice, which reaches no one here: pdkit: a line for the person']);
+    // The line the watch on the plugin as it is fails on (D12): here a
+    // stand-in handler said it, and the copy is not watched.
+    assert.throws(() => assertNoNotice(log()), /D12/);
   });
 
   test('a session that cannot be looked up', async (t) => {

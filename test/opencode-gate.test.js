@@ -42,6 +42,7 @@ import { refusal } from '../lib/hooks/runner.js';
 import * as gate from '../lib/gate.js';
 import * as journal from '../lib/journal.js';
 import { BRANCH, otherRepository, podmanDesktopClone, readyIssue } from './helpers/gate-fixture.js';
+import { logOf } from './helpers/server-log.js';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const POSIX = process.platform !== 'win32';
@@ -104,12 +105,6 @@ function host(directory = repo) {
 const call = (input, tool = 'shell') => ({ tool, sessionID: 'ses_gate', agent: 'build', messageID: 'msg_gate', id: 'call_gate', input });
 const shell = (command, fields = {}) => call({ command, ...fields });
 
-/** What setup() and the gate write to the server's stderr. */
-function logOf(t) {
-  const error = t.mock.method(console, 'error', () => {});
-  return () => error.mock.calls.map((entry) => entry.arguments.join(' '));
-}
-
 /** The gate of the plugin in this checkout, loaded in `directory`. */
 async function loaded(t, directory) {
   const log = logOf(t);
@@ -149,12 +144,23 @@ describe('the rules of 06-hooks.md for pre-bash', () => {
     await check(shell('gh pr comment 17577 --body y'));
   });
 
+  test('a write to a pull request: a push token is no consent to it, nor a reply token for another one', async (t) => {
+    const { check } = await loaded(t);
+    await gate.open({ issue: 2001, branch: BRANCH, home });
+    await gate.open({ issue: 2002, pr: 17577, kind: 'reply', home });
+
+    await assert.rejects(check(shell('gh pr review 17578 --approve')), refuses(/no consent token for reply #17578/));
+    await assert.rejects(check(shell('gh pr merge 17578 --squash')), refuses(/no consent token for reply #17578/));
+    assert.equal((await gate.verify({ branch: BRANCH, home })).valid, true, 'the push token is left as it was');
+  });
+
   test('a write to the tracker: refused whatever token exists', async (t) => {
     const { check } = await loaded(t);
     await gate.open({ issue: 2002, pr: 17577, kind: 'reply', home });
 
     await assert.rejects(check(shell('gh issue comment 17221 --body x')), refuses(/human action/));
     await assert.rejects(check(shell('gh issue create --title x')), refuses(/someone else’s tracker/));
+    await assert.rejects(check(shell('gh issue close 17221')), refuses(/someone else’s tracker/));
   });
 
   test('a force push without a lease: refused even with a token', async (t) => {
@@ -162,6 +168,10 @@ describe('the rules of 06-hooks.md for pre-bash', () => {
     await gate.open({ issue: 2001, branch: BRANCH, home });
 
     await assert.rejects(check(shell(`git push --force origin ${BRANCH}`)), refuses(/--force is never allowed/));
+    await assert.rejects(check(shell('git push -f')), refuses(/--force is never allowed/));
+    // A later --force undoes the lease before it.
+    await assert.rejects(check(shell(`git push --force-with-lease --force origin ${BRANCH}`)), refuses(/--force is never allowed/));
+    assert.equal((await gate.verify({ branch: BRANCH, home })).valid, true, 'the token is not spent on a refusal');
   });
 
   test('git add -A and git add .: refused, with the paths to list instead', async (t) => {
@@ -169,18 +179,23 @@ describe('the rules of 06-hooks.md for pre-bash', () => {
 
     await assert.rejects(check(shell('git add -A')), refuses(/List the paths explicitly/));
     await assert.rejects(check(shell('git add .')), refuses(/List the paths explicitly/));
+    for (const command of ['git add --all', 'git add :/', 'git add -uA']) {
+      await assert.rejects(check(shell(command)), refuses(/List the paths explicitly/), command);
+    }
   });
 
   test('git rebase -i: refused, with git reset --soft instead', async (t) => {
     const { check } = await loaded(t);
 
     await assert.rejects(check(shell('git rebase -i main')), refuses(/git reset --soft <base>/));
+    await assert.rejects(check(shell('git rebase --interactive main')), refuses(/git reset --soft <base>/));
   });
 
   test('git commit --no-verify: refused', async (t) => {
     const { check } = await loaded(t);
 
     await assert.rejects(check(shell('git commit --no-verify -m x')), refuses(/--no-verify skips the hooks/));
+    await assert.rejects(check(shell('git commit -n -m x')), refuses(/--no-verify skips the hooks/));
   });
 
   test('ordinary work runs', async (t) => {
@@ -213,6 +228,93 @@ describe('the rules of 06-hooks.md for pre-bash', () => {
       log()[0],
       /^opencode-pdkit: pre-bash message, which reaches no one here: pdkit: the gate guards podman-desktop, and this is not it — .*someone\/podman-desktop-kit/,
     );
+  });
+});
+
+// The rules of pre-bash that 06-hooks.md states in its prose, or that only
+// the code has (parity-matrix §3.2), through the same callback.
+describe('the rules of pre-bash beyond the table of 06-hooks.md', () => {
+  // HK-25: the token for the push in front is no consent for the comment
+  // behind it.
+  test('a denied command anywhere in the line refuses the line, before any token is asked', async (t) => {
+    const { check } = await loaded(t);
+    await gate.open({ issue: 2001, branch: BRANCH, home });
+
+    await assert.rejects(
+      check(shell(`git push origin ${BRANCH} && gh issue comment 17221 --body x`)),
+      refuses(/^pdkit: Commenting on an upstream issue is a human action\.[\s\S]*\n  command: gh issue comment 17221 --body x$/),
+    );
+    assert.equal((await gate.verify({ branch: BRANCH, home })).valid, true, 'the push in front spent nothing');
+  });
+
+  // HK-26: the line reaches the handler as the model wrote it, and the
+  // handler reads what the shell would run.
+  test('a push is found however the line wraps it', async (t) => {
+    const { check } = await loaded(t);
+
+    for (const command of [
+      'GIT_TRACE=1 git push',
+      'pnpm test:unit && git push',
+      'false || git push',
+      'git status; git push',
+      'pnpm test:unit\ngit push',
+      'git status | cat; git push',
+      'echo $(git push)',
+      'echo `git push`',
+      '(git push)',
+      '{ git push; }',
+      '/usr/bin/git push',
+      '"git" push',
+      'nohup git push',
+      'env git push',
+      'git -c core.askPass=x push',
+    ]) {
+      await assert.rejects(check(shell(command)), refuses(/no consent token for push DESKTOP-2001\/fix-the-thing/), command);
+    }
+  });
+
+  test('a push that is only data in the line is not one', async (t) => {
+    const { check } = await loaded(t);
+
+    for (const command of ['echo "git push"', "cat <<'EOF'\ngit push\nEOF"]) await check(shell(command));
+  });
+
+  // HK-28: a raw mutation carries a thread's ID and no pull request's number,
+  // so there is no token to hold it to — not even the one that exists.
+  test('a mutation that names no pull request is refused with the command that does work', async (t) => {
+    const { check } = await loaded(t);
+    await gate.open({ issue: 2002, pr: 17577, kind: 'reply', home });
+
+    for (const command of [
+      `gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "x"}) { thread { id } } }'`,
+      'gh api -X POST repos/podman-desktop/podman-desktop/pulls/17577/comments -f body=x',
+    ]) {
+      await assert.rejects(check(shell(command)), refuses(/does not name a pull request[\s\S]*\n  use: pdkit pr reply --pr <number>/), command);
+    }
+    // A read through gh api is not a write.
+    await check(shell(`gh api graphql -f query='query { viewer { login } }'`));
+    await check(shell('gh api repos/podman-desktop/podman-desktop/pulls/17577'));
+  });
+
+  // HK-29: one consent, two writes — the push and the pull request it
+  // exists to open — each spent once.
+  test('the push spends its half of the token, and the pull request keeps the other', async (t) => {
+    const { check } = await loaded(t);
+    await gate.open({ issue: 2001, branch: BRANCH, home });
+
+    await check(shell('git push'));
+
+    assert.equal((await gate.verify({ branch: BRANCH, use: 'pr', home })).valid, true, 'the pull request half survives the push');
+    await assert.rejects(check(shell('git push')), refuses(/already pushed/));
+  });
+
+  test('a pull request opened on the consent leaves no push behind it', async (t) => {
+    const { check } = await loaded(t);
+    await gate.open({ issue: 2001, branch: BRANCH, home });
+    // What `pdkit pr create` spends, in lib/gh.js, where no hook looks.
+    assert.equal((await gate.close(BRANCH, { home, use: 'pr' })).ok, true);
+
+    await assert.rejects(check(shell('git push')), refuses(/already spent/));
   });
 });
 
@@ -283,7 +385,7 @@ async function broken(t, files) {
     else await writeFile(file, typeof change === 'function' ? change(await readFile(file, 'utf8')) : change);
   }
   const copy = (await import(pathToFileURL(join(dir, 'opencode', 'server.js')).href)).default;
-  const log = logOf(t);
+  const log = logOf(t, { watch: false });
   const { ctx, gate: check } = host(repo);
   await copy.setup(ctx);
   return { check, log };

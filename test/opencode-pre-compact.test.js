@@ -48,6 +48,7 @@ import { start, stop as stopTask } from '../lib/active.js';
 import { issueDir } from '../lib/config.js';
 import { read as readJournal } from '../lib/journal.js';
 import { setOwns, transition } from '../lib/state.js';
+import { assertNoNotice, logOf } from './helpers/server-log.js';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const POSIX = process.platform !== 'win32';
@@ -217,12 +218,6 @@ function host({ directory = repo, sessions = {}, fail = {} } = {}) {
   };
 }
 
-/** What setup() and the callbacks write to the server's stderr. */
-function logOf(t) {
-  const error = t.mock.method(console, 'error', () => {});
-  return () => error.mock.calls.map((entry) => entry.arguments.join(' '));
-}
-
 /** The plugin in this checkout, loaded in the stand-in's directory. */
 async function loaded(t, options) {
   const log = logOf(t);
@@ -250,7 +245,7 @@ async function broken(t, files, options) {
     else await writeFile(file, typeof change === 'function' ? change(await readFile(file, 'utf8')) : change);
   }
   const copy = (await import(pathToFileURL(join(dir, 'opencode', 'server.js')).href)).default;
-  const log = logOf(t);
+  const log = logOf(t, { watch: false });
   const stand = host(options);
   const cleanup = await copy.setup(stand.ctx);
   t.after(() => cleanup?.());
@@ -438,6 +433,10 @@ describe('no answer lets the compaction go on, and says why', () => {
       'opencode-pdkit: pre-compact message, which reaches no one here: pdkit: for the model',
       'opencode-pdkit: pre-compact notice, which reaches no one here: pdkit: for the person',
     ]);
+    // The watch on the plugin as it is (D12) fails on the notice, and on
+    // nothing else: a stand-in handler said it, and the copy is not watched.
+    assert.throws(() => assertNoNotice(log()), /D12/);
+    assertNoNotice(log().slice(0, 1));
   });
 
   test('an instance without a directory', async (t) => {

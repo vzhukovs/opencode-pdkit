@@ -50,6 +50,7 @@ import { promisify } from 'node:util';
 import plugin from '../opencode/server.js';
 import { PLUGIN_ROOT } from '../lib/commands/support.js';
 import { spdxHeader } from '../lib/upstream.js';
+import { logOf } from './helpers/server-log.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -155,12 +156,6 @@ function host(directory = repo) {
       return event;
     },
   };
-}
-
-/** What setup() and the callbacks write to the server's stderr. */
-function logOf(t) {
-  const error = t.mock.method(console, 'error', () => {});
-  return () => error.mock.calls.map((entry) => entry.arguments.join(' '));
 }
 
 /** The post hooks of the plugin in this checkout, loaded in `directory`. */
@@ -564,7 +559,7 @@ async function broken(t, files) {
     else await writeFile(file, typeof change === 'function' ? change(await readFile(file, 'utf8')) : change);
   }
   const copy = (await import(pathToFileURL(join(dir, 'opencode', 'server.js')).href)).default;
-  const log = logOf(t);
+  const log = logOf(t, { watch: false });
   const { ctx, ran: hooks } = host(repo);
   await copy.setup(ctx);
   return { ran: hooks, log };
