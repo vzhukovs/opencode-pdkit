@@ -23,16 +23,23 @@
 // would be asking the user to read out a value they are standing inside — but
 // reading it means the two ways of getting it wrong have to be caught here,
 // because both produce a plausible-looking slug: no remote to read, and a
-// clone of upstream that was never forked at all.
+// clone of upstream that was never forked at all. And what it does not do:
+// write anything into the fork.
 
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 
 import { adoptFork } from '../lib/cli.js';
-import { SETTINGS_FILE, familyOf, lastModelIn, sessionModel, writeModel } from '../lib/session-model.js';
+import { familyOf, lastModelIn } from '../lib/session-model.js';
+
+const exec = promisify(execFile);
+const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'pdkit');
 
 const CONFIG_TEXT = [
   'repo:',
@@ -106,141 +113,109 @@ describe('reading the fork from the clone', () => {
   });
 });
 
-// The other thing init writes into the fork: the model a fresh `claude` starts
-// on. settings.json is podman-desktop's own tracked file, so the one thing that
-// must never happen is a write to it; the second is losing the permission rules
-// settings.local.json already holds.
-describe('the session model in the fork', () => {
+// What `pdkit init` leaves in the fork: nothing. Claude Code's version wrote
+// the session's default model into .claude/settings.local.json there; in Open
+// Code each /pd: command switches the session to its own model, so there is
+// no default to keep, and Open Code's project config would be a file git sees.
+// The file Claude Code's version wrote is left as it is: that version reads it.
+describe('the fork after pdkit init', () => {
   let fork;
+  const homes = [];
+  const local = () => join(fork, '.claude', 'settings.local.json');
 
-  const LOCAL = {
-    permissions: { allow: ['Bash(pnpm test:*)', 'Bash(git status)'], deny: [] },
-    enabledMcpjsonServers: ['playwright'],
+  const git = (args) => exec('git', args, { cwd: fork });
+
+  // The suite's own environment: a git or pdkit variable of the developer's
+  // would otherwise reach the command.
+  const env = (home) => {
+    const own = { ...process.env, PDKIT_HOME: home };
+    for (const name of Object.keys(own)) if (/^(GIT_|CLAUDE_)/.test(name)) delete own[name];
+    return own;
   };
 
-  const local = () => join(fork, '.claude', 'settings.local.json');
-  const tracked = () => join(fork, '.claude', 'settings.json');
+  async function init(...args) {
+    const home = await mkdtemp(join(tmpdir(), 'pdkit-init-home-'));
+    homes.push(home);
+    const { stdout } = await exec(process.execPath, [BIN, 'init', ...args], { cwd: fork, env: env(home) });
+    return stdout;
+  }
+
+  /** Every file of the working tree with what it holds; .git is git's. */
+  async function tree(dir = fork, prefix = '') {
+    const found = {};
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      if (prefix === '' && entry.name === '.git') continue;
+      const name = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) Object.assign(found, await tree(join(dir, entry.name), name));
+      else found[name] = await readFile(join(dir, entry.name), 'utf8');
+    }
+    return found;
+  }
+
+  const status = async () => (await git(['status', '--porcelain', '--ignored', '--untracked-files=all'])).stdout;
 
   before(async () => {
-    fork = await mkdtemp(join(tmpdir(), 'pdkit-init-settings-'));
+    fork = await mkdtemp(join(tmpdir(), 'pdkit-init-files-'));
+    await git(['init', '-q', '-b', 'main']);
+    await git(['remote', 'add', 'origin', 'git@github.com:jdoe/podman-desktop.git']);
+    await git(['remote', 'add', 'upstream', 'git@github.com:podman-desktop/podman-desktop.git']);
+    await mkdir(join(fork, 'packages', 'main'), { recursive: true });
+    await writeFile(join(fork, 'pnpm-workspace.yaml'), 'packages:\n  - packages/*\n');
+    await writeFile(join(fork, 'packages', 'main', 'package.json'), '{ "name": "@example/main" }\n');
+    await mkdir(join(fork, '.claude'));
+    await writeFile(join(fork, '.claude', 'settings.json'), '{\n  "upstream": true\n}\n');
+    await git(['add', 'pnpm-workspace.yaml', 'packages', '.claude']);
+    await git(['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'init']);
   });
 
   after(async () => {
     await rm(fork, { recursive: true, force: true });
+    for (const home of homes) await rm(home, { recursive: true, force: true });
   });
 
-  async function seed(text) {
-    await rm(join(fork, '.claude'), { recursive: true, force: true });
-    await mkdir(join(fork, '.claude'), { recursive: true });
-    await writeFile(tracked(), '{\n  "upstream": true\n}\n');
-    if (text !== undefined) await writeFile(local(), text);
-  }
+  test('creates no file in it and changes none, tracked or not', async () => {
+    const files = await tree();
+    const before = await status();
 
-  test('goes into settings.local.json, and settings.json is not touched', async () => {
-    await seed(`${JSON.stringify(LOCAL, null, 2)}\n`);
+    const out = await init();
 
-    const result = await writeModel({ repoRoot: fork, model: 'sonnet' });
-
-    assert.equal(SETTINGS_FILE, join('.claude', 'settings.local.json'));
-    assert.equal(result.path, local());
-    assert.equal(await readFile(tracked(), 'utf8'), '{\n  "upstream": true\n}\n', 'the tracked file is upstream\'s');
+    assert.match(out, /^pdkit initialized$/m);
+    assert.match(out, /^ {2}package map : 1 packages$/m, 'it did read the clone');
+    assert.deepEqual(await tree(), files);
+    assert.equal(await status(), before);
   });
 
-  test('the keys already there survive, in their order and indentation', async () => {
-    await seed(`${JSON.stringify(LOCAL, null, 4)}\n`);
+  test('says where the models come from, in place of a model and an effort', async () => {
+    const out = await init();
 
-    const result = await writeModel({ repoRoot: fork, model: 'sonnet' });
-
-    assert.equal(result.action, 'added');
-    const text = await readFile(local(), 'utf8');
-    assert.deepEqual(JSON.parse(text), { ...LOCAL, model: 'sonnet' });
-    assert.deepEqual(Object.keys(JSON.parse(text)), ['permissions', 'enabledMcpjsonServers', 'model']);
-    assert.match(text, /^ {4}"permissions"/m, 'four-space indentation is kept, not reflowed to two');
-    assert.ok(text.endsWith('}\n'));
+    assert.match(out, /^ {2}models {6}: each \/pd: command sets its own — `pdkit doctor` lists them$/m);
+    assert.doesNotMatch(out, /^ {2}(model|effort) +:/m);
   });
 
-  test('a model already there is kept without --force, and named', async () => {
-    await seed(JSON.stringify({ ...LOCAL, model: 'opus' }, null, 2));
-    const before = await readFile(local(), 'utf8');
+  test('--json reports no settings', async () => {
+    const report = JSON.parse(await init('--json'));
 
-    const kept = await writeModel({ repoRoot: fork, model: 'sonnet' });
-
-    assert.equal(kept.action, 'kept');
-    assert.equal(kept.previous, 'opus');
-    assert.equal(await readFile(local(), 'utf8'), before, 'not even reformatted');
-
-    const replaced = await writeModel({ repoRoot: fork, model: 'sonnet', force: true });
-
-    assert.equal(replaced.action, 'replaced');
-    assert.equal(replaced.previous, 'opus');
-    assert.equal(JSON.parse(await readFile(local(), 'utf8')).model, 'sonnet');
+    assert.deepEqual(Object.keys(report).sort(), ['configCreated', 'fork', 'home', 'packages', 'repo', 'warnings']);
   });
 
-  test('a missing file is created with the one key', async () => {
-    await rm(join(fork, '.claude'), { recursive: true, force: true });
+  test("the settings.local.json Claude Code's version wrote is left as it is, with --force too", async () => {
+    await writeFile(local(), `${JSON.stringify({ permissions: { allow: ['Bash(git status)'] }, model: 'opus' }, null, 2)}\n`);
+    const files = await tree();
 
-    const result = await writeModel({ repoRoot: fork, model: 'sonnet' });
+    await init();
+    await init('--force');
 
-    assert.equal(result.action, 'created');
-    assert.equal(await readFile(local(), 'utf8'), '{\n  "model": "sonnet"\n}\n');
-    await assert.rejects(stat(tracked()), { code: 'ENOENT' }, 'creating .claude/ is not a reason to create settings.json');
+    assert.deepEqual(await tree(), files);
   });
 
-  // The file holds the person's permission rules. Reading it as empty and
-  // writing `{"model": ...}` over it is the failure that loses all of them.
-  test('invalid JSON is refused plainly, and the file is left as it was', async () => {
-    await seed('{ "permissions": { "allow": [ } ');
+  // It used to refuse here, so as not to lose the permission rules in it.
+  // Nothing reads it now, so nothing refuses over it.
+  test('an invalid one no longer stops it', async () => {
+    await writeFile(local(), '{ "permissions": { "allow": [ } ');
+    const files = await tree();
 
-    const result = await writeModel({ repoRoot: fork, model: 'sonnet' });
-
-    assert.equal(result.ok, false);
-    assert.match(result.error, /settings\.local\.json is not valid JSON/);
-    assert.equal(await readFile(local(), 'utf8'), '{ "permissions": { "allow": [ } ');
-  });
-});
-
-describe('the model the skills declare', () => {
-  let plugin;
-
-  before(async () => {
-    plugin = await mkdtemp(join(tmpdir(), 'pdkit-session-model-'));
-  });
-
-  after(async () => {
-    await rm(plugin, { recursive: true, force: true });
-  });
-
-  async function skill(name, lines) {
-    await mkdir(join(plugin, 'skills', name), { recursive: true });
-    await writeFile(join(plugin, 'skills', name, 'SKILL.md'), `---\nname: ${name}\n${lines.join('\n')}\n---\n\nBody.\n`);
-  }
-
-  test('the majority of orchestrating skills, counted from frontmatter', async () => {
-    await skill('a', ['disable-model-invocation: true', 'model: sonnet']);
-    await skill('b', ['disable-model-invocation: true', 'model: sonnet']);
-    await skill('c', ['disable-model-invocation: true', 'model: opus']);
-    // Phrase-triggered skills are not phases, and do not get a vote.
-    await skill('d', ['model: opus']);
-    await skill('e', ['model: opus']);
-
-    assert.deepEqual(await sessionModel(plugin), { model: 'sonnet', counts: { sonnet: 2, opus: 1 } });
-  });
-
-  test('a tie names no model rather than picking one', async () => {
-    await skill('f', ['disable-model-invocation: true', 'model: opus']);
-
-    assert.equal((await sessionModel(plugin)).model, null);
-  });
-
-  test("a model in Open Code's form is a vote for its family", async () => {
-    await skill('g', ['disable-model-invocation: true', 'model: claude-agent/sonnet#medium']);
-
-    assert.deepEqual(await sessionModel(plugin), { model: 'sonnet', counts: { sonnet: 3, opus: 2 } });
-  });
-
-  // Against the real skills/: what init writes today.
-  test('the shipped skills give sonnet', async () => {
-    assert.equal((await sessionModel()).model, 'sonnet');
+    assert.match(await init(), /^pdkit initialized$/m);
+    assert.deepEqual(await tree(), files);
   });
 });
 

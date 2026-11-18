@@ -518,28 +518,31 @@ describe('the model of each phase a state leads to', () => {
     const { report } = await register();
     const byName = new Map(report.commands.map((command) => [command.name, command]));
     for (const name of phases()) {
-      const declared = await skillModel(name);
-      const ref = modelRef(declared);
+      const ref = modelRef(await skillModel(name));
       if (ref) {
         assert.deepEqual(byName.get(`${PREFIX}${name}`).model?.ref, ref, name);
       } else {
         // TODO(T6.01–T6.24): no command is left on this branch once each
         // one's model: is provider/model#variant (decisions/T5.B).
-        assert.match(declared, /^(opus|sonnet|haiku)$/, name);
-        assert.equal(report.unread.includes(`skills/${name}/SKILL.md: model ${JSON.stringify(declared)} is not provider/model#variant`), true, name);
+        const unread = report.unread.find((line) => line.startsWith(`skills/${name}/SKILL.md: `));
+        assert.match(unread ?? '', /: model "(opus|sonnet|haiku)" is not provider\/model#variant$/, name);
       }
     }
   });
 
-  test('it is read from the frontmatter, in either form', async () => {
+  test("it is read from the frontmatter in Open Code's form, and a Claude Code alias is none", async () => {
     const root = await plugin({
       ported: skill(['name: ported', 'model: claude-agent/sonnet#medium']),
       quoted: skill(['name: quoted', "model: 'claude-agent/opus'"]),
+      nested: skill(['name: nested', 'model: openrouter/anthropic/claude-sonnet#high']),
       alias: skill(['name: alias', 'model: sonnet']),
+      variants: skill(['name: variants', 'model: claude-agent/sonnet#high#max']),
     });
     assert.equal(await skillModel('ported', root), 'claude-agent/sonnet#medium');
     assert.equal(await skillModel('quoted', root), 'claude-agent/opus');
-    assert.equal(await skillModel('alias', root), 'sonnet');
+    assert.equal(await skillModel('nested', root), 'openrouter/anthropic/claude-sonnet#high');
+    assert.equal(await skillModel('alias', root), null);
+    assert.equal(await skillModel('variants', root), null);
   });
 
   test('a skill without the field gives none, and its command switches nothing', async () => {

@@ -35,10 +35,9 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { cleanup, commitAll, initRepo } from './helpers/repo-fixture.js';
-import { GATE_PROBES, RETIRED_KEYS, checkAgentRuns, checkHooks, checkNode, checkSessionModel, diagnose, gateSelftest, mcpServers, playwrightCdp } from '../lib/doctor.js';
+import { GATE_PROBES, RETIRED_KEYS, checkAgentRuns, checkHooks, checkNode, diagnose, gateSelftest, mcpServers, playwrightCdp } from '../lib/doctor.js';
 import { HOOK_HANDLERS } from '../lib/hooks/events.js';
 import { append as appendJournal } from '../lib/journal.js';
-import { sessionModel } from '../lib/session-model.js';
 import { WRAPPERS } from '../lib/hooks/command-parse.js';
 import { create } from '../lib/worktree.js';
 
@@ -501,60 +500,29 @@ describe('reading what claude mcp list says', () => {
   });
 });
 
-// The copy of the session model `pdkit init` wrote into the fork, measured
-// against the frontmatter it was counted from. Every outcome is a warning at
-// worst: the default is a convenience, not something the rest depends on.
+// Claude Code's version checked the model `pdkit init` wrote into the fork's
+// .claude/settings.local.json against the skills' frontmatter. Nothing writes
+// one now — each /pd: command switches the session to its own model — so
+// there is no copy to fall behind, and the file Claude Code's version left
+// there is that version's business.
 describe('the session model in the fork', () => {
   let fork;
-  let expected;
-
-  const write = async (settings) => {
-    await mkdir(join(fork, '.claude'), { recursive: true });
-    await writeFile(join(fork, '.claude', 'settings.local.json'), JSON.stringify(settings, null, 2));
-  };
 
   before(async () => {
-    fork = await mkdtemp(join(tmpdir(), 'pdkit-doctor-settings-'));
-    expected = (await sessionModel()).model;
+    fork = await initRepo('pdkit-doctor-settings-');
+    await mkdir(join(fork, '.claude'), { recursive: true });
+    await writeFile(join(fork, '.claude', 'settings.local.json'), JSON.stringify({ model: 'opus' }, null, 2));
   });
 
   after(async () => {
-    await rm(fork, { recursive: true, force: true });
+    await cleanup(fork);
   });
 
-  test('the model the skills declare is green', async () => {
-    await write({ permissions: { allow: [] }, model: expected });
-
-    const result = find(await checkSessionModel({ repoRoot: fork }), 'settings:model');
-
-    assert.equal(result.level, 'optional');
-    assert.equal(result.status, 'ok');
-  });
-
-  test('a different one warns, and says how it got there', async () => {
-    await write({ model: expected === 'opus' ? 'sonnet' : 'opus' });
-
-    const result = find(await checkSessionModel({ repoRoot: fork }), 'settings:model');
-
-    assert.equal(result.status, 'warn');
-    assert.match(result.detail, new RegExp(`the skills now say ${expected}`));
-    assert.match(result.detail, /after `pdkit init` wrote the default/);
-  });
-
-  test('no key warns too, and names the command', async () => {
-    await write({ permissions: { allow: [] } });
-
-    const result = find(await checkSessionModel({ repoRoot: fork }), 'settings:model');
-
-    assert.equal(result.status, 'warn');
-    assert.match(result.detail, /names no model/);
-    assert.match(result.detail, /run `pdkit init`/);
-  });
-
-  test('is part of the full report', async () => {
+  test('is not checked, and a model left there by Claude Code says nothing', async () => {
     const report = await diagnose({ cwd: fork, pluginRoot: process.cwd() });
 
-    assert.ok(find(report.checks, 'settings:model'));
+    assert.equal(find(report.checks, 'settings:model'), undefined);
+    assert.deepEqual(report.checks.filter((entry) => /settings\.local\.json/.test(entry.detail ?? '')), []);
   });
 });
 

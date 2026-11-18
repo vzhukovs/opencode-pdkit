@@ -130,6 +130,23 @@ fixes — see [RELEASING.md](RELEASING.md).
   compares the whole version to that minimum, not only the major, so a 22.12
   fails the `node` check.
 
+### Removed
+
+- **`pdkit init` writes nothing into the fork.** Under Claude Code a skill's
+  `model:` lasted one turn, so init wrote the model most phases declare into
+  `<fork>/.claude/settings.local.json` as the session's default. In Open Code
+  each `/pd:` command switches the session to its own model, which the session
+  keeps for the phase, so there is no default to keep: a fresh session in the
+  fork starts on your own model. The `model` and `effort` lines give way to
+  one, `models : each /pd: command sets its own`; `--json` has no `settings`;
+  `--force` no longer replaces a model; and an invalid `settings.local.json`
+  no longer stops init. The file Claude Code's version wrote is left as it is.
+- **`pdkit doctor` has no `settings:model` check.** There is no copy of the
+  skills' model in the fork to fall behind them.
+- **`pdkit next` prints the step alone**, without `/model <model>` before it
+  or the line on how long a skill's model holds: the command the step names
+  switches the model itself.
+
 ## [0.15.0] - 2026-11-13
 
 ### Upgrading

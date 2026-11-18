@@ -110,7 +110,8 @@ export async function skillNames(root) {
  * @property {boolean} personOnly `disable-model-invocation: true`: a command and nothing else
  * @property {string|undefined} description the command's, hint first
  * @property {string|undefined} listed what the model reads of a skill it may load: description and when_to_use
- * @property {string|null} model `model:` as written
+ * @property {string|null} model `model:` as Open Code reads a model (skillModel), or null
+ * @property {string|undefined} declared `model:` as written, to name one that is not read
  * @property {string[]} allowed the shell patterns of `allowed-tools`
  * @property {string} body with the root spelled out
  */
@@ -150,6 +151,7 @@ export async function readSkills(root) {
         description,
         listed,
         model: await skillModel(name, root),
+        declared: text('model'),
         allowed: allowed.patterns,
         body: spellRoot(prompt.body, root),
       });
@@ -198,7 +200,7 @@ export function commandModels(skills, map) {
     const ref = modelRef(skill.model);
     const model = chosen.get(name) ?? (ref && { ref, text: skill.model, source: skill.file });
     if (model) models.set(name, model);
-    else if (skill.model !== null) unread.push(`${skill.file}: model ${JSON.stringify(skill.model)} is not provider/model#variant`);
+    else if (skill.declared !== undefined) unread.push(`${skill.file}: model ${JSON.stringify(skill.declared)} is not provider/model#variant`);
   }
   return { models, dropped, unread };
 }
