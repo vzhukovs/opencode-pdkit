@@ -22,10 +22,11 @@
 // What is pinned here is what no session would show until it went wrong: that
 // the gate's callback is registered before anything that can fail, that a
 // plugin which could not load refuses every shell command instead of letting
-// them all through, and that below the minimum Open Code version only the gate
-// and refusing commands are registered. The stand-in records every
-// registration in order; a broken plugin is a copy of opencode/ with one file
-// replaced.
+// them all through, that below the minimum Open Code version only the gate
+// and refusing commands are registered, and that cleanup closes what the
+// plugin opened itself and leaves the registrations to the host (F250). The
+// stand-in records every registration in order; a broken plugin is a copy of
+// opencode/ with one file replaced.
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -97,16 +98,25 @@ const write = () => ({ ...shell(), tool: 'write', input: { path: 'a.txt', conten
 
 /**
  * A stand-in for setup()'s context: every hook and transform registration is
- * recorded in order, with its callback. `fail` names registrations that reject.
+ * recorded in order, with its callback, and each gets a handle of its own
+ * that says whether it was disposed. `fail` names registrations that reject.
  */
 function host({ app = RELEASE, options, fail = [] } = {}) {
   const order = [];
   const callbacks = new Map();
-  const registration = { dispose: async () => {} };
+  const registrations = [];
   const record = (name, callback) => {
     if (fail.includes(name)) throw new Error(`${name} is unavailable`);
     order.push(name);
     callbacks.set(name, [...(callbacks.get(name) ?? []), callback]);
+    const registration = {
+      name,
+      disposed: false,
+      dispose: async () => {
+        registration.disposed = true;
+      },
+    };
+    registrations.push(registration);
     return registration;
   };
   const hooks = (domain) => ({ hook: async (name, callback) => record(`${domain}.hook ${name}`, callback) });
@@ -128,10 +138,42 @@ function host({ app = RELEASE, options, fail = [] } = {}) {
   return {
     ctx,
     order,
+    registrations,
     gate: (event) => callbacks.get('tool.hook execute.before')[0](event),
     callbacks: (name) => callbacks.get(name) ?? [],
   };
 }
+
+/**
+ * An event stream as ctx.event.subscribe gives one, open until the signal it
+ * was given ends it. `streams` gets one entry per subscription: the types it
+ * asked for, its signal, whether its reader waits on it, and whether the
+ * reader was told it ended.
+ */
+function stream(options, streams) {
+  const entry = { types: options?.types, signal: options?.signal, waiting: false, closed: false };
+  streams.push(entry);
+  const end = () => {
+    entry.waiting = false;
+    entry.closed = true;
+    return { done: true, value: undefined };
+  };
+  return {
+    [Symbol.asyncIterator]() {
+      return {
+        next() {
+          if (entry.signal?.aborted) return Promise.resolve(end());
+          entry.waiting = true;
+          return new Promise((resolve) => entry.signal?.addEventListener('abort', () => resolve(end()), { once: true }));
+        },
+        return: () => Promise.resolve(end()),
+      };
+    },
+  };
+}
+
+/** Until what is due on the event loop has run: the readers of the streams have had their turn. */
+const settled = () => new Promise((resolve) => setImmediate(resolve));
 
 /** Run transform callbacks against an editor that records every call made on it. */
 function edits(callbacks) {
@@ -587,6 +629,14 @@ describe('a plugin that cannot load refuses every command', () => {
     },
     'a registrar with a syntax error': { 'opencode/agents.js': 'export async function registerAgents( {\n' },
     'a lib/ module that is missing': { 'lib/opencode-version.js': null },
+    // D7: the modules the bridge stands on — the translators between Open
+    // Code's calls and the hooks' payloads and answers, and the runner that
+    // starts a hook — fail as the bridge does.
+    'a translator that throws on import': { 'opencode/bridge/payload.js': "throw new Error('the payloads are broken');\n" },
+    "a translator's patch reader that is missing": { 'opencode/bridge/patch.js': null },
+    'a translator of answers with a syntax error': { 'opencode/bridge/answer.js': 'export function answer( {\n' },
+    'a runner that is missing': { 'lib/hooks/runner.js': null },
+    'a table of events with a syntax error': { 'lib/hooks/events.js': 'export const HOOK_HANDLERS = {\n' },
   };
 
   for (const [label, files] of Object.entries(BROKEN)) {
@@ -753,6 +803,64 @@ export function createBridge() {
   };
 }
 `;
+
+  // F250: when Open Code unloads the plugin it disposes every registration
+  // itself, then calls cleanup. What is left to cleanup is what the plugin
+  // opened on its own: the bridge's two watches on the host's events — the
+  // runs of subagents that fail or are interrupted (what subagent-stop
+  // remembers), and compactions that ended (session-start).
+  test('closes every event stream the plugin opened, and leaves the registrations to the host', async (t) => {
+    logOf(t);
+    const { ctx, registrations } = host();
+    const streams = [];
+    ctx.event = { subscribe: (options) => stream(options, streams) };
+
+    const cleanup = await plugin.setup(ctx);
+    await settled();
+
+    assert.deepEqual(streams.map(({ types }) => types.join(' ')).sort(), [
+      'session.compaction.ended',
+      'session.execution.failed session.execution.interrupted',
+    ]);
+    for (const { waiting, closed } of streams) assert.deepEqual({ waiting, closed }, { waiting: true, closed: false }, 'a stream is not read');
+
+    await cleanup();
+    await settled();
+
+    for (const { types, signal, waiting, closed } of streams) {
+      assert.deepEqual({ aborted: signal?.aborted, waiting, closed }, { aborted: true, waiting: false, closed: true }, `${types.join(' ')} is still open`);
+    }
+    assert.deepEqual(registrations.map(({ name }) => name), FULL);
+    assert.deepEqual(
+      registrations.filter(({ disposed }) => disposed).map(({ name }) => name),
+      [],
+      'the host disposes the registrations',
+    );
+  });
+
+  // Nothing to close where no hook stands: below the minimum only the gate
+  // and the refusing commands are registered, and a plugin that failed to
+  // load registers the gate alone.
+  for (const [label, load] of [
+    ['below the minimum', async () => ({ setup: plugin.setup, stand: host({ app: OLD }) })],
+    [
+      'a plugin that failed to load',
+      async (t) => ({ setup: (await copy(t, { 'opencode/bridge/hooks.js': null })).setup, stand: host() }),
+    ],
+  ]) {
+    test(`opens no stream ${label}`, async (t) => {
+      logOf(t);
+      const { setup, stand } = await load(t);
+      const streams = [];
+      stand.ctx.event = { subscribe: (options) => stream(options, streams) };
+
+      const cleanup = await setup(stand.ctx);
+      await settled();
+      await cleanup();
+
+      assert.deepEqual(streams, []);
+    });
+  }
 
   test("releases the bridge's state, once", async (t) => {
     logOf(t);

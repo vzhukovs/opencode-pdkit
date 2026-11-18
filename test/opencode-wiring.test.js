@@ -35,6 +35,10 @@
 // they ran, for which event, and on what payload. A hook has a module when the
 // one that ran is the one the table names; it is registered when a call to
 // each point WIRING names for it runs it, and no call elsewhere does.
+//
+// The same calls, made where no run gets an answer, hold every event to what
+// that means (D7): pre-bash refuses, and every other hook lets the call
+// through.
 
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -44,7 +48,10 @@ import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { FAIL_CLOSED, HOOK_HANDLERS } from '../lib/hooks/events.js';
+import { refusal } from '../lib/hooks/runner.js';
 import { WIRING } from '../opencode/bridge/hooks.js';
+
+const POSIX = process.platform !== 'win32';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 
@@ -214,12 +221,15 @@ function stream(options) {
  * A stand-in for setup()'s context, in `directory`: every registration is
  * recorded, in order, under the name WIRING gives its point — `<domain>
  * <hook>`, `<domain> transform`, `event <type>` for each type of a stream —
- * with its callback; the sessions are the ones the calls name.
+ * with its callback; the sessions are the ones the calls name. `told` is
+ * what the plugin put in a session: a message added to it, an instruction
+ * entry put or removed.
  */
 function host(directory) {
   const order = [];
   const callbacks = new Map();
   const streams = new Map();
+  const told = [];
   const registered = { dispose: async () => {} };
   const record = (name, callback) => {
     order.push(name);
@@ -249,7 +259,20 @@ function host(directory) {
         if (!Object.hasOwn(sessions, sessionID)) throw new Error(`Session not found: ${sessionID}`);
         return sessions[sessionID];
       },
-      instructions: { entry: { put: async () => {}, remove: async () => {}, list: async () => [] } },
+      synthetic: async (input) => {
+        told.push({ synthetic: input });
+      },
+      instructions: {
+        entry: {
+          put: async (input) => {
+            told.push({ put: input });
+          },
+          remove: async (input) => {
+            told.push({ remove: input });
+          },
+          list: async () => [],
+        },
+      },
     },
     event: {
       subscribe: (options) => {
@@ -267,7 +290,7 @@ function host(directory) {
     command: transform('command'),
     skill: transform('skill'),
   };
-  return { ctx, order, callbacks: (name) => callbacks.get(name) ?? [] };
+  return { ctx, order, told, callbacks: (name) => callbacks.get(name) ?? [] };
 }
 
 /** The points WIRING names for an event, with whether the entry point registers it. */
@@ -447,4 +470,110 @@ describe('an event of the table the bridge cannot place', () => {
     assert.deepEqual(new Set(registered), new Set([...named()].filter((point) => point !== 'session compaction')));
     assert.equal(stood, Object.keys(HOOK_HANDLERS).filter((event) => event !== 'pre-compact').join(','));
   });
+});
+
+// D7: what a run with no answer means is the table's to say — FAIL_CLOSED —
+// and the plugin says it the same way for every event. Every hook's process
+// is started by one runner (lib/hooks/runner.js); when it gets no answer — a
+// bin/pdkit that exits 1, one that never answers, no node on the server's
+// PATH — the plugin, whole, refuses the gate's command and lets every other
+// call through untouched, with one line in the server's log for each run
+// that says why. The line is how the test knows the run was tried: a hook
+// that lets a call through without running would pass the rest of it.
+describe('a runner that gets no answer: pre-bash refuses, and every other hook lets the call through', () => {
+  const DEADLINE = 'export const DEADLINE_MS = 10_000;';
+
+  for (const { what, files, problem, path, skip } of [
+    {
+      what: 'a bin/pdkit that exits 1',
+      files: { 'bin/pdkit': "process.stderr.write('pdkit is broken\\n');\nprocess.exit(1);\n" },
+      problem: 'exited with code 1 (pdkit is broken)',
+    },
+    {
+      what: 'a bin/pdkit that never answers',
+      files: {
+        'bin/pdkit': 'setInterval(() => {}, 1000);\n',
+        'lib/hooks/runner.js': (source) => source.replace(DEADLINE, 'export const DEADLINE_MS = 500;'),
+      },
+      problem: 'gave no answer within 0.5s and was stopped',
+    },
+    {
+      what: 'no node on the PATH of the server (ENOENT)',
+      files: {},
+      path: true,
+      problem: `cannot run: "node" was not found on the PATH of the process that runs hooks (ENOENT); pdkit's hooks need Node.js 22 or later there`,
+      skip: !POSIX && 'T10.10',
+    },
+  ]) {
+    test(what, { skip }, async (t) => {
+      const dir = await realpath(await mkdtemp(join(tmpdir(), 'pdkit-wiring-')));
+      t.after(() => rm(dir, { recursive: true, force: true }));
+      for (const entry of ['opencode', 'lib', 'bin', 'defaults', 'agents', 'skills', 'package.json']) {
+        await cp(join(ROOT, entry), join(dir, 'plugin', entry), { recursive: true });
+      }
+      for (const [file, change] of Object.entries(files)) {
+        const at = join(dir, 'plugin', file);
+        const source = await readFile(at, 'utf8');
+        const changed = typeof change === 'function' ? change(source) : change;
+        assert.notEqual(changed, source, `${file} is not as the test expects`);
+        await writeFile(at, changed);
+      }
+      const work = join(dir, 'work');
+      await mkdir(work);
+      const error = t.mock.method(console, 'error', () => {});
+      const log = () => error.mock.calls.map((call) => call.arguments.join(' '));
+      const stand = host(work);
+      const plugin = (await import(pathToFileURL(join(dir, 'plugin', 'opencode', 'server.js')).href)).default;
+      const cleanup = await plugin.setup(stand.ctx);
+      t.after(() => cleanup?.());
+      assert.deepEqual(log(), [], 'the plugin loaded in full');
+      if (path) {
+        const before = process.env.PATH;
+        process.env.PATH = work;
+        t.after(() => (process.env.PATH = before));
+      }
+
+      for (const call of CALLS) {
+        const from = log().length;
+        const callbacks = stand.callbacks(call.point);
+        assert.ok(callbacks.length > 0, `nothing is registered on ${call.point}`);
+        const outcomes = [];
+        for (const callback of callbacks) {
+          const event = call.event();
+          // A stream's push is not async; a hook's callback is.
+          outcomes.push(
+            await Promise.resolve()
+              .then(() => callback(event))
+              .then(
+              (returned) => ({ returned, event }),
+              (thrown) => ({ thrown, event }),
+            ),
+          );
+        }
+        const gated = call.runs.filter((event) => FAIL_CLOSED.includes(event));
+        const open = call.runs.filter((event) => !FAIL_CLOSED.includes(event));
+        // What stands on a stream is not waited on by the bridge: its lines are.
+        const deadline = Date.now() + 10_000;
+        while (log().length - from < open.length && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+
+        const label = `${call.point}, on ${call.what}`;
+        const refused = outcomes.filter((outcome) => 'thrown' in outcome);
+        assert.deepEqual(
+          refused.map(({ thrown }) => thrown.message),
+          gated.map((event) => refusal(event, problem)),
+          `${label}: refused ${refused.length} times`,
+        );
+        for (const { returned, event } of outcomes.filter((outcome) => !('thrown' in outcome))) {
+          assert.equal(returned, undefined, `${label}: a callback gives the host something back`);
+          assert.deepEqual(event, call.event(), `${label}: the call was changed`);
+        }
+        assert.deepEqual(
+          log().slice(from).sort(),
+          open.map((event) => `opencode-pdkit: pdkit: hook "${event}" ${problem}; allowing`).sort(),
+          `${label}: the log`,
+        );
+      }
+      assert.deepEqual(stand.told, [], 'a session was told something');
+    });
+  }
 });
