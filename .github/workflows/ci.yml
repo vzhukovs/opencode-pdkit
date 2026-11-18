@@ -90,25 +90,84 @@ jobs:
         with:
           node-version: 22
 
-      # npm is the install path Open Code documents for CI. The version check
-      # makes sure the minimum leg runs the minimum and not some other copy
-      # that happens to be on PATH.
-      - name: Install Open Code (${{ matrix.opencode }})
-        env:
-          CHANNEL: ${{ matrix.opencode }}
-        run: |
-          if [ "$CHANNEL" = minimum ]; then
-            version="$(node scripts/check-plugin-load.js --print-minimum)"
-          else
-            version=latest
-          fi
-          npm install --global "@opencode/cli@$version"
-          installed="$(opencode --version)"
-          echo "$installed"
-          if [ "$CHANNEL" = minimum ] && [ "$installed" != "opencode v$version" ]; then
-            echo "::error::expected opencode v$version, got: $installed"
-            exit 1
-          fi
+      - uses: ./.github/actions/install-opencode
+        with:
+          channel: ${{ matrix.opencode }}
 
       - name: Load the packed plugin
         run: node scripts/check-plugin-load.js
+
+  receipt-gate-key:
+    # The receipt gate's check below runs a model, and the model takes the
+    # provider's key from the repository's secrets. A pull request from a fork
+    # gets no secrets, nor does a repository that has not set this one: then
+    # the check is skipped, shown as skipped, and this job says why. Passing it
+    # green without a key would report a check that never ran. A job's `if:`
+    # cannot read secrets, hence a job of its own to look.
+    runs-on: ubuntu-latest
+    outputs:
+      present: ${{ steps.key.outputs.present }}
+    steps:
+      - id: key
+        env:
+          KEY: ${{ secrets.PDKIT_SMOKE_KEY }}
+        run: |
+          if [ -n "$KEY" ]; then
+            echo present=true >> "$GITHUB_OUTPUT"
+          else
+            echo present=false >> "$GITHUB_OUTPUT"
+            reason="no PDKIT_SMOKE_KEY secret in this run (pull requests from forks get none), so receipt-gate is skipped: not run, not passed"
+            echo "::warning title=receipt-gate skipped::$reason"
+            printf '### receipt-gate skipped\n\n%s\n' "$reason" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  receipt-gate:
+    # Does the receipt gate still hold an implementer that stops without a
+    # receipt? The gate stands on Open Code's experimental.idle hook, which
+    # Open Code calls only after a model step, and which it would accept under
+    # a new name without a complaint: renamed, the gate is off and every job
+    # above stays green, `pdkit doctor`'s hooks line too. So this one runs a
+    # model. scripts/check-receipt-gate.js loads the packed plugin as
+    # plugin-load does, has a session start pd-implementer on a task that ends
+    # without a receipt, and reads the sessions' records, the journal and
+    # `pdkit doctor --json`: held exactly once, then let go with the task
+    # accepted once the hold made it capture.
+    #
+    # The model is a cheap one that can call tools; the key goes to the one
+    # step that starts the server, under the name Open Code reads for the
+    # provider. Another provider is these two lines and the secret.
+    #
+    # Both legs are signals for now, as plugin-load's: `latest` always, since a
+    # failure there says a new Open Code changed the hook, and `minimum` until
+    # a run of green results shows that the model's part of the check is
+    # reliable enough to stop a merge on.
+    needs: receipt-gate-key
+    if: needs.receipt-gate-key.outputs.present == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - opencode: minimum
+            signal-only: true
+          - opencode: latest
+            signal-only: true
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.signal-only }}
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: ./.github/actions/install-opencode
+        with:
+          channel: ${{ matrix.opencode }}
+
+      - name: Hold an implementer without a receipt
+        env:
+          MODEL: deepseek/deepseek-flash
+          DEEPSEEK_API_KEY: ${{ secrets.PDKIT_SMOKE_KEY }}
+        run: node scripts/check-receipt-gate.js --model "$MODEL"

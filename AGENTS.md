@@ -16,6 +16,7 @@ lists what has gone wrong more than once.
 npm test                                                                  # whole suite
 node --import ./test/helpers/isolate-home.js --test test/<module>.test.js # one file
 node scripts/check-plugin-load.js                                         # does the packed package load in Open Code
+node scripts/check-receipt-gate.js --model <provider/model>               # is an implementer held without a receipt (runs a model; key from the env)
 pdkit doctor --gate-selftest --repo <podman-desktop fork>                 # after lib/hooks/, opencode/, bin/pdkit
 ```
 
