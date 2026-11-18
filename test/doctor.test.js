@@ -42,15 +42,18 @@ import {
   checkHookNode,
   checkHooks,
   checkMcp,
+  checkModels,
   checkNode,
   checkPlugin,
   diagnose,
+  format,
   gateSelftest,
   playwrightCdp,
 } from '../lib/doctor.js';
 import { HOOK_HANDLERS } from '../lib/hooks/events.js';
 import { append as appendJournal } from '../lib/journal.js';
 import { WRAPPERS } from '../lib/hooks/command-parse.js';
+import { modelText } from '../lib/opencode-models.js';
 import { create } from '../lib/worktree.js';
 import { preBash, preWrite } from '../opencode/bridge/payload.js';
 
@@ -1482,6 +1485,255 @@ describe('the MCP servers Open Code reports', () => {
 // one now — a /pd: command that has a model switches the session to it — so
 // there is no copy to fall behind, and the file Claude Code's version left
 // there is that version's business.
+// The model each agent and command runs on (D5), from what Open Code reports
+// about the directory. The answers are written in the shapes Open Code 2.3.0
+// gives (F228, F315, F316); the plugin's agents get their models from the real
+// registrar, with the options the test gives it, so that what the doctor says
+// the plugin chose is what the plugin chooses.
+describe('the models the agents and commands run on', () => {
+  const DIR = '/fork';
+  const GLOBAL = '/home/.config/opencode/opencode.json';
+  const PROJECT = '/fork/opencode.json';
+  const KEY = 'sk-not-a-key';
+  const answer = (data) => ({ ok: true, data });
+
+  let agents;
+  let skills;
+  let registrar;
+  before(async () => {
+    registrar = { ...(await import('../opencode/agents.js')), ...(await import('../opencode/commands.js')) };
+    agents = (await registrar.readAgents(process.cwd())).agents;
+    skills = (await registrar.readSkills(process.cwd())).skills;
+  });
+
+  /** GET /api/config: the global document with the plugin's entry, Open Code's `agents`, and a project document if given. */
+  const documents = ({ models, config, project } = {}) => [
+    {
+      type: 'document',
+      path: GLOBAL,
+      info: {
+        model: 'mock/alpha',
+        providers: { mock: { settings: { apiKey: KEY } } },
+        plugins: [models === undefined ? '/src/opencode-pdkit' : { package: '/src/opencode-pdkit', options: { models } }],
+        ...(config ? { agents: config } : {}),
+      },
+    },
+    { type: 'directory', path: '/home/.config/opencode', info: {} },
+    ...(project ? [{ type: 'document', path: PROJECT, info: project }] : []),
+  ];
+  /** GET /api/agent: one of Open Code's own, then the plugin's, on the models the registrar gives them; `over` as Open Code's config puts its own over them. */
+  const registered = (models = {}, over = {}, without = []) => {
+    const chosen = registrar.agentModels(agents, models).models;
+    return {
+      location: { directory: DIR },
+      data: [
+        { id: 'build', permissions: [] },
+        ...agents
+          .filter((agent) => !without.includes(agent.id))
+          .map((agent) => {
+            const ref = over[agent.id] ?? chosen.get(agent.id);
+            return { id: agent.id, permissions: [], ...(ref ? { model: { id: ref.id, providerID: ref.providerID, ...(ref.variant ? { variant: ref.variant } : {}) } } : {}) };
+          }),
+      ],
+    };
+  };
+  const entry = (providerID, id, variants) => ({ id, modelID: id, providerID, enabled: true, status: 'active', variants: variants.map((variant) => ({ id: variant })), settings: { apiKey: KEY } });
+  /** The classes the defaults name, through the claude-agent provider, each with the five variants it has. */
+  const CLAUDE = ['opus', 'sonnet', 'haiku'].map((id) => entry('claude-agent', id, ['low', 'medium', 'high', 'xhigh', 'max']));
+  const MOCK = ['alpha', 'beta'].map((id) => entry('mock', id, ['low', 'high']));
+  /** GET /api/model. */
+  const catalog = (...entries) => ({ location: { directory: DIR }, data: entries.flat() });
+
+  const run = async (answers, more = {}) => {
+    const server = serverWith(answers);
+    const result = await checkModels({ pluginRoot: process.cwd(), id: 'opencode-pdkit', directory: DIR, ask: server.ask, ...clock(), ...more });
+    return { result, asked: server.asked };
+  };
+  const answers = ({ models, config, project, ran = registered(models ?? {}), listed = catalog(CLAUDE, MOCK) } = {}) => ({
+    '/api/config': [answer(documents({ models, config, project }))],
+    '/api/agent': [answer(ran)],
+    '/api/model': [answer(listed)],
+  });
+  const row = (result, id) => result.table.find((entry) => entry.id === id);
+  const SESSION_ONLY = "pd:package-map, pd:upstream-rules, pd:worktree-kit set no model and run on the session's";
+
+  test('the defaults, each in the catalog: every agent and every command with a model, from its frontmatter', async () => {
+    const { result, asked } = await run(answers());
+
+    assert.equal(result.status, 'ok');
+    assert.equal(result.level, 'optional');
+    assert.equal(result.detail, `35 agents and commands: 35 by their frontmatter; every model is in Open Code's catalog for ${DIR}; ${SESSION_ONLY}`);
+    assert.deepEqual(asked, ['/api/config', '/api/agent', '/api/model']);
+    assert.deepEqual(
+      result.table.map((entry) => entry.id),
+      [...agents.map((agent) => agent.id), ...skills.filter((skill) => skill.model !== null).map((skill) => `pd:${skill.name}`)],
+    );
+    assert.equal(result.table.filter((entry) => entry.id.startsWith('pd-')).length, 14);
+    assert.equal(result.table.filter((entry) => entry.id.startsWith('pd:')).length, 21);
+    for (const entry of result.table) assert.deepEqual([entry.source, entry.catalog], ['frontmatter', 'in the catalog'], entry.id);
+    // What the registrars give each, the doctor names.
+    const commands = registrar.commandModels(skills, {}).models;
+    for (const agent of agents) assert.equal(row(result, agent.id).model, modelText(registrar.agentModels(agents, {}).models.get(agent.id)));
+    for (const [name, chosen] of commands) assert.equal(row(result, name).model, chosen.text);
+  });
+
+  test('a provider Open Code has not here: every model of it is out of the catalog, and the line says what that breaks', async () => {
+    const { result } = await run(answers({ listed: catalog(MOCK) }));
+
+    assert.equal(result.status, 'warn');
+    assert.match(result.detail, /; 35 not in Open Code's catalog for \/fork, as the table says — an agent on such a model fails when it is called, a command refuses to run;/);
+    assert.equal(row(result, 'pd-implementer').catalog, 'there is no model claude-agent/sonnet for this directory');
+    assert.equal(row(result, 'pd:plan').catalog, 'there is no model claude-agent/opus for this directory');
+  });
+
+  test('a variant the model lacks, in the map: the row names the variants there are', async () => {
+    const models = { 'pd-scout': 'mock/alpha#ultra', 'pd:plan': 'mock/beta#max' };
+    const { result } = await run(answers({ models }));
+
+    assert.equal(result.status, 'warn');
+    assert.deepEqual(row(result, 'pd-scout'), { id: 'pd-scout', model: 'mock/alpha#ultra', source: 'options.models', catalog: 'mock/alpha has no variant ultra, only low, high' });
+    assert.deepEqual(row(result, 'pd:plan'), { id: 'pd:plan', model: 'mock/beta#max', source: 'options.models', catalog: 'mock/beta has no variant max, only low, high' });
+    assert.match(result.detail, new RegExp(`^35 agents and commands: 33 by their frontmatter, 2 by options\\.models in ${GLOBAL}; 2 not in Open Code's catalog for /fork, as the table says — `));
+  });
+
+  test('agents.<id>.model of Open Code wins for an agent: the row says so, and a map entry it beats is named', async () => {
+    const config = { 'pd-review-synth': { model: { providerID: 'mock', model: 'beta', variant: 'low' } } };
+    const over = { 'pd-review-synth': { providerID: 'mock', id: 'beta', variant: 'low' } };
+
+    const alone = (await run(answers({ project: { agents: config }, ran: registered({}, over) }))).result;
+    assert.equal(alone.status, 'ok');
+    assert.deepEqual(row(alone, 'pd-review-synth'), { id: 'pd-review-synth', model: 'mock/beta#low', source: 'agents.<id>.model', catalog: 'in the catalog' });
+    assert.match(alone.detail, new RegExp(`^35 agents and commands: 34 by their frontmatter, 1 by agents\\.<id>\\.model in ${PROJECT};`));
+
+    const models = { 'pd-review-synth': 'mock/alpha#high' };
+    const beaten = (await run(answers({ models, config, ran: registered(models, over) }))).result;
+    assert.equal(beaten.status, 'warn');
+    assert.equal(row(beaten, 'pd-review-synth').source, 'agents.<id>.model');
+    assert.match(beaten.detail, new RegExp(`; options\\.models\\.pd-review-synth does nothing: agents\\.pd-review-synth\\.model in ${GLOBAL} wins over it$`));
+  });
+
+  test('a key that names nothing and a value not in the grammar are dropped, as the registrars drop them', async () => {
+    const models = { 'pd-implemnter': 'mock/alpha', 'pd-auditor': 'beta', 'pd:nope': 'mock/alpha', 'pd:triage': 'opus' };
+    const { result } = await run(answers({ models }));
+
+    assert.equal(result.status, 'warn');
+    assert.deepEqual(row(result, 'pd-auditor'), { id: 'pd-auditor', model: 'claude-agent/opus#high', source: 'frontmatter', catalog: 'in the catalog' });
+    assert.equal(row(result, 'pd:triage').source, 'frontmatter');
+    const said = result.detail.split('; ');
+    for (const line of [
+      'options.models.pd-implemnter names no agent or command of opencode-pdkit, so it does nothing',
+      'options.models.pd-auditor: "beta" is not provider/model#variant, so pd-auditor keeps its default',
+      'options.models.pd:nope names no agent or command of opencode-pdkit, so it does nothing',
+      'options.models.pd:triage: "opus" is not provider/model#variant, so pd:triage keeps its default',
+    ]) {
+      assert.ok(said.includes(line), line);
+    }
+    // The registrars drop the same keys.
+    const dropped = [...registrar.agentModels(agents, models).dropped, ...registrar.commandModels(skills, models).dropped].map((line) => line.split(': ')[0]);
+    assert.deepEqual(dropped.sort(), Object.keys(models).map((key) => `options.models.${key}`).sort());
+  });
+
+  test('options the plugin cannot read are named with their document', async () => {
+    const config = documents();
+    config[0].info.plugins = [{ package: '/src/opencode-pdkit', options: { models: ['mock/alpha'], model: 'mock/alpha' } }];
+    const { result } = await run({ ...answers(), '/api/config': [answer(config)] });
+
+    assert.equal(result.status, 'warn');
+    assert.match(result.detail, new RegExp(`; options\\.models: expected an object, got an array, in ${GLOBAL}`));
+    assert.match(result.detail, new RegExp(`; options\\.model: not a setting of this plugin, in ${GLOBAL}`));
+  });
+
+  test('Open Code runs an agent on a model no config document names: said, and not explained further than measured', async () => {
+    const { result } = await run(answers({ ran: registered({}, { 'pd-scout': { providerID: 'mock', id: 'beta' } }) }));
+
+    assert.equal(result.status, 'warn');
+    assert.deepEqual(row(result, 'pd-scout'), { id: 'pd-scout', model: 'mock/beta', source: 'unknown', catalog: 'in the catalog' });
+    assert.match(result.detail, /^35 agents and commands: 34 by their frontmatter, 1 by something after the plugin;/);
+    assert.match(
+      result.detail,
+      /; Open Code runs pd-scout on mock\/beta, not claude-agent\/sonnet#high from agents\/pd-scout\.md, and no config document sets agents\.pd-scout\.model — an agent file pd-scout\.md in an Open Code config directory, or another plugin, changed it$/,
+    );
+  });
+
+  test('an agent Open Code does not list is not registered, with the document that disables it', async () => {
+    const { result } = await run(answers({ config: { 'pd-slicer': { disabled: true } }, ran: registered({}, {}, ['pd-slicer']) }));
+
+    assert.equal(result.status, 'warn');
+    assert.deepEqual(row(result, 'pd-slicer'), { id: 'pd-slicer', model: '—', source: 'not registered', catalog: '—' });
+    assert.match(result.detail, new RegExp(`; pd-slicer is not registered for /fork: agents\\.pd-slicer\\.disabled in ${GLOBAL}$`));
+  });
+
+  test('a command that declares no model takes one from the map, and gets a row', async () => {
+    const { result } = await run(answers({ models: { 'pd:package-map': 'mock/alpha' } }));
+
+    assert.equal(result.status, 'ok');
+    assert.equal(result.table.length, 36);
+    assert.deepEqual(row(result, 'pd:package-map'), { id: 'pd:package-map', model: 'mock/alpha', source: 'options.models', catalog: 'in the catalog' });
+    assert.match(result.detail, /; pd:upstream-rules, pd:worktree-kit set no model and run on the session's$/);
+  });
+
+  test('two entries with one target: the later one’s options are read, and the earlier one’s named as not', async () => {
+    const project = { plugins: [{ package: '/src/opencode-pdkit', options: { models: { 'pd-scout': 'mock/beta#high' } } }] };
+    const { result } = await run(answers({ models: { 'pd-scout': 'mock/alpha#low' }, project, ran: registered({ 'pd-scout': 'mock/beta#high' }) }));
+
+    assert.equal(result.status, 'warn');
+    assert.deepEqual(row(result, 'pd-scout'), { id: 'pd-scout', model: 'mock/beta#high', source: 'options.models', catalog: 'in the catalog' });
+    assert.match(result.detail, new RegExp(`^35 agents and commands: 34 by their frontmatter, 1 by options\\.models in ${PROJECT};`));
+    assert.match(result.detail, new RegExp(`; the options of /src/opencode-pdkit in ${GLOBAL} are not read: ${PROJECT} names the same target later, and Open Code loads it with the options there$`));
+  });
+
+  test('no server: cannot tell, in the words of the failure', async () => {
+    const result = await checkModels({ pluginRoot: process.cwd(), id: 'opencode-pdkit', directory: DIR, ask: offline });
+
+    assert.deepEqual(result, { id: 'models', level: 'optional', status: 'skip', detail: 'cannot tell: no Open Code server in this test' });
+  });
+
+  test('a plugin Open Code does not run: nothing is asked, and the line points at plugin', async () => {
+    const { result, asked } = await run(answers(), { plugin: { id: 'plugin', level: 'required', status: 'fail', detail: 'x' } });
+
+    assert.deepEqual(asked, []);
+    assert.equal(result.status, 'skip');
+    assert.equal(result.detail, 'cannot tell: Open Code does not run opencode-pdkit for /fork — see plugin');
+  });
+
+  test('agents a moment late are waited for; never there, cannot tell', async () => {
+    const empty = answer({ location: { directory: DIR }, data: [{ id: 'build' }] });
+
+    const late = await run({ ...answers(), '/api/agent': [empty, empty, answer(registered())] });
+    assert.equal(late.result.status, 'ok');
+    assert.deepEqual(late.asked.filter((path) => path === '/api/agent').length, 3);
+
+    const never = await run({ ...answers(), '/api/agent': [empty] });
+    assert.equal(never.result.status, 'skip');
+    assert.equal(never.result.detail, "cannot tell: none of opencode-pdkit's agents is registered for /fork within 5 s — see plugin, or run pdkit doctor again");
+    assert.ok(!never.asked.includes('/api/model'));
+  });
+
+  test('a provider’s settings, keys included, are never in what the doctor says', async () => {
+    const { result } = await run(answers({ models: { 'pd-scout': 'mock/alpha#ultra' } }));
+
+    assert.doesNotMatch(JSON.stringify(result), new RegExp(KEY));
+    assert.doesNotMatch(format({ status: result.status, checks: [result] }, { version: '0' }), new RegExp(KEY));
+  });
+
+  test('the table is printed under its line, a column each, as wide as its widest cell', async () => {
+    const { result } = await run(answers({ models: { 'pd-scout': 'mock/alpha#ultra' } }));
+    const lines = format({ status: result.status, checks: [result] }, { version: '0' }).split('\n');
+    const at = lines.findIndex((line) => line.startsWith('  ! models'));
+    const rows = lines.slice(at + 1, at + 1 + result.table.length);
+
+    assert.equal(rows.length, 35);
+    for (const line of rows) assert.match(line, /^ {6}pd[-:]\S+ +\S+ +\S+ +\S/);
+    assert.match(rows[0], /^ {6}pd-archaeologist +claude-agent\/sonnet#high +frontmatter +in the catalog$/);
+    // Each column starts at one place in every row.
+    for (const key of ['model', 'source', 'catalog']) {
+      const starts = new Set(rows.map((line, at) => line.indexOf(` ${result.table[at][key]}`, 6 + result.table[at].id.length) + 1));
+      assert.equal(starts.size, 1, key);
+    }
+    assert.match(rows.find((line) => line.includes('pd-scout')), /mock\/alpha#ultra +options\.models +mock\/alpha has no variant ultra, only low, high$/);
+  });
+});
+
 describe('the session model in the fork', () => {
   let fork;
 
@@ -1500,6 +1752,13 @@ describe('the session model in the fork', () => {
 
     assert.equal(find(report.checks, 'settings:model'), undefined);
     assert.deepEqual(report.checks.filter((entry) => /settings\.local\.json/.test(entry.detail ?? '')), []);
+  });
+
+  // What pdkit init's `models` line points at (D12): the check that took its place.
+  test('models takes its place, asking the server about the fork', async () => {
+    const report = await diagnose({ cwd: fork, pluginRoot: process.cwd(), askServer: offline });
+
+    assert.deepEqual(find(report.checks, 'models'), { id: 'models', level: 'optional', status: 'skip', detail: 'cannot tell: no Open Code server in this test' });
   });
 });
 

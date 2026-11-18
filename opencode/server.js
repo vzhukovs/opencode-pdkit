@@ -116,7 +116,7 @@ async function load(ctx) {
     const { registerAccess } = await import('./access.js');
     const { registerAgents } = await import('./agents.js');
     const { registerCommands, registerRefusals } = await import('./commands.js');
-    const { readOptions } = await import('./options.js');
+    const { readOptions } = await import('../lib/opencode-models.js');
     const { checkOpenCode, minimumVersion } = await import('../lib/opencode-version.js');
 
     const plugin = { root: ROOT, settings: readOptions(ctx.options), log };

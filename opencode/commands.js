@@ -77,14 +77,14 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
-import { skillDescription, skillModel } from '../lib/session-model.js';
+import { COMMAND_PREFIX, skillDescription, skillModel } from '../lib/session-model.js';
 import { allowedPatterns, createGrants, registerGrants } from './allowed.js';
 import { LABEL_SOURCE } from './bridge/payload.js';
-import { modelRef } from './options.js';
+import { modelRef, unavailable } from '../lib/opencode-models.js';
 import { readPrompt, spellRoot } from './prompts.js';
 
 /** The prefix every pdkit command carries, so `/pd:triage` reads as it always has. */
-export const PREFIX = 'pd:';
+export const PREFIX = COMMAND_PREFIX;
 
 /** Where a skill takes what was typed after its name. */
 export const ARGUMENTS = '$ARGUMENTS';
@@ -176,7 +176,7 @@ export async function readSkills(root) {
 }
 
 /**
- * @typedef {{ref: import('./options.js').ModelRef, text: string, source: string}} Chosen
+ * @typedef {{ref: import('../lib/opencode-models.js').ModelRef, text: string, source: string}} Chosen
  */
 
 /**
@@ -216,29 +216,6 @@ export function commandModels(skills, map) {
     else if (skill.declared !== undefined) unread.push(`${skill.file}: model ${JSON.stringify(skill.declared)} is not provider/model#variant`);
   }
   return { models, dropped, unread };
-}
-
-/**
- * Why Open Code cannot run a model, by the catalog ctx.model.list() gives for
- * the session's directory; undefined when it can.
- *
- * @param {readonly unknown[]} catalog
- * @param {import('./options.js').ModelRef} ref
- * @returns {string|undefined}
- */
-export function unavailable(catalog, ref) {
-  const name = `${ref.providerID}/${ref.id}`;
-  const model = catalog.find(
-    (entry) => entry?.providerID === ref.providerID && (entry.id === ref.id || entry.modelID === ref.id),
-  );
-  if (!model) return `it has no model ${name} for this directory`;
-  if (model.enabled === false) return `the model ${name} is disabled`;
-  if (ref.variant === undefined) return undefined;
-  const variants = (Array.isArray(model.variants) ? model.variants : []).map((variant) => variant?.id);
-  if (variants.includes(ref.variant)) return undefined;
-  return variants.length === 0
-    ? `${name} has no variants, so not ${ref.variant}`
-    : `${name} has no variant ${ref.variant}, only ${variants.join(', ')}`;
 }
 
 /**
@@ -444,8 +421,9 @@ export async function registerCommands(ctx, plugin) {
     }
   });
 
-  // TODO(T7.13, T7.14): the doctor shows each command's model and where it
-  // came from, and finds a command or skill another source has replaced.
+  // The doctor shows each command's model and where it came from (`models`,
+  // lib/doctor.js), read as commandModels reads it.
+  // TODO(T7.14): and finds a command or skill another source has replaced.
   return Object.freeze({
     commands: Object.freeze(commands),
     skills: Object.freeze(loadable),

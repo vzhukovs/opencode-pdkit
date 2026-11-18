@@ -62,7 +62,7 @@ import { join, resolve } from 'node:path';
 import { resolveHome } from '../lib/config.js';
 import { directoryRule } from './access.js';
 import { PREFIX } from './commands.js';
-import { modelRef } from './options.js';
+import { modelRef } from '../lib/opencode-models.js';
 import { readPrompt, spellRoot } from './prompts.js';
 
 /**
@@ -282,7 +282,7 @@ export async function readAgents(root) {
  *
  * @param {readonly Source[]} agents
  * @param {Readonly<Record<string, string>>} map options.models
- * @returns {{models: Map<string, import('./options.js').ModelRef>, dropped: string[], unread: string[]}}
+ * @returns {{models: Map<string, import('../lib/opencode-models.js').ModelRef>, dropped: string[], unread: string[]}}
  */
 export function agentModels(agents, map) {
   const ids = new Set(agents.map((agent) => agent.id));
@@ -317,7 +317,7 @@ export function agentModels(agents, map) {
  * @property {string|undefined} description
  * @property {string} system
  * @property {Rule[]} permissions
- * @property {import('./options.js').ModelRef|undefined} model
+ * @property {import('../lib/opencode-models.js').ModelRef|undefined} model
  * @property {readonly string[]} hidden the tools of EXTRA_TOOLS taken out of its requests
  */
 
@@ -425,8 +425,8 @@ export async function registerAgents(ctx, plugin) {
     }
   });
 
-  // TODO(T7.13): the doctor shows the final model of each agent and where it
-  // came from, from Open Code's own answers; what this returns is the
-  // registrar's side of it.
+  // What this returns is the registrar's side of it. Which model each agent
+  // ends up with, after Open Code's own config, and where that came from, the
+  // doctor reads from Open Code's answers (`models`, lib/doctor.js).
   return Object.freeze({ agents: Object.freeze(defined), dropped: Object.freeze(dropped), unread: Object.freeze(unread) });
 }

@@ -44,11 +44,10 @@ import {
   registerCommands,
   registerRefusals,
   skillNames,
-  unavailable,
   withArguments,
 } from '../opencode/commands.js';
 import { LABEL_SOURCE, promptSubmit } from '../opencode/bridge/payload.js';
-import { modelRef } from '../opencode/options.js';
+import { modelRef, unavailable } from '../lib/opencode-models.js';
 import { ROOT_TOKEN, readPrompt, spellRoot } from '../opencode/prompts.js';
 import { ADVANCES } from '../lib/state.js';
 import { HINT_SEPARATOR, commandDescription, skillArgument, skillDescription, skillModel } from '../lib/session-model.js';
@@ -554,11 +553,11 @@ describe('the model a command runs on', () => {
 
   test('a model Open Code cannot use is refused, saying which, from where, and why; nothing in the session changes', async () => {
     const cases = [
-      ['mock/ghost#low', 'it has no model mock/ghost for this directory'],
+      ['mock/ghost#low', 'there is no model mock/ghost for this directory'],
       ['mock/off#low', 'the model mock/off is disabled'],
       ['mock/alpha#max', 'mock/alpha has no variant max, only low, high'],
       ['mock/plain#low', 'mock/plain has no variants, so not low'],
-      ['other/alpha#low', 'it has no model other/alpha for this directory'],
+      ['other/alpha#low', 'there is no model other/alpha for this directory'],
     ];
     for (const [model, why] of cases) {
       const { commands, calls } = await register({ root, models: { 'pd:a': model } });

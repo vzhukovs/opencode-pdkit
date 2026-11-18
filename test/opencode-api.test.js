@@ -26,7 +26,23 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { DIRECTORY_HEADER, agentRules, get, mcpServers, mcpStatuses, plugins, takenBy, toolPrefix, turnedOff, waitFor, wildcard } from '../lib/opencode-api.js';
+import {
+  DIRECTORY_HEADER,
+  agentModels,
+  agentRules,
+  catalog,
+  configuredAgents,
+  get,
+  mcpServers,
+  mcpStatuses,
+  pluginEntry,
+  plugins,
+  takenBy,
+  toolPrefix,
+  turnedOff,
+  waitFor,
+  wildcard,
+} from '../lib/opencode-api.js';
 
 /** An execFile stand-in that replies once, as given, and keeps what it was asked to run. */
 function exec(reply) {
@@ -315,5 +331,137 @@ describe('where a config turns a plugin off', () => {
     for (const documents of [undefined, null, {}, [], [doc('/g.json', {})], [doc('/g.json', { plugins: 'opencode-pdkit', policies: 'x' })]]) {
       assert.deepEqual(turnedOff(documents, 'opencode-pdkit'), { removed: [], denied: [], added: [] }, JSON.stringify(documents));
     }
+  });
+});
+
+// The shapes are Open Code 2.3.0's, as a private server gave them (F228,
+// F315, F316): an agent's model is `{ id, providerID, variant }`; in a config
+// document `agents.<id>.model` is what Open Code read, `{ providerID, model,
+// variant }`, and an entry whose model it could not read is not there at all; a
+// catalog entry carries its provider's settings.
+describe('the models the server reports', () => {
+  const doc = (path, info) => ({ type: 'document', path, info });
+
+  test('each agent with the model it ends up with, or null for none', () => {
+    const answer = {
+      location: { directory: '/fork' },
+      data: [
+        { id: 'pd-scout', model: { id: 'alpha', providerID: 'mock', variant: 'high' }, permissions: [] },
+        { id: 'pd-slicer', model: { id: 'sonnet', providerID: 'claude-agent' } },
+        { id: 'build' },
+        { name: 'no id' },
+      ],
+    };
+    assert.deepEqual(
+      [...agentModels(answer)],
+      [
+        ['pd-scout', { providerID: 'mock', id: 'alpha', variant: 'high' }],
+        ['pd-slicer', { providerID: 'claude-agent', id: 'sonnet' }],
+        ['build', null],
+      ],
+    );
+    for (const nothing of [undefined, null, {}, { data: 'x' }]) assert.equal(agentModels(nothing).size, 0);
+  });
+
+  test('agents.<id> of the config: the last document that sets a model, or disables one, wins', () => {
+    const agents = configuredAgents([
+      doc('/g.json', { agents: { 'pd-review-synth': { model: { providerID: 'mock', model: 'beta', variant: 'low' } }, 'pd-slicer': { disabled: true } } }),
+      { type: 'directory', path: '/g', info: { agents: { 'pd-review-synth': { model: { providerID: 'x', model: 'y' } } } } },
+      doc('/p.json', { agents: { 'pd-review-synth': { model: { providerID: 'mock', model: 'alpha' } }, 'pd-scout': { description: 'mine' } } }),
+    ]);
+    assert.deepEqual(agents.get('pd-review-synth'), { model: { ref: { providerID: 'mock', id: 'alpha' }, document: '/p.json' } });
+    assert.deepEqual(agents.get('pd-slicer'), { disabled: '/g.json' });
+    assert.deepEqual(agents.get('pd-scout'), {});
+    for (const nothing of [undefined, null, {}, [doc('/g.json', {})], [doc('/g.json', { agents: { a: { model: 'mock/alpha' } } })]]) {
+      assert.equal(configuredAgents(nothing).get('a')?.model, undefined, JSON.stringify(nothing));
+    }
+  });
+
+  test('the catalog keeps what the check reads, and nothing of the provider’s settings', () => {
+    const models = catalog({
+      location: { directory: '/fork' },
+      data: [
+        { id: 'alpha', modelID: 'alpha', providerID: 'mock', enabled: true, status: 'active', variants: [{ id: 'low', body: { x: 1 } }, { id: 'high' }, {}], settings: { apiKey: 'sk-not-a-key' } },
+        { id: 'opus', modelID: 'claude-opus-5-5', providerID: 'claude-agent', enabled: false, settings: { apiKey: 'sk-not-a-key' } },
+        { id: 'no-provider' },
+      ],
+    });
+    assert.deepEqual(models, [
+      { providerID: 'mock', id: 'alpha', modelID: 'alpha', enabled: true, variants: [{ id: 'low' }, { id: 'high' }] },
+      { providerID: 'claude-agent', id: 'opus', modelID: 'claude-opus-5-5', enabled: false, variants: [] },
+    ]);
+    assert.doesNotMatch(JSON.stringify(models), /sk-not-a-key/);
+  });
+});
+
+// Whose options a plugin is handed when more than one entry adds it: the first
+// that loads it, unless a later one names the same target — then that one,
+// with its options; a later one by the plugin's ID only turns it on, and one
+// with another target is a duplicate Open Code refuses
+// (src/plugin/supervisor.ts; F317).
+describe('the entry whose options reach the plugin', () => {
+  const doc = (path, info) => ({ type: 'document', path, info });
+  const ID = 'opencode-pdkit';
+
+  test('one entry: its options, its document, its target', () => {
+    const options = { models: { 'pd-scout': 'mock/alpha#high' } };
+    assert.deepEqual(pluginEntry([doc('/g/opencode.json', { plugins: ['other', { package: '/src/opencode-pdkit', options }] })], ID), {
+      entry: { document: '/g/opencode.json', target: '/src/opencode-pdkit', options },
+      unread: [],
+    });
+  });
+
+  test('a plain string entry has no options; a directive and another plugin are not entries of it', () => {
+    assert.deepEqual(pluginEntry([doc('/g.json', { plugins: ['-opencode-pdkit', 'other', 'opencode-pdkit@0.16.0'] })], ID), {
+      entry: { document: '/g.json', target: 'opencode-pdkit@0.16.0', options: undefined },
+      unread: [],
+    });
+    for (const documents of [undefined, null, {}, [], [doc('/g.json', {})], [doc('/g.json', { plugins: 'opencode-pdkit' })], [{ type: 'directory', path: '/g', info: { plugins: ['opencode-pdkit'] } }]]) {
+      assert.deepEqual(pluginEntry(documents, ID), { unread: [] }, JSON.stringify(documents));
+    }
+  });
+
+  test('the same target later: the later one is read, and the earlier one’s options are not', () => {
+    const { entry, unread } = pluginEntry(
+      [doc('/g.json', { plugins: [{ package: '/src/opencode-pdkit', options: { models: { a: 'm/low' } } }] }), doc('/p.json', { plugins: [{ package: '/src/opencode-pdkit', options: { models: { a: 'm/high' } } }] })],
+      ID,
+    );
+    assert.deepEqual(entry, { document: '/p.json', target: '/src/opencode-pdkit', options: { models: { a: 'm/high' } } });
+    assert.deepEqual(unread, [{ document: '/g.json', target: '/src/opencode-pdkit', why: '/p.json names the same target later, and Open Code loads it with the options there' }]);
+  });
+
+  test('another target later: the first is read, the later one is refused as a second copy', () => {
+    const { entry, unread } = pluginEntry(
+      [doc('/g.json', { plugins: [{ package: '/src/opencode-pdkit', options: { models: { a: 'm/low' } } }] }), doc('/p.json', { plugins: [{ package: '/link/opencode-pdkit', options: { models: { a: 'm/high' } } }] })],
+      ID,
+    );
+    assert.equal(entry.document, '/g.json');
+    assert.deepEqual(unread, [{ document: '/p.json', target: '/link/opencode-pdkit', why: '/g.json loads the plugin first, and Open Code refuses a second copy' }]);
+  });
+
+  test('the package by its ID later only turns on the one loaded first: the first is read', () => {
+    const { entry, unread } = pluginEntry(
+      [doc('/g.json', { plugins: [{ package: 'opencode-pdkit', options: { models: { a: 'm/low' } } }] }), doc('/p.json', { plugins: [{ package: 'opencode-pdkit', options: { models: { a: 'm/high' } } }] })],
+      ID,
+    );
+    assert.deepEqual(entry, { document: '/g.json', target: 'opencode-pdkit', options: { models: { a: 'm/low' } } });
+    assert.deepEqual(unread, [{ document: '/p.json', target: 'opencode-pdkit', why: 'it names the plugin by its ID, which only turns on the one /g.json loads' }]);
+  });
+
+  test('an entry without options that is not read is not reported: it loses nothing', () => {
+    const { entry, unread } = pluginEntry([doc('/g.json', { plugins: ['/src/opencode-pdkit'] }), doc('/p.json', { plugins: ['/link/opencode-pdkit', { package: '/other/opencode-pdkit' }] })], ID);
+    assert.equal(entry.target, '/src/opencode-pdkit');
+    assert.deepEqual(unread, []);
+  });
+
+  test('a relative target is from its document’s directory, a file URL is its path', () => {
+    const root = process.platform === 'win32' ? 'C:\\' : '/';
+    const g = `${root}home${root === '/' ? '/' : '\\'}g.json`;
+    const first = pluginEntry([doc(g, { plugins: ['./plugins/opencode-pdkit'] })], ID).entry.target;
+    assert.match(first, /plugins[\\/]opencode-pdkit$/);
+    assert.ok(first.startsWith(`${root}home`), first);
+    const url = process.platform === 'win32' ? 'file:///C:/src/opencode-pdkit' : 'file:///src/opencode-pdkit';
+    const fromUrl = pluginEntry([doc(g, { plugins: [url] })], ID).entry.target;
+    assert.match(fromUrl, /src[\\/]opencode-pdkit$/);
   });
 });

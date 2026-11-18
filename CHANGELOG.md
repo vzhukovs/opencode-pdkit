@@ -43,6 +43,20 @@ fixes — see [RELEASING.md](RELEASING.md).
   command alone: a command nested in it, a redirect or a second command is
   asked about as your rules say, and a `deny` in them still stands. Nothing
   else is restricted, as before.
+- **`pdkit doctor` lists the model each agent and command runs on**
+  (`models`), in a table under the line: the model, where it comes from —
+  the `model:` of its file, the plugin's `options.models`, or, for an agent,
+  Open Code's own `agents.<id>.model` — and whether Open Code lists that
+  model and variant for the fork. Open Code checks none of this before a
+  call: an agent on a model it cannot use fails when it is called, and a
+  command refuses only once you run it. The line also names a key of
+  `options.models` that matches no agent or command, a value that is not
+  `provider/model#variant`, a map entry Open Code's `agents.<id>.model`
+  overrides, a plugin entry whose options Open Code does not hand to the
+  plugin, and an agent that runs on a model no config document gives it. It
+  never prints a provider's settings, and without a server to ask it says it
+  cannot tell. It takes the place of `settings:model`; `pdkit init`'s
+  `models` line points at it.
 
 ### Changed
 

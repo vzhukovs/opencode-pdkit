@@ -905,6 +905,9 @@ describe('the server part and lib/', () => {
     // The commands' registrar: a skill's model, argument hint and description,
     // read where the prompt hook and the doctor read them.
     ['lib/session-model.js', ['lib/config.js', 'lib/yaml.js']],
+    // The plugin's options, a model's grammar, and the check against the
+    // models Open Code can use: read where the doctor reads them.
+    ['lib/opencode-models.js', []],
   ]);
 
   const serverModules = () => modules(join(ROOT, 'opencode'), 'opencode');

@@ -19,12 +19,15 @@
 // The plugin's settings, as read from the `options` of its entry in
 // opencode.json. Whatever a user writes there, reading it must not throw —
 // setup() would unload the plugin, gate included — and nothing may be ignored
-// without a trace the doctor can show.
+// without a trace the doctor can show. Then a model's grammar, which both read
+// it by. The check against Open Code's catalog is pinned where a command
+// refuses a model (test/opencode-commands.test.js) and where the doctor
+// reports one (test/doctor.test.js).
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { modelRef, readOptions } from '../opencode/options.js';
+import { modelRef, modelText, readOptions } from '../lib/opencode-models.js';
 
 describe('the models setting', () => {
   test('keeps every entry whose value is a string', () => {
@@ -111,6 +114,14 @@ describe('a model', () => {
   for (const text of ['sonnet', 'opus', '', 'openai', 'openai/', '/gpt-5', 'openai/gpt-5#', 'openai/gpt-5#high#low', 'a#b/c', '#x', 42, null, undefined, {}]) {
     test(`is not ${JSON.stringify(text)}`, () => {
       assert.equal(modelRef(text), undefined);
+    });
+  }
+});
+
+describe('a model, written back', () => {
+  for (const text of ['openai/gpt-6.1-terra#high', 'claude-agent/claude-sonnet-5', 'openrouter/anthropic/claude-x#low']) {
+    test(`is ${text} again`, () => {
+      assert.equal(modelText(modelRef(text)), text);
     });
   }
 });
