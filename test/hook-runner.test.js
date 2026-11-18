@@ -142,7 +142,9 @@ describe('run', () => {
   test("runs in the payload's working directory, not the caller's", async () => {
     const outcome = await runStub('echo');
 
-    assert.equal(JSON.parse(outcome.stdout).cwd, await realpath(work));
+    // Both sides resolved: on Windows the child reports the directory as it was
+    // given, which can be the short 8.3 spelling of the temporary directory.
+    assert.equal(await realpath(JSON.parse(outcome.stdout).cwd), await realpath(work));
   });
 
   // The bridge decides what a hook runs with, per call: nothing is dropped from

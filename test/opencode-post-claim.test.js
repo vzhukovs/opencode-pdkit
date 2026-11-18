@@ -43,7 +43,7 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join, relative } from 'node:path';
+import { basename, dirname, join, normalize, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
@@ -264,7 +264,8 @@ describe('the rules of 06-hooks.md for post-claim, for each tool that writes', (
         const { before, now } = await hooked(hooks, await of(DESIGN, join(repo, DESIGN), PROPOSAL));
 
         const rule = added(before, now).match(/See "A name from another project" in (.+)\.$/)[1];
-        assert.equal(rule, join(PLUGIN_ROOT, 'knowledge', 'pitfalls.md'));
+        // The handler joins with `/` (lib/hooks/post-claim.js); Windows opens either.
+        assert.equal(normalize(rule), join(PLUGIN_ROOT, 'knowledge', 'pitfalls.md'));
         assert.match(await readFile(rule, 'utf8'), /^## A name from another project$/m);
       });
 

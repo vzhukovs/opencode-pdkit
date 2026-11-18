@@ -31,7 +31,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { access, cp, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { homedir, platform, tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { database } from './helpers/opencode-db.js';
@@ -1152,11 +1152,14 @@ describe('whether Open Code runs the plugin', () => {
     });
     assert.match(pkg.entry.detail, /denies opencode-pdkit@0\.16\.0 \(opencode-pdkit\)$/);
 
+    // Native paths: on Windows the document is C:\…\opencode.json, and the
+    // relative entry resolves onto its drive.
+    const plugin = resolve('/work/opencode-pdkit');
     const relative = await run({
       '/api/plugin': [answer(listed())],
-      '/api/config': [answer(documents(['/work/fork/opencode.json', { plugins: ['../opencode-pdkit'], policies: [{ action: 'plugin.use', resource: '/work/opencode-pdkit', effect: 'deny' }] }]))],
+      '/api/config': [answer(documents([join(dirname(plugin), 'fork', 'opencode.json'), { plugins: ['../opencode-pdkit'], policies: [{ action: 'plugin.use', resource: plugin, effect: 'deny' }] }]))],
     });
-    assert.match(relative.entry.detail, /denies \.\.\/opencode-pdkit \(\/work\/opencode-pdkit\)$/);
+    assert.match(relative.entry.detail, new RegExp(`denies \\.\\./opencode-pdkit \\(${plugin.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\)$`));
   });
 
   // Measured: a policy on the package's name does not stop the same plugin

@@ -200,7 +200,8 @@ describe('pre-write', () => {
         payload(join(DIRECTORY, 'notes/update.txt'), 'Edit'),
         payload(join(DIRECTORY, 'notes/move.txt'), 'Edit'),
         payload(join(HOME, 'moved.txt'), 'Write'),
-        payload(resolve('/work/gone.txt'), 'Edit'),
+        // On Windows a path without a drive is on the session directory's.
+        payload(resolve(DIRECTORY, '/work/gone.txt'), 'Edit'),
       ]);
     });
 
@@ -544,6 +545,8 @@ describe('post-bash', () => {
 });
 
 describe('post-read', () => {
+  /** A home directory, native: on Windows, with the drive a path needs. */
+  const SOMEONE = join(tmpdir(), 'someone');
   /** A host whose files have the line counts given, and which says which it was asked about. */
   const hostWith = (counts = {}) => {
     const asked = [];
@@ -551,7 +554,7 @@ describe('post-read', () => {
       asked,
       host: {
         directory: DIRECTORY,
-        home: '/home/someone',
+        home: SOMEONE,
         lines: async (file) => {
           asked.push(file);
           if (!Object.hasOwn(counts, file)) throw new Error(`ENOENT: no such file or directory, open '${file}'`);
@@ -612,7 +615,7 @@ describe('post-read', () => {
 
   test('a page with lines after it counts them in the file the tool read, as the tool resolves its path', async () => {
     const sub = join(DIRECTORY, 'packages', 'main', 'a.ts');
-    const home = join('/home/someone', 'a.ts');
+    const home = join(SOMEONE, 'a.ts');
     const counting = hostWith({ [sub]: 10, [home]: 20, [API]: 30 });
     for (const [path, file, total] of [
       ['packages/main/a.ts', sub, 10],

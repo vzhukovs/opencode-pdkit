@@ -109,8 +109,16 @@ const EVERY_ACTION = [
 
 const escape = (text) => text.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
 
-/** Open Code's wildcard: `*` is anything, slashes included; the rest is literal. */
-const matches = (pattern, value) => new RegExp(`^${pattern.split('*').map(escape).join('.*')}$`, 's').test(value);
+/** A path as Open Code's wildcard sees it: `\` is `/` (F301). */
+const slash = (text) => text.replaceAll('\\', '/');
+
+/**
+ * Open Code's wildcard (`Wildcard.match`, F301): `*` is anything, slashes
+ * included; the rest is literal; both sides with `\` as `/`, and without case
+ * on Windows.
+ */
+const matches = (pattern, value) =>
+  new RegExp(`^${slash(pattern).split('*').map(escape).join('.*')}$`, process.platform === 'win32' ? 'si' : 's').test(slash(value));
 
 /** Open Code's decision: the last rule that matches, `ask` when none does. */
 const decide = (rules, action, resource) =>
@@ -275,8 +283,8 @@ describe('the 14 agents', () => {
         assert.deepEqual(rules, [
           { action: '*', resource: '*', effect: 'deny' },
           ...actions.map((action) => ({ action, resource: '*', effect: 'allow' })),
-          { action: 'external_directory', resource: `${PLUGIN_ROOT}/*`, effect: 'allow' },
-          { action: 'external_directory', resource: `${resolveHome()}/*`, effect: 'allow' },
+          { action: 'external_directory', resource: `${slash(PLUGIN_ROOT)}/*`, effect: 'allow' },
+          { action: 'external_directory', resource: `${slash(resolveHome())}/*`, effect: 'allow' },
         ]);
         for (const action of EVERY_ACTION) {
           assert.equal(decide(rules, action, '*'), actions.includes(action) ? 'allow' : 'deny', `${id}: ${action}`);
