@@ -311,6 +311,13 @@ fixes — see [RELEASING.md](RELEASING.md).
   and the list of them it kept in the system temp directory: the prompt hook
   writes nothing at all.
 
+### Fixed
+
+- On Windows, writing a file under `schemas/` (or a `*.schema.*` file) never
+  got the reminder to run `pnpm generate:schemas`: the path came with `\`
+  between its parts, and the check looked for `/`. The file got the license
+  header check of any other source file instead.
+
 ## [0.15.0] - 2026-11-13
 
 ### Upgrading
