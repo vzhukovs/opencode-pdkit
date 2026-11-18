@@ -71,6 +71,17 @@ fixes — see [RELEASING.md](RELEASING.md).
   Open Code, where every `/pd:` command refuses, it says so rather than
   calling them someone else's. A warning, not a failure; without a server to
   ask it says it cannot tell.
+- **`pdkit doctor` checks the Open Code version against the plugin's
+  minimum** (`opencode`, right after `node`), 2.3.0, from `engines.opencode`.
+  Open Code loads a plugin on any version; below the minimum this one runs
+  the upstream gate alone and every `/pd:` command refuses, and this line
+  says why, with `opencode upgrade`. Open Code 1 fails with
+  `opencode upgrade --major`. From a session (`/pd:doctor`) it reads the
+  version of the server that runs the plugin; from a terminal it asks
+  `opencode --version` and says that is the CLI's, which can differ from the
+  server's. A newer Open Code is fine, and the line names the version the
+  plugin is tested on; a build that is not a release (`0.0.0-dev-…`, `local`)
+  is not compared, and the line says so.
 
 ### Changed
 

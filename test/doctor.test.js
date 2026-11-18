@@ -45,6 +45,7 @@ import {
   checkMcp,
   checkModels,
   checkNode,
+  checkOpenCodeVersion,
   checkPlugin,
   diagnose,
   format,
@@ -539,7 +540,7 @@ describe('the hooks the plugin registered in the session', () => {
     assert.equal(
       entry.detail,
       'this session’s commands carry no PDKIT_HOOKS: opencode-pdkit is not running here, and neither is the gate on ' +
-        'writes upstream — or it runs below its minimum Open Code, with the gate alone (see plugin)',
+        'writes upstream — or it runs below its minimum Open Code, with the gate alone (see plugin, opencode)',
     );
   });
 
@@ -1003,6 +1004,152 @@ describe('the Node check', () => {
     const result = checkNode('>=22');
     assert.equal(result.status, 'fail');
     assert.match(result.detail, /engines\.node is ">=22", not ">=X\.Y\.Z"/);
+  });
+});
+
+// D9: Open Code loads a plugin on any host, whatever engines.opencode says
+// (F241), so the doctor holds the host to the minimum. The version that counts
+// is the server's, which the plugin puts on every shell command; the CLI's can
+// be another (F240), and is read only when no plugin said the server's.
+describe('the Open Code that runs the plugin', () => {
+  const RANGE = '>=2.3.0';
+  const SERVER = 'the Open Code server’s, which runs this session';
+  const TERMINAL = 'the CLI’s (opencode --version) — the Open Code server that runs the plugin can be another version, which /pd:doctor shows';
+  const UNLABELED = 'the CLI’s (opencode --version) — this session’s commands carry no PDKIT_OPENCODE_VERSION, so the server’s is not known (see hooks)';
+
+  /** What a shell of a session whose server runs the plugin carries. */
+  const fromServer = (version) => labeled(EVENTS, { PDKIT_OPENCODE_VERSION: version });
+  /** `opencode --version` as Open Code 2 prints it, through `probe`'s answer. */
+  const printing = (stdout) => async () => ({ ok: true, stdout });
+  const notAsked = async () => {
+    throw new Error('the doctor ran opencode --version with the server’s version at hand');
+  };
+
+  // The versions of the task, each as the verdict it gets and the end of its
+  // detail after the source; both sources see the same verdict.
+  const VERSIONS = [
+    ['2.3.0', 'ok', ''],
+    ['2.4.1', 'ok', '; opencode-pdkit is tested on 2.3.0'],
+    ['2.10.0', 'ok', '; opencode-pdkit is tested on 2.3.0'],
+    [
+      '2.2.7',
+      'fail',
+      '. Below 2.3.0, the minimum, opencode-pdkit runs the gate alone and every /pd: command refuses — update it with: opencode upgrade',
+    ],
+    ['1.19.5', 'fail', '. Open Code 1 is not supported — move to Open Code 2 with: opencode upgrade --major'],
+    ['0.0.0-dev-1297', 'skip', '. Not a release build: it cannot be compared with the minimum, 2.3.0'],
+    ['local', 'skip', '. Not a release build: it cannot be compared with the minimum, 2.3.0'],
+  ];
+
+  for (const [version, status, verdict] of VERSIONS) {
+    test(`${version} from the server is ${status}, said as the server’s`, async () => {
+      const entry = await checkOpenCodeVersion(RANGE, { env: fromServer(version), cli: notAsked });
+
+      assert.deepEqual(entry, { id: 'opencode', level: 'required', status, detail: `${version}, ${SERVER}${verdict}` });
+    });
+
+    // Open Code 2 prints `opencode v<version>`, a local build `opencode vlocal`;
+    // Open Code 1 prints the version bare (research/T7.15-raw).
+    const printed = version.startsWith('1.') ? `${version}\n` : `opencode v${version}\n`;
+    test(`${version} from opencode --version (${JSON.stringify(printed.trim())}) is ${status}, said as the CLI’s`, async () => {
+      const entry = await checkOpenCodeVersion(RANGE, { env: {}, cli: printing(printed) });
+
+      assert.deepEqual(entry, { id: 'opencode', level: 'required', status, detail: `${version}, ${TERMINAL}${verdict}` });
+    });
+  }
+
+  // T7.6: in a session whose server is below the minimum the plugin sets
+  // nothing, and hooks already fails for it. The CLI's version names the cause.
+  test('a session whose commands carry no version: the CLI’s, and why it is the CLI’s', async () => {
+    const below = await checkOpenCodeVersion(RANGE, { env: SESSION, cli: printing('opencode v2.2.7\n') });
+    assert.equal(below.status, 'fail');
+    assert.equal(below.detail, `2.2.7, ${UNLABELED}${VERSIONS[3][2]}`);
+
+    const fine = await checkOpenCodeVersion(RANGE, { env: SESSION, cli: printing('opencode v2.3.0\n') });
+    assert.deepEqual(fine, { id: 'opencode', level: 'required', status: 'ok', detail: `2.3.0, ${UNLABELED}` });
+  });
+
+  test('an empty variable says no version: the CLI is asked', async () => {
+    const entry = await checkOpenCodeVersion(RANGE, { env: { PDKIT_OPENCODE_VERSION: '' }, cli: printing('opencode v2.3.0\n') });
+
+    assert.equal(entry.detail, `2.3.0, ${TERMINAL}`);
+  });
+
+  test('no opencode fails, with the version it needs', async () => {
+    const entry = await checkOpenCodeVersion(RANGE, { env: {}, cli: async () => ({ ok: false, stdout: '', error: 'not found' }) });
+
+    assert.deepEqual(entry, { id: 'opencode', level: 'required', status: 'fail', detail: 'opencode: not found; need Open Code >= 2.3.0' });
+  });
+
+  // The real `opencode --version`, started with the doctor's environment.
+  test('no opencode on the PATH of the environment it is given: not found', async () => {
+    const empty = await mkdtemp(join(tmpdir(), 'pdkit-no-opencode-'));
+    try {
+      const entry = await checkOpenCodeVersion(RANGE, { env: onPath(empty) });
+
+      assert.equal(entry.status, 'fail');
+      assert.equal(entry.detail, 'opencode: not found; need Open Code >= 2.3.0');
+    } finally {
+      await rm(empty, { recursive: true, force: true });
+    }
+  });
+
+  test('runs the opencode of that PATH, and reads what it prints', { skip: !POSIX && 'T10.10' }, async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pdkit-opencode-'));
+    const stand = async (body) => writeFile(join(dir, 'opencode'), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+    try {
+      await stand('[ "$1" = --version ] && echo "opencode v2.4.1"');
+      assert.equal((await checkOpenCodeVersion(RANGE, { env: onPath(dir) })).detail, `2.4.1, ${TERMINAL}; opencode-pdkit is tested on 2.3.0`);
+
+      await stand('echo 1.19.5');
+      assert.equal((await checkOpenCodeVersion(RANGE, { env: onPath(dir) })).detail, `1.19.5, ${TERMINAL}${VERSIONS[4][2]}`);
+
+      await stand('echo "cannot start" >&2; exit 3');
+      const broken = await checkOpenCodeVersion(RANGE, { env: onPath(dir) });
+      assert.equal(broken.status, 'fail');
+      assert.match(broken.detail, /^opencode --version: Command failed: opencode --version/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('output that names no version: cannot tell, with what it printed', async () => {
+    const entry = await checkOpenCodeVersion(RANGE, { env: {}, cli: printing('Error: no such flag\nmore\n') });
+
+    assert.deepEqual(entry, {
+      id: 'opencode',
+      level: 'required',
+      status: 'skip',
+      detail: 'cannot tell: opencode --version printed "Error: no such flag", not a version',
+    });
+  });
+
+  test('a version it cannot read: cannot tell, not a pass', async () => {
+    const entry = await checkOpenCodeVersion(RANGE, { env: fromServer('2.3'), cli: notAsked });
+
+    assert.deepEqual(entry, { id: 'opencode', level: 'required', status: 'skip', detail: `cannot tell: 2.3, ${SERVER} — not a version it can read` });
+  });
+
+  test('a range it cannot read fails, as `node` does, and asks nothing', async () => {
+    const entry = await checkOpenCodeVersion('^2.3.0', { env: {}, cli: notAsked });
+
+    assert.deepEqual(entry, { id: 'opencode', level: 'required', status: 'fail', detail: 'package.json engines.opencode is "^2.3.0", not ">=X.Y.Z"' });
+  });
+
+  // The variable the plugin writes, read back by the check that reads it.
+  test('reads what the plugin writes', async () => {
+    const { prepare } = await import('../opencode/environment.js');
+    const env = prepare({ ...SESSION, PATH: '/usr/bin' }, { bin: '/plugin/bin', version: '2.4.1', hooks: EVENTS, node: 'v24.22.1' });
+
+    assert.equal((await checkOpenCodeVersion(RANGE, { env, cli: notAsked })).detail, `2.4.1, ${SERVER}; opencode-pdkit is tested on 2.3.0`);
+  });
+
+  test('the doctor prints it after node, against the package’s engines.opencode', async () => {
+    const report = await diagnose({ pluginRoot: process.cwd(), askServer: offline, env: fromServer('2.3.0') });
+    const ids = report.checks.map((entry) => entry.id);
+
+    assert.equal(ids.indexOf('opencode'), ids.indexOf('node') + 1);
+    assert.deepEqual(find(report.checks, 'opencode'), { id: 'opencode', level: 'required', status: 'ok', detail: `2.3.0, ${SERVER}` });
   });
 });
 

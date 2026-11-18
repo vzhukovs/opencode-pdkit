@@ -28,7 +28,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { checkOpenCode, compareVersions, minimumVersion, parseRelease } from '../lib/opencode-version.js';
+import { checkOpenCode, cliVersion, compareVersions, minimumVersion, parseRelease } from '../lib/opencode-version.js';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 
@@ -73,6 +73,37 @@ describe('release versions', () => {
 
   test('a build that is not a release is not ordered at all', () => {
     assert.throws(() => compareVersions('0.0.0-dev-1297', '2.3.0'), /X\.Y\.Z/);
+  });
+});
+
+// What `opencode --version` prints (research/T7.15-raw): Open Code 2 through
+// effect's CLI, `opencode v<version>` with no color off a terminal; a local
+// build's version is `local`. Open Code 1 through yargs, the version bare.
+describe('the version opencode --version prints', () => {
+  for (const [output, version] of [
+    ['opencode v2.3.0\n', '2.3.0'],
+    ['opencode v2.4.1', '2.4.1'],
+    ['opencode v0.0.0-dev-1297\n', '0.0.0-dev-1297'],
+    ['opencode vlocal\n', 'local'],
+    ['1.19.5\n', '1.19.5'],
+    ['\n  opencode v2.3.0  \r\n', '2.3.0'],
+  ]) {
+    test(`${JSON.stringify(output)} is ${version}, as the server would say it`, () => {
+      assert.equal(cliVersion(output), version);
+    });
+  }
+
+  for (const output of ['', '\n', 'Error: no such flag', 'opencode 2.3.0', 'opencode', undefined, 42]) {
+    test(`${JSON.stringify(output)} names none`, () => {
+      assert.equal(cliVersion(output), undefined);
+    });
+  }
+
+  // Read back as the plugin reads the server's.
+  test('what it reads, the minimum check places', () => {
+    assert.equal(checkOpenCode({ version: cliVersion('opencode v2.2.7\n') }, '2.3.0').status, 'below');
+    assert.equal(checkOpenCode({ version: cliVersion('opencode vlocal\n') }, '2.3.0').status, 'unreleased');
+    assert.equal(checkOpenCode({ version: cliVersion('1.19.5\n') }, '2.3.0').status, 'below');
   });
 });
 
