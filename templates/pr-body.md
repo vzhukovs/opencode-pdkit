@@ -102,5 +102,9 @@
 
      It is stated at all because a reviewer is entitled to know how a change
      reached them, and because the second half is the part that matters — a
-     named person read this before it was opened. -->
-<sub>Prepared with podman-desktop-kit (Claude Code Plugin){{reviewedBy}}</sub>
+     named person read this before it was opened.
+
+     The harness is filled in too, after the plugin's name: preflight checks a
+     pull request that is already open against this template again, and one
+     opened under another harness names that one there. -->
+<sub>Prepared with podman-desktop-kit{{harness}}{{reviewedBy}}</sub>

@@ -928,7 +928,7 @@ describe('the artefact checks', () => {
       `**Not in this PR**\n\nNothing — one atomic change.\n\n### Screenshot / video of UI\n\nn/a — no UI change.\n\n` +
       `### What issues does this PR fix or reference?\n\nFixes #5001\n\n### How to test this PR?\n\n${steps}\n\n` +
       `**Notes for reviewers**\n\n${notes}\n\n- [ ] Tests are covering the bug fix or the new feature\n` +
-      `<sub>Prepared with podman-desktop-kit (Claude Code Plugin)</sub>\n`;
+      `<sub>Prepared with podman-desktop-kit (OpenCode Plugin)</sub>\n`;
 
     test('a body within its budget passes, and never blocks either way', async () => {
       const result = await only('pr-body-size', { prBody: sized() });

@@ -29,6 +29,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { HARNESS_CLAUSE } from '../lib/harness.js';
 import { TEMPLATES, missing, render, validateSections, write } from '../lib/render.js';
 
 let home;
@@ -197,6 +198,19 @@ describe('validateSections', () => {
     assert.equal((await validateSections('reviewReport', text)).ok, true);
   });
 
+  // A pull request that is already open is checked against the template again
+  // — /pd:pr-sync and /pd:resume read its body back from GitHub. One the Claude
+  // Code version of the plugin opened names that harness in its footer, and
+  // failing it would hold the push until the body was edited upstream.
+  test('a body whose footer names another harness still has its footer', async () => {
+    const text = (await render('prBody', await fillAll('prBody'))).replace(
+      /<sub>.*<\/sub>/,
+      '<sub>Prepared with podman-desktop-kit (Claude Code Plugin), reviewed by @jdoe</sub>',
+    );
+
+    assert.deepEqual((await validateSections('prBody', text)).missing, []);
+  });
+
   test('an unknown template is an error', async () => {
     await assert.rejects(() => validateSections('nope', ''), /no template named/);
   });
@@ -242,6 +256,7 @@ describe('missing', () => {
   // throw" would spend a lookup on a question.
   test('an implicit value counts as filled without being resolved', async () => {
     const values = await fillAll('prBody');
+    delete values.harness;
     delete values.reviewedBy;
 
     assert.deepEqual(await missing('prBody', values), []);
@@ -263,11 +278,25 @@ describe('implicit values', () => {
   test('the footer names the fork owner without being told to', async () => {
     await writeFile(join(home, 'config.yaml'), 'repo:\n  fork: jdoe/podman-desktop\n');
     const values = await fillAll('prBody');
+    delete values.harness;
     delete values.reviewedBy;
 
     const text = await render('prBody', values, { home, stripComments: true });
 
-    assert.match(text, /Prepared with podman-desktop-kit \(Claude Code Plugin\), reviewed by @jdoe/);
+    assert.match(text, /<sub>Prepared with podman-desktop-kit \(OpenCode Plugin\), reviewed by @jdoe<\/sub>/);
+  });
+
+  // A reviewer has never heard of the plugin, and has of the harness: the name
+  // of the harness is what says an agent prepared the change. lib/harness.js
+  // owns it, so the template asks for it rather than spelling it.
+  test('the footer names the harness, as lib/harness.js names it', async () => {
+    const values = await fillAll('prBody');
+    delete values.harness;
+
+    const text = await render('prBody', values, { home, stripComments: true });
+
+    assert.equal(HARNESS_CLAUSE, ' (OpenCode Plugin)');
+    assert.ok(text.includes(`<sub>Prepared with podman-desktop-kit${HARNESS_CLAUSE}<reviewedBy></sub>`), text);
   });
 
   // The clone already knows. Asking GitHub as well would be a network round
@@ -304,11 +333,12 @@ describe('implicit values', () => {
       return { stdin: { end: () => {} } };
     };
     const values = await fillAll('prBody');
+    delete values.harness;
     delete values.reviewedBy;
 
     const text = await render('prBody', values, { home, exec, stripComments: true });
 
-    assert.match(text, /Prepared with podman-desktop-kit \(Claude Code Plugin\)<\/sub>/);
+    assert.match(text, /<sub>Prepared with podman-desktop-kit \(OpenCode Plugin\)<\/sub>/);
     assert.doesNotMatch(text, /reviewed by/);
     assert.doesNotMatch(text, /@\s*<\/sub>/, 'a dangling @ reached the body');
   });

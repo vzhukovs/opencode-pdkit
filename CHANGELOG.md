@@ -205,6 +205,13 @@ fixes — see [RELEASING.md](RELEASING.md).
   says `read`, a `shell` command, and a `grep` cut short by its `limit`:
   Open Code's grep has no context lines, and context read through the shell
   is caught as any other shell window is.
+- **A pull request body names OpenCode in its footer.** It ends
+  `Prepared with podman-desktop-kit (OpenCode Plugin), reviewed by @<you>`
+  where it named Claude Code; without a login the clause naming a person is
+  still left out. The harness is filled in like the login, so a pull request
+  the Claude Code version opened still passes `pr-body-template` when
+  `/pd:pr-sync` or `/pd:resume` checks its body again, without an edit to it
+  upstream.
 
 ### Removed
 
