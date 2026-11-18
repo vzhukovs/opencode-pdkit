@@ -942,7 +942,9 @@ describe('pre-compact', () => {
 describe('prompt-submit', () => {
   /**
    * The prompt hook's event for the prompt a pdkit command sends (F75, F80):
-   * the text its execute built, and the label it put on it (D6).
+   * its text, and the label it put on it (D6). The text is never read — the
+   * payload is the label's alone — so here it is not the line the command
+   * sends, and only the label can make the payload.
    */
   const submitted = (label, fields = {}) => ({
     sessionID: 'ses_person',

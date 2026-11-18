@@ -39,14 +39,24 @@
 //                 until the person changes it. A `model:` that is not
 //                 provider/model#variant (a Claude Code alias) is not read,
 //                 and the command runs on the session's model;
-//   text:         the skill's body, with the plugin's root spelled out and the
-//                 arguments put in, as Claude Code did: in place of each
-//                 `$ARGUMENTS`, or, in a skill that has none, after the body
-//                 as `ARGUMENTS: <what was typed>`;
-//   label:        `metadata` on the prompt the command sends, which tells the
-//                 prompt hook that a pdkit command ran, and which one
+//   text:         two messages, as Claude Code sent them: the line the person
+//                 typed, `/pd:<name> <arguments>`, as the person's message;
+//                 then the skill's body, with the plugin's root spelled out
+//                 and the arguments put in as Claude Code did — in place of
+//                 each `$ARGUMENTS`, or, in a skill that has none, after the
+//                 body as `ARGUMENTS: <what was typed>` — as a synthetic
+//                 message. The model reads both, in that order, in one step;
+//                 the person sees the line, and under it only
+//                 `◈ the instructions of /pd:<name>`, where Claude Code showed
+//                 nothing of the body. A command queued behind the work under
+//                 way (delivery `queue`) sends the body alone, as the
+//                 person's message, which the person then sees whole: Open
+//                 Code hands a session one queued message per step, and the
+//                 model would answer the line before it had the skill;
+//   label:        `metadata` on the person's message, which tells the prompt
+//                 hook that a pdkit command ran, and which one
 //                 (opencode/bridge/payload.js). Open Code hands the hook the
-//                 text alone;
+//                 text alone, and never calls it for a synthetic message;
 //   allowed-tools: the shell commands the skill lists run without a question
 //                 until the person's next message, as Claude Code granted
 //                 them for the turn (opencode/allowed.js). Invoking any
@@ -78,6 +88,9 @@ export const PREFIX = 'pd:';
 
 /** Where a skill takes what was typed after its name. */
 export const ARGUMENTS = '$ARGUMENTS';
+
+/** The delivery of a command queued behind the work under way, which Open Code hands over one message per step. */
+export const QUEUE = 'queue';
 
 /**
  * @param {unknown} error
@@ -229,8 +242,33 @@ export function unavailable(catalog, ref) {
 }
 
 /**
- * The text a command sends: its body with the arguments put in, as Claude
- * Code put them in a skill.
+ * The person's message a command sends: the line as it was typed — the
+ * command's name, then what followed it, trimmed; lines after the first are
+ * kept.
+ *
+ * @param {string} name pd:<skill>
+ * @param {string} given what was typed after the command's name
+ * @returns {string}
+ */
+export function commandLine(name, given) {
+  const typed = given.trim();
+  return typed === '' ? `/${name}` : `/${name} ${typed}`;
+}
+
+/**
+ * What the session shows of a command's instructions: the description of the
+ * synthetic message, one line under the person's, `◈ <description>`.
+ *
+ * @param {string} name pd:<skill>
+ * @returns {string}
+ */
+export function instructionsOf(name) {
+  return `the instructions of /${name}`;
+}
+
+/**
+ * The instructions a command sends: its body with the arguments put in, as
+ * Claude Code put them in a skill.
  *
  * @param {string} body
  * @param {string} given what was typed after the command's name
@@ -255,11 +293,24 @@ export function withArguments(body, given) {
  */
 
 /**
- * A command's execute: check its model and switch to it, then send its text,
- * labeled — with the grant of its `allowed-tools`, if it has one. Throws when
- * the model cannot be used — before anything in the session changes but the
- * end of an earlier command's grant, which the person's invoking this one
- * ends. Open Code shows the message to the person.
+ * A command's execute: check its model and switch to it, then send the line,
+ * labeled, and the instructions — with the grant of its `allowed-tools`, if it
+ * has one. Throws when the model cannot be used — before anything in the
+ * session changes but the end of an earlier command's grant, which the
+ * person's invoking this one ends. Open Code shows the message to the person.
+ *
+ * The line goes into the session's inbox without waking it (`resume: false`),
+ * and the instructions after it wake the session, both with the delivery the
+ * command came with: the model reads the line, what the prompt hook attached
+ * to it, and the instructions, in one step — the session's next step, the
+ * work under way's if there is some (`steer`). Instructions the session
+ * refuses leave the line there alone, for whatever comes next to wake; the
+ * exception then says so, and what to do, and the grant ends with it.
+ *
+ * A command queued behind the work under way (`queue`) sends one message, the
+ * instructions as the person's, labeled: Open Code takes one queued message
+ * from the inbox per step, so a line and instructions queued apart would
+ * reach the model a step apart, the line alone first.
  *
  * @param {object} ctx
  * @param {Definition} command
@@ -290,17 +341,37 @@ export function executor(ctx, command, grants) {
       await ctx.session.switchModel({ sessionID, model: { ...ref } });
     }
     grants?.give(sessionID, command.name, command.allowed);
+    const label = { source: LABEL_SOURCE, command: command.name, arguments: given };
+    const queued = input?.delivery === QUEUE;
     try {
       await ctx.session.prompt({
         ...input?.prompt,
         sessionID,
-        text: withArguments(command.body, given),
+        text: queued ? withArguments(command.body, given) : commandLine(command.name, given),
         delivery: input?.delivery,
-        metadata: { source: LABEL_SOURCE, command: command.name, arguments: given },
+        metadata: label,
+        ...(queued ? {} : { resume: false }),
       });
     } catch (error) {
       grants?.end(sessionID);
       throw error;
+    }
+    if (queued) return;
+    try {
+      await ctx.session.synthetic({
+        sessionID,
+        text: withArguments(command.body, given),
+        description: instructionsOf(command.name),
+        delivery: input?.delivery,
+        metadata: { source: LABEL_SOURCE, instructions: command.name },
+      });
+    } catch (error) {
+      grants?.end(sessionID);
+      throw new Error(
+        `pdkit: /${command.name} went into the session without its instructions, which could not be added ` +
+          `(${reason(error)}). The model will read the line alone, with whatever comes next; ` +
+          `run /${command.name} again${given.trim() === '' ? '' : ' with the same arguments'}.`,
+      );
     }
   };
 }

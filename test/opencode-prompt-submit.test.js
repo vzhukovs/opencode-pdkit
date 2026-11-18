@@ -99,8 +99,8 @@ after(async () => {
 /** A pdkit command's label on the prompt it sends (D6): which command, with what. */
 const label = (command = 'pd:preflight', args = `${AWAY}`) => ({ source: 'opencode-pdkit', command, arguments: args });
 
-/** The prompt hook's event (F75): the text a command's execute built, its label, and the files the person attached. */
-const prompting = ({ metadata = label(), text = 'The pd:preflight template, as its execute expanded it.', files = [], sessionID = PERSON } = {}) => ({
+/** The prompt hook's event (F75): the line a command's execute sent, its label, and the files the person attached. */
+const prompting = ({ metadata = label(), text = `/pd:preflight ${AWAY}`, files = [], sessionID = PERSON } = {}) => ({
   sessionID,
   messageID: 'msg_test',
   prompt: { text, files, agents: [] },

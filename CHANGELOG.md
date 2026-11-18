@@ -15,6 +15,16 @@ fixes — see [RELEASING.md](RELEASING.md).
   the three phrase-triggered ones included. Open Code shows a command's
   description and nothing else beside its name, so the argument hint comes
   first: `/pd:exec  <issue-number> [task-id] · Implement the plan…`.
+- **A command shows the line you typed, not the skill.** `/pd:exec 42`
+  stays `/pd:exec 42` in the session, with one line under it,
+  `◈ the instructions of /pd:exec`; the skill, with the plugin's root and your
+  arguments put in, goes to the model right after your line, in the same
+  step, as Claude Code sent it. Should Open Code refuse the skill after taking
+  the line, the command says so: the line then reaches the model alone with
+  whatever comes next, and running the command again sends both. A command
+  you queue behind the work under way (`<leader>return`) is the exception:
+  Open Code hands a session one queued message per step, so it goes as one
+  message, the skill itself, which you then see whole.
 - **A command checks its model before it switches the session to it.** The
   model is the one mapped to the command in the plugin's `options.models`,
   else its `model:`. One Open Code cannot use — no such model, a disabled one,

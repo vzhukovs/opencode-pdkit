@@ -36,7 +36,10 @@ import { fileURLToPath } from 'node:url';
 import {
   ARGUMENTS,
   PREFIX,
+  QUEUE,
+  commandLine,
   commandModels,
+  instructionsOf,
   readSkills,
   registerCommands,
   registerRefusals,
@@ -46,7 +49,7 @@ import {
 } from '../opencode/commands.js';
 import { LABEL_SOURCE, promptSubmit } from '../opencode/bridge/payload.js';
 import { modelRef } from '../opencode/options.js';
-import { ROOT_TOKEN, readPrompt } from '../opencode/prompts.js';
+import { ROOT_TOKEN, readPrompt, spellRoot } from '../opencode/prompts.js';
 import { ADVANCES } from '../lib/state.js';
 import { HINT_SEPARATOR, commandDescription, skillArgument, skillDescription, skillModel } from '../lib/session-model.js';
 
@@ -115,9 +118,10 @@ const DEFAULTS = Object.freeze({
  * rejects: `session.prompt`, `permission.evaluate`. `hooks` holds the
  * callbacks by the same names. A prompt goes through the prompt hooks before
  * it is recorded, as Open Code runs them inside the call (F77, F81);
- * `promptFails` makes the call reject after them.
+ * `promptFails` makes the call reject after them. A synthetic message goes
+ * through no hook (F79); `syntheticFails` makes its call reject.
  */
-async function register({ root = ROOT, models = {}, catalog = [...CATALOG, ...SUBSCRIPTION], listFails = false, refuse = [], fail = [], promptFails = false } = {}) {
+async function register({ root = ROOT, models = {}, catalog = [...CATALOG, ...SUBSCRIPTION], listFails = false, refuse = [], fail = [], promptFails = false, syntheticFails = false } = {}) {
   const lines = [];
   const calls = [];
   const transforms = { command: [], skill: [] };
@@ -157,6 +161,10 @@ async function register({ root = ROOT, models = {}, catalog = [...CATALOG, ...SU
         if (promptFails) throw new Error('the session is gone');
         calls.push(['prompt', input]);
       },
+      synthetic: async (input) => {
+        if (syntheticFails) throw new Error('the inbox is closed');
+        calls.push(['synthetic', input]);
+      },
     },
   };
   const report = await registerCommands(ctx, { root, settings: { models }, log: (line) => lines.push(line) });
@@ -186,9 +194,12 @@ async function say(hooks, text, sessionID = 'ses_t6b') {
 }
 
 /** Run a command as Open Code does: the arguments only, no name (F98). */
-async function run(command, text = '', prompt = {}) {
-  await command.execute({ sessionID: 'ses_t6b', prompt: { text, files: [], agents: [], ...prompt }, delivery: 'steer' });
+async function run(command, text = '', prompt = {}, delivery = 'steer') {
+  await command.execute({ sessionID: 'ses_t6b', prompt: { text, files: [], agents: [], ...prompt }, delivery });
 }
+
+/** What the last call of a kind into the session was handed: `prompt` (the person's line), `synthetic` (the instructions). */
+const last = (calls, kind) => calls.findLast(([call]) => call === kind)?.[1];
 
 /** The frontmatter of a skill as YAML reads it, and its body as written. */
 async function source(name, root = ROOT) {
@@ -294,35 +305,135 @@ describe('the description: argument hint first', () => {
 });
 
 describe('what a command sends', () => {
-  test('each sends its skill with the root spelled out and the arguments put in, labeled for the prompt hook', async () => {
+  test('each sends the line as typed, labeled for the prompt hook, then its skill with the root spelled out and the arguments put in', async () => {
     const { commands, calls } = await register();
     for (const name of await skillNames(ROOT)) {
       calls.length = 0;
       await run(commands.get(`${PREFIX}${name}`), '42');
-      const sent = calls.filter(([call]) => call === 'prompt');
-      assert.equal(sent.length, 1, name);
-      const [, input] = sent[0];
+      const sent = calls.filter(([call]) => call === 'prompt' || call === 'synthetic');
+      assert.deepEqual(sent.map(([call]) => call), ['prompt', 'synthetic'], name);
+      const [[, line], [, instructions]] = sent;
       const { body } = await source(name);
 
-      // A shipped default is one this Open Code can use, and the session is on it before the text.
+      // A shipped default is one this Open Code can use, and the session is on it before the line.
       const ref = modelRef(await skillModel(name));
       const switched = calls.filter(([call]) => call === 'switchModel').map(([, { model }]) => model);
       assert.deepEqual(switched, ref ? [ref] : [], name);
-      assert.equal(calls.at(-1)[0], 'prompt', name);
+      assert.deepEqual(calls.slice(-2).map(([call]) => call), ['prompt', 'synthetic'], name);
 
-      assert.equal(input.sessionID, 'ses_t6b', name);
-      assert.equal(input.delivery, 'steer', name);
-      assert.deepEqual(input.metadata, { source: LABEL_SOURCE, command: `${PREFIX}${name}`, arguments: '42' }, name);
+      // The person's message: the line, kept in the inbox; the label the prompt hook reads.
+      assert.equal(line.sessionID, 'ses_t6b', name);
+      assert.equal(line.text, `/${PREFIX}${name} 42`, name);
+      assert.equal(line.resume, false, name);
+      assert.equal(line.delivery, 'steer', name);
+      assert.deepEqual(line.metadata, { source: LABEL_SOURCE, command: `${PREFIX}${name}`, arguments: '42' }, name);
 
-      assert.equal(input.text.includes(ROOT_TOKEN), false, name);
-      assert.equal(input.text.split(ABSOLUTE).length - 1, body.split(ROOT_TOKEN).length - 1, name);
+      // The model's: the skill, which wakes the session; the person sees its description.
+      assert.equal(instructions.sessionID, 'ses_t6b', name);
+      assert.equal(instructions.delivery, 'steer', name);
+      assert.equal(instructions.description, `the instructions of /${PREFIX}${name}`, name);
+      assert.equal(Object.hasOwn(instructions, 'resume'), false, name);
+      assert.equal(instructions.text.includes(ROOT_TOKEN), false, name);
+      assert.equal(instructions.text.split(ABSOLUTE).length - 1, body.split(ROOT_TOKEN).length - 1, name);
+      assert.equal(instructions.text, withArguments(spellRoot(body, ABSOLUTE), '42'), name);
       if (body.includes(ARGUMENTS)) {
-        assert.equal(input.text.includes(ARGUMENTS), false, name);
-        assert.equal(input.text.includes('ARGUMENTS: 42'), false, name);
+        assert.equal(instructions.text.includes(ARGUMENTS), false, name);
+        assert.equal(instructions.text.includes('ARGUMENTS: 42'), false, name);
       } else {
-        assert.equal(input.text.endsWith('\n\nARGUMENTS: 42'), true, name);
+        assert.equal(instructions.text.endsWith('\n\nARGUMENTS: 42'), true, name);
       }
     }
+  });
+
+  test('the line is the command and what was typed, trimmed, lines after the first kept', () => {
+    assert.equal(commandLine('pd:sync', ''), '/pd:sync');
+    assert.equal(commandLine('pd:sync', '  \n'), '/pd:sync');
+    assert.equal(commandLine('pd:exec', ' 42 T3 '), '/pd:exec 42 T3');
+    assert.equal(commandLine('pd:triage', '42\nseen on Windows only\n  `$HOME` stays\n'), '/pd:triage 42\nseen on Windows only\n  `$HOME` stays');
+    assert.equal(instructionsOf('pd:exec'), 'the instructions of /pd:exec');
+  });
+
+  test('without arguments the line is the command alone, and the skill is sent as it is', async () => {
+    const { commands, calls } = await register();
+    await run(commands.get('pd:sync'));
+    assert.equal(last(calls, 'prompt').text, '/pd:sync');
+    assert.equal(last(calls, 'prompt').metadata.arguments, '');
+    const { body } = await source('sync');
+    assert.equal(last(calls, 'synthetic').text, spellRoot(body, ABSOLUTE));
+  });
+
+  test('the skill goes to the model alone: none of it is in the person\'s message', async () => {
+    const { commands, calls } = await register();
+    for (const name of await skillNames(ROOT)) {
+      calls.length = 0;
+      await run(commands.get(`${PREFIX}${name}`), '42');
+      const { body } = await source(name);
+      const line = last(calls, 'prompt');
+      const first = body.trim().split('\n')[0];
+      assert.equal(line.text.includes(first), false, name);
+      assert.equal(line.text.includes(ABSOLUTE), false, name);
+      assert.equal(line.text.includes('ARGUMENTS'), false, name);
+    }
+  });
+
+  test('both go with the delivery the command came with', async () => {
+    const { commands, calls } = await register();
+    await run(commands.get('pd:exec'), '42', {}, 'steer');
+    assert.equal(last(calls, 'prompt').delivery, 'steer');
+    assert.equal(last(calls, 'synthetic').delivery, 'steer');
+    calls.length = 0;
+    await commands.get('pd:exec').execute({ sessionID: 'ses_t6b', prompt: { text: '42' } });
+    assert.equal(last(calls, 'prompt').delivery, undefined, "none named: Open Code's default for both");
+    assert.equal(last(calls, 'synthetic').delivery, undefined);
+  });
+
+  // Open Code takes one queued message from the inbox per step (SessionInbox.promote):
+  // a line and instructions queued apart reach the model a step apart, the line alone first.
+  test('a command queued behind the work under way sends one message: its skill as the person\'s, labeled', async () => {
+    const { commands, calls, hooks } = await register();
+    for (const name of await skillNames(ROOT)) {
+      calls.length = 0;
+      await run(commands.get(`${PREFIX}${name}`), ' 42 ', { files: [{ type: 'file', url: 'file:///fork/a.ts' }] }, QUEUE);
+      const sent = calls.filter(([call]) => call === 'prompt' || call === 'synthetic');
+      assert.deepEqual(sent.map(([call]) => call), ['prompt'], name);
+      const [[, input]] = sent;
+      const { body } = await source(name);
+      assert.equal(input.text, withArguments(spellRoot(body, ABSOLUTE), '42'), name);
+      assert.equal(input.delivery, QUEUE, name);
+      assert.equal(Object.hasOwn(input, 'resume'), false, `${name}: it wakes the session itself, when its turn comes`);
+      assert.deepEqual(input.metadata, { source: LABEL_SOURCE, command: `${PREFIX}${name}`, arguments: ' 42 ' }, name);
+      assert.deepEqual(input.files, [{ type: 'file', url: 'file:///fork/a.ts' }], name);
+    }
+    // The grant is given and kept by its own prompt, as for any command.
+    await run(commands.get('pd:editor'), '42', {}, QUEUE);
+    assert.equal(await ask(hooks, ['pdkit editor 42']), 'allow');
+  });
+
+  test("the instructions' label is not a command's: the prompt hook and the subagent-stop hold read it as nothing of theirs", async () => {
+    const { commands, calls } = await register();
+    await run(commands.get('pd:exec'), '42');
+    const { metadata } = last(calls, 'synthetic');
+    assert.deepEqual(metadata, { source: LABEL_SOURCE, instructions: 'pd:exec' });
+    assert.deepEqual(promptSubmit({ sessionID: 'ses_t6b', metadata }, { directory: '/fork' }), []);
+    assert.equal(Object.hasOwn(metadata, 'command'), false);
+    assert.equal(Object.hasOwn(metadata, 'hook'), false);
+  });
+
+  test('instructions the session refuses leave the line alone there: the person is told so, and what to do', async () => {
+    const { commands, calls } = await register({ syntheticFails: true });
+    await assert.rejects(
+      () => run(commands.get('pd:exec'), ' 42 T3 '),
+      (error) => {
+        assert.equal(
+          error.message,
+          'pdkit: /pd:exec went into the session without its instructions, which could not be added (the inbox is ' +
+            'closed). The model will read the line alone, with whatever comes next; run /pd:exec again with the same arguments.',
+        );
+        return true;
+      },
+    );
+    assert.deepEqual(calls.map(([call]) => call), ['model.list', 'switchModel', 'prompt']);
+    await assert.rejects(() => run(commands.get('pd:sync')), /; run \/pd:sync again\.$/);
   });
 
   test('the prompt hook reads each label back as the command a person typed', async () => {
@@ -340,9 +451,11 @@ describe('what a command sends', () => {
   test('editor and open take their arguments where the skill says, and the rest after the body', async () => {
     const { commands, calls } = await register();
     await run(commands.get('pd:open'), 'tree 42');
-    assert.match(calls.at(-1)[1].text, /^Arguments: `tree 42`$/m);
+    assert.match(last(calls, 'synthetic').text, /^Arguments: `tree 42`$/m);
+    assert.equal(last(calls, 'prompt').text, '/pd:open tree 42');
     await run(commands.get('pd:exec'), '42 T3');
-    assert.equal(calls.at(-1)[1].text.endsWith('\n\nARGUMENTS: 42 T3'), true);
+    assert.equal(last(calls, 'synthetic').text.endsWith('\n\nARGUMENTS: 42 T3'), true);
+    assert.equal(last(calls, 'prompt').text, '/pd:exec 42 T3');
   });
 
   test('without arguments nothing is appended, and a placeholder is left empty', () => {
@@ -360,18 +473,18 @@ describe('what a command sends', () => {
   test('lines after the first are kept: triage reads them as prior context', async () => {
     const { commands, calls } = await register();
     await run(commands.get('pd:triage'), '42\nseen on Windows only\nafter the last update');
-    const [, input] = calls.at(-1);
-    assert.equal(input.text.endsWith('\n\nARGUMENTS: 42\nseen on Windows only\nafter the last update'), true);
-    assert.equal(input.metadata.arguments, '42\nseen on Windows only\nafter the last update');
+    assert.equal(last(calls, 'synthetic').text.endsWith('\n\nARGUMENTS: 42\nseen on Windows only\nafter the last update'), true);
+    assert.equal(last(calls, 'prompt').text, '/pd:triage 42\nseen on Windows only\nafter the last update');
+    assert.equal(last(calls, 'prompt').metadata.arguments, '42\nseen on Windows only\nafter the last update');
   });
 
-  test('files, agents and skills the person attached go along with the text', async () => {
+  test('files, agents and skills the person attached go along with the line', async () => {
     const { commands, calls } = await register();
     const files = [{ type: 'file', url: 'file:///fork/a.ts' }];
     const agents = [{ name: 'pd-scout' }];
     const skills = [{ id: 'pd:package-map' }];
     await run(commands.get('pd:sync'), '', { files, agents, skills });
-    const [, input] = calls.at(-1);
+    const input = last(calls, 'prompt');
     assert.deepEqual(input.files, files);
     assert.deepEqual(input.agents, agents);
     assert.deepEqual(input.skills, skills);
@@ -398,12 +511,12 @@ describe('the model a command runs on', () => {
     });
   });
 
-  test('the frontmatter\'s, checked against the catalog, then switched to, then the text', async () => {
+  test('the frontmatter\'s, checked against the catalog, then switched to, then the line and the instructions', async () => {
     const { commands, calls } = await register({ root });
     await run(commands.get('pd:a'), '7');
     assert.deepEqual(
       calls.map(([call]) => call),
-      ['model.list', 'switchModel', 'prompt'],
+      ['model.list', 'switchModel', 'prompt', 'synthetic'],
     );
     assert.deepEqual(calls[1][1], { sessionID: 'ses_t6b', model: { providerID: 'mock', id: 'alpha', variant: 'low' } });
   });
@@ -483,7 +596,7 @@ describe('the model a command runs on', () => {
   test('a Claude Code alias is not read: the command runs on the session\'s model, and is listed as unread', async () => {
     const { commands, calls, report, lines } = await register({ root });
     await run(commands.get('pd:b'), '7');
-    assert.deepEqual(calls.map(([call]) => call), ['prompt']);
+    assert.deepEqual(calls.map(([call]) => call), ['prompt', 'synthetic']);
     assert.deepEqual(report.unread, ['skills/b/SKILL.md: model "sonnet" is not provider/model#variant']);
     assert.deepEqual(lines, []);
   });
@@ -491,7 +604,7 @@ describe('the model a command runs on', () => {
   test('a skill without one switches nothing', async () => {
     const { commands, calls } = await register({ root });
     await run(commands.get('pd:c'));
-    assert.deepEqual(calls.map(([call]) => call), ['prompt']);
+    assert.deepEqual(calls.map(([call]) => call), ['prompt', 'synthetic']);
   });
 
   test('effort: is not read: the variant is the one model: names', async () => {
@@ -636,7 +749,7 @@ describe('allowed-tools: what a command runs without asking, until the next mess
     const { commands, hooks, calls } = await register();
     assert.equal(await ask(hooks, ['pdkit editor 42']), 'ask', 'nothing granted before the command');
     await run(commands.get('pd:editor'), '42');
-    assert.equal(calls.at(-1)[0], 'prompt');
+    assert.equal(calls.at(-1)[0], 'synthetic', 'the instructions went through no prompt hook, and ended nothing');
 
     assert.equal(await ask(hooks, ['pdkit editor 42']), 'allow');
     assert.equal(await ask(hooks, ['pdkit editor']), 'allow');
@@ -698,8 +811,15 @@ describe('allowed-tools: what a command runs without asking, until the next mess
   });
 
   test('a prompt that fails takes the grant with it', async () => {
-    const { commands, hooks } = await register({ promptFails: true });
+    const { commands, hooks, calls } = await register({ promptFails: true });
     await assert.rejects(run(commands.get('pd:editor'), '42'), /the session is gone/);
+    assert.equal(await ask(hooks, ['pdkit editor 42']), 'ask');
+    assert.equal(last(calls, 'synthetic'), undefined, 'no instructions without the line');
+  });
+
+  test('so do instructions that fail after the line went in', async () => {
+    const { commands, hooks } = await register({ syntheticFails: true });
+    await assert.rejects(run(commands.get('pd:editor'), '42'), /without its instructions/);
     assert.equal(await ask(hooks, ['pdkit editor 42']), 'ask');
   });
 

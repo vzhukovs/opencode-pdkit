@@ -385,11 +385,11 @@ describe('in Open Code: the prompt a pdkit command sends, through the hook bridg
     return { ctx, hooks };
   };
 
-  /** The prompt hook's event for what a pdkit command sends: the text its execute built, and its label. */
+  /** The prompt hook's event for what a pdkit command sends: the line as typed, and its label. */
   const sent = (command, args) => ({
     sessionID: SESSION,
     messageID: 'msg_test',
-    prompt: { text: `The ${command} template, as its execute expanded it.`, files: [], agents: [] },
+    prompt: { text: args.trim() === '' ? `/${command}` : `/${command} ${args.trim()}`, files: [], agents: [] },
     metadata: { source: 'opencode-pdkit', command, arguments: args },
     delivery: 'steer',
   });
