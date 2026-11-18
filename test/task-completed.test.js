@@ -254,6 +254,77 @@ describe('who the gate is for', () => {
     assert.equal(decision.block, true);
   });
 
+  // Under Open Code the two sides come from different places (F91, F252). The
+  // pointer takes the session from the shell `pdkit task start` runs in, which
+  // /pd:exec runs in the session a person drives. A stop comes from the hook
+  // bridge, which gives the session at the top of the subagent's chain of
+  // parents — not the subagent's own, which is what its shell would say. The
+  // variable is named literally, as in test/active.test.js: the name is Open
+  // Code's.
+  describe('the session, as Open Code names it on each side', () => {
+    const PERSON = 'ses_person';
+
+    /** `pdkit task start` from the shell of `session`, as /pd:exec runs it. */
+    const startFrom = async (t, session) => {
+      const saved = process.env.OPENCODE_SESSION_ID;
+      t.after(() => {
+        if (saved === undefined) delete process.env.OPENCODE_SESSION_ID;
+        else process.env.OPENCODE_SESSION_ID = saved;
+      });
+      process.env.OPENCODE_SESSION_ID = session;
+      await start({ issue: ISSUE, taskId: 'T1', worktree: WORKTREE, home });
+    };
+
+    /** The implementer's stop, as the bridge builds it for child session `id` of `parentID`. */
+    const stopOf = (id, parentID = PERSON) =>
+      subagentStopPayloads(
+        { sessionID: id },
+        { session: { parentID, agent: IMPLEMENTER, location: { directory: WORKTREE } }, root: parentID, held: false },
+      )[0];
+
+    const lastRun = async () => (await readJournal({ event: 'agent-done' }, { home })).at(-1);
+
+    test("the implementer the task's session started is held, though its own shell names its own session", async (t) => {
+      await startFrom(t, PERSON);
+      const stopped = stopOf('ses_child_held');
+
+      assert.equal(stopped.agent_id, 'ses_child_held', 'the run is the child session');
+      assert.equal(stopped.session_id, PERSON, 'the session compared is its parent');
+      const decision = await taskCompleted(stopped, { event: 'subagent-stop', pluginRoot: '' });
+
+      assert.equal(decision.block, true);
+      assert.match(decision.reason, /there is no receipt/);
+      assert.match((await lastRun()).detail, /^agent task ses_child_held; pd-implementer; while T1 was active$/);
+    });
+
+    test("one another session started in the same tree is let through, and counted as not the task's", async (t) => {
+      await startFrom(t, PERSON);
+
+      const decision = await taskCompleted(stopOf('ses_child_elsewhere', 'ses_other'), { event: 'subagent-stop', pluginRoot: '' });
+
+      assert.equal(decision.block, false);
+      assert.match((await lastRun()).detail, /^agent task ses_child_elsewhere; pd-implementer; from another session than the one running T1$/);
+    });
+
+    // D10 (condition 6): $PDKIT_HOME is shared, and a task the Claude Code
+    // version started left a pointer naming a session of that harness — a
+    // UUID, which no Open Code session is. Its implementer here is another
+    // session's, as a new Claude Code session's was there, until /pd:exec
+    // starts the task again. Nothing in the code is there for the switch.
+    test('a task the Claude Code version started holds no implementer here until it is started again', async (t) => {
+      await start({ issue: ISSUE, taskId: 'T1', worktree: WORKTREE, session: '0e1f7c52-3b9a-4d8e-a6f1-5c2d9b7e4a10', home });
+
+      const left = await taskCompleted(stopOf('ses_child_after_cc'), { event: 'subagent-stop', pluginRoot: '' });
+      assert.equal(left.block, false);
+      assert.match((await lastRun()).detail, /from another session than the one running T1$/);
+
+      await startFrom(t, PERSON);
+      const restarted = await taskCompleted(stopOf('ses_child_restarted'), { event: 'subagent-stop', pluginRoot: '' });
+      assert.equal(restarted.block, true);
+      assert.match(restarted.reason, /there is no receipt/);
+    });
+  });
+
   // The constant and the agent definition are two spellings of one name, and
   // only one of them is what the host reports. Renaming the agent alone would
   // turn the gate off without failing anything else.

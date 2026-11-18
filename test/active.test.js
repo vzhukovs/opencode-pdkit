@@ -25,7 +25,7 @@
 
 import { test, describe, before, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -107,6 +107,29 @@ describe('the pointer', () => {
     process.env.OPENCODE_SESSION_ID = 'ses_this_one';
     await start({ issue: 18248, taskId: 'T1', worktree: '/work/fork', home });
     assert.equal((await current({ worktree: '/work/fork', home })).session, 'ses_this_one');
+  });
+
+  // D10: $PDKIT_HOME is shared with the Claude Code version, and a task it
+  // started left a pointer naming a session of that harness. It is read as it
+  // is — nothing here translates or drops it — and /pd:exec starting the task
+  // again from an Open Code session puts that session in its place. Whose
+  // agents the old one holds meanwhile is test/task-completed.test.js's.
+  test('a pointer the Claude Code version wrote is read as it is, until the task is started again here', async (t) => {
+    withEnv(t, { OPENCODE_SESSION_ID: 'ses_person', CLAUDE_CODE_SESSION_ID: undefined });
+    const written = {
+      issue: 18248,
+      taskId: 'T1',
+      worktree: resolve('/work/fork'),
+      startedAt: '2026-11-10T09:00:00.000Z',
+      session: '0e1f7c52-3b9a-4d8e-a6f1-5c2d9b7e4a10',
+    };
+    await mkdir(paths(home).active, { recursive: true });
+    await writeFile(join(paths(home).active, `${keyFor('/work/fork')}.json`), `${JSON.stringify(written, null, 2)}\n`);
+
+    assert.deepEqual(await current({ worktree: '/work/fork', home }), written);
+
+    await start({ issue: 18248, taskId: 'T1', worktree: '/work/fork', home });
+    assert.equal((await current({ worktree: '/work/fork', home })).session, 'ses_person');
   });
 
   test('a tree with nothing running has no pointer', async () => {
