@@ -1479,7 +1479,7 @@ describe('the MCP servers Open Code reports', () => {
 
 // Claude Code's version checked the model `pdkit init` wrote into the fork's
 // .claude/settings.local.json against the skills' frontmatter. Nothing writes
-// one now — each /pd: command switches the session to its own model — so
+// one now — a /pd: command that has a model switches the session to it — so
 // there is no copy to fall behind, and the file Claude Code's version left
 // there is that version's business.
 describe('the session model in the fork', () => {

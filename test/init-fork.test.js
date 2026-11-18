@@ -114,8 +114,9 @@ describe('reading the fork from the clone', () => {
 
 // What `pdkit init` leaves in the fork: nothing. Claude Code's version wrote
 // the session's default model into .claude/settings.local.json there; in Open
-// Code each /pd: command switches the session to its own model, so there is
-// no default to keep, and Open Code's project config would be a file git sees.
+// Code a /pd: command that has a model switches the session to it, so there
+// is no default to keep, and Open Code's project config would be a file git
+// sees.
 // The file Claude Code's version wrote is left as it is: that version reads it.
 describe('the fork after pdkit init', () => {
   let fork;
@@ -184,10 +185,12 @@ describe('the fork after pdkit init', () => {
     assert.equal(await status(), before);
   });
 
+  // Not every command: the three phrase skills' commands declare no model and
+  // run on the session's, unless options.models gives them one.
   test('says where the models come from, in place of a model and an effort', async () => {
     const out = await init();
 
-    assert.match(out, /^ {2}models {6}: each \/pd: command sets its own — `pdkit doctor` lists them$/m);
+    assert.match(out, /^ {2}models {6}: each \/pd: command that has a model switches the session to it — `pdkit doctor` lists them$/m);
     assert.doesNotMatch(out, /^ {2}(model|effort) +:/m);
   });
 
