@@ -16,9 +16,7 @@ lists what has gone wrong more than once.
 npm test                                                                  # whole suite
 node --import ./test/helpers/isolate-home.js --test test/<module>.test.js # one file
 node scripts/check-plugin-load.js                                         # does the packed package load in Open Code
-pdkit doctor --gate-selftest --repo <podman-desktop fork>                 # after lib/hooks/, hooks/hooks.json, bin/pdkit
-# TODO(T7.7): the self-test still runs the hook that hooks/hooks.json registers;
-# it moves to the Open Code bridge, and hooks/hooks.json goes
+pdkit doctor --gate-selftest --repo <podman-desktop fork>                 # after lib/hooks/, opencode/, bin/pdkit
 ```
 
 Never run a test without `--import ./test/helpers/isolate-home.js`: without it a

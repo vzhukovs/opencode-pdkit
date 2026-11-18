@@ -27,9 +27,9 @@
 npm test
 ```
 
-<!-- Required if anything under lib/hooks/, hooks/hooks.json or bin/pdkit
-     changed. Every unit test stays green while a plugin whose manifest did not
-     load gates nothing at all, so the suite cannot answer this: -->
+<!-- Required if anything under lib/hooks/, opencode/ or bin/pdkit changed.
+     Every unit test stays green while the hook a session starts cannot run,
+     so the suite cannot answer this: -->
 
 ```
 pdkit doctor --gate-selftest --repo <a real podman-desktop fork>

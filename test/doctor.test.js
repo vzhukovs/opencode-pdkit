@@ -29,9 +29,9 @@
 import { test, describe, before, after, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { access, cp, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
-import { platform, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { access, cp, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { homedir, platform, tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { cleanup, commitAll, initRepo } from './helpers/repo-fixture.js';
@@ -52,6 +52,7 @@ import { HOOK_HANDLERS } from '../lib/hooks/events.js';
 import { append as appendJournal } from '../lib/journal.js';
 import { WRAPPERS } from '../lib/hooks/command-parse.js';
 import { create } from '../lib/worktree.js';
+import { preBash, preWrite } from '../opencode/bridge/payload.js';
 
 let plugin;
 
@@ -90,11 +91,35 @@ function clock() {
 const SESSION = { OPENCODE_SESSION_ID: 'ses_e1ab4dbd8ffeAGRhkvVT6EWLR0' };
 const EVENTS = Object.keys(HOOK_HANDLERS);
 const labeled = (hooks = EVENTS, more = {}) => ({ ...SESSION, PDKIT_HOOKS: hooks.join(','), ...more });
+const POSIX = platform() !== 'win32';
+/** This process's environment with only `path` on PATH, under whatever case the platform spells it in. */
+const onPath = (path) => ({ ...Object.fromEntries(Object.entries(process.env).filter(([name]) => name.toUpperCase() !== 'PATH')), PATH: path });
+const DENIES = GATE_PROBES.filter((probe) => probe.deny).length;
+
+/**
+ * Run `body` with the copy's bin/pdkit — what the hook runner starts — replaced
+ * by `source`, and put it back after.
+ *
+ * @template T
+ * @param {string} source
+ * @param {() => Promise<T>} body
+ * @returns {Promise<T>}
+ */
+async function withEntryPoint(source, body) {
+  const file = join(plugin, 'bin', 'pdkit');
+  const original = await readFile(file, 'utf8');
+  await writeFile(file, source);
+  try {
+    return await body();
+  } finally {
+    await writeFile(file, original);
+  }
+}
 
 before(async () => {
   plugin = await mkdtemp(join(tmpdir(), 'pdkit-doctor-'));
 
-  for (const entry of ['bin', 'lib', 'hooks', 'defaults', 'templates', 'package.json']) {
+  for (const entry of ['bin', 'lib', 'defaults', 'templates', 'package.json']) {
     await cp(join(process.cwd(), entry), join(plugin, entry), { recursive: true });
   }
 });
@@ -132,28 +157,191 @@ describe('the probe set', () => {
 });
 
 describe('the self-test', () => {
+  // In the words the Claude Code version printed: what runs the probes
+  // changed, what a person reads did not.
   test('passes on an intact plugin', async () => {
     const checks = await gateSelftest({ pluginRoot: plugin });
 
-    assert.equal(find(checks, 'gate:selftest').status, 'ok');
-    assert.equal(find(checks, 'gate:allows').status, 'ok');
+    assert.deepEqual(
+      checks.map(({ id, level, status, detail }) => ({ id, level, status, detail })),
+      [
+        { id: 'owns:selftest', level: 'required', status: 'ok', detail: 'writes outside the active task are refused, writes inside are not' },
+        { id: 'gate:selftest', level: 'required', status: 'ok', detail: `${DENIES} forbidden commands all refused, through ${join(plugin, 'bin', 'pdkit')}` },
+        { id: 'gate:allows', level: 'required', status: 'ok', detail: `${GATE_PROBES.length - DENIES} ordinary commands all allowed` },
+      ],
+    );
   });
 
-  test('fails when the manifest does not register the hook on Bash', async () => {
-    const file = join(plugin, 'hooks', 'hooks.json');
-    const original = await readFile(file, 'utf8');
-    const manifest = JSON.parse(original);
-    manifest.hooks.PreToolUse[0].matcher = 'Read';
-    await writeFile(file, JSON.stringify(manifest));
+  // Under Claude Code a hook that exited 1 let the command run, and the old
+  // criterion counted every ordinary probe as allowed. Through the bridge it is
+  // no answer: refused on pre-bash, unchecked on pre-write — a pass on neither.
+  test('a hook that crashes answers nothing, and every half fails saying so', async () => {
+    await withEntryPoint("throw new Error('broken on purpose');\n", async () => {
+      const checks = await gateSelftest({ pluginRoot: plugin });
+
+      const gate = find(checks, 'gate:selftest');
+      assert.equal(gate.status, 'fail');
+      assert.match(gate.detail, new RegExp(`^THE GATE DOES NOT SEE ${DENIES} of ${DENIES} forbidden commands:`));
+      assert.match(gate.detail, /^ {6}git push {2}\(the bare form\) — no answer$/m);
+      assert.match(gate.detail, /\n {6}the hook gave no answer: exited with code 1 \(Error: broken on purpose[^\n]*$/);
+
+      const allows = find(checks, 'gate:allows');
+      assert.equal(allows.status, 'fail');
+      assert.match(allows.detail, /^ {6}git status {2}\(reading\) — no answer$/m);
+      assert.match(allows.detail, /\n {6}the hook gave no answer: exited with code 1 \(Error: broken on purpose[^\n]*$/);
+
+      const owns = find(checks, 'owns:selftest');
+      assert.equal(owns.status, 'fail');
+      assert.match(owns.detail, /^writes go through unchecked — the hook gave no answer: exited with code 1 \(Error: broken on purpose/);
+    });
+  });
+
+  // A hook that never started gives one reason for every probe, said once;
+  // reasons that differ stay beside their probes, and a command the hook let
+  // through is not a command it failed to answer.
+  test('says why there was no answer once when it is one reason, beside each probe when not', async () => {
+    const standIn = [
+      "import { readFileSync } from 'node:fs';",
+      "const command = JSON.parse(readFileSync(0, 'utf8')).tool_input?.command ?? '';",
+      "process.exit(command.startsWith('gh ') ? 0 : command.startsWith('nohup ') ? 1 : 3);",
+      '',
+    ].join('\n');
+
+    await withEntryPoint(standIn, async () => {
+      const checks = await gateSelftest({ pluginRoot: plugin });
+      const gate = find(checks, 'gate:selftest').detail.split('\n').map((line) => line.trim());
+      const allows = find(checks, 'gate:allows').detail.split('\n').map((line) => line.trim());
+
+      assert.ok(gate.includes('gh pr create --base main --head x --title t  (opening a pull request) — allowed'));
+      assert.ok(gate.includes('nohup git push  (behind a wrapper program) — no answer: exited with code 1 and wrote nothing to stderr'));
+      assert.ok(gate.includes('git push  (the bare form) — no answer: exited with code 3 and wrote nothing to stderr'));
+      assert.deepEqual(gate.filter((line) => line.startsWith('the hook gave no answer')), []);
+
+      assert.ok(allows.includes('git status  (reading) — no answer'));
+      assert.ok(!allows.some((line) => line.startsWith('gh pr view 1')));
+      assert.equal(allows.at(-1), 'the hook gave no answer: exited with code 3 and wrote nothing to stderr');
+    });
+  });
+
+  // The PATH that counts is the one the hook is started with: in a session,
+  // the Open Code server's. Without node there the plugin refuses every
+  // command, and the self-test says it is not checking any.
+  test('no node on the PATH the hook starts with: no answer, and every half fails', { skip: !POSIX && 'T10.10' }, async () => {
+    const empty = await mkdtemp(join(tmpdir(), 'pdkit-no-node-'));
 
     try {
-      const checks = await gateSelftest({ pluginRoot: plugin });
-      const result = find(checks, 'gate:selftest');
+      const checks = await gateSelftest({ pluginRoot: plugin, env: onPath(empty) });
+      const unfound = 'cannot run: "node" was not found on the PATH of the process that runs hooks (ENOENT)';
 
-      assert.equal(result.status, 'fail');
-      assert.match(result.detail, /no PreToolUse hook on Bash/);
+      assert.equal(find(checks, 'gate:selftest').status, 'fail');
+      assert.ok(find(checks, 'gate:selftest').detail.includes('\n      git push  (the bare form) — no answer\n'));
+      assert.ok(find(checks, 'gate:selftest').detail.includes(`\n      the hook gave no answer: ${unfound}`));
+      assert.equal(find(checks, 'gate:allows').status, 'fail');
+      assert.ok(find(checks, 'gate:allows').detail.includes('\n      git status  (reading) — no answer\n'));
+      assert.ok(find(checks, 'gate:allows').detail.includes(`\n      the hook gave no answer: ${unfound}`));
+      assert.equal(find(checks, 'owns:selftest').status, 'fail');
+      assert.ok(find(checks, 'owns:selftest').detail.startsWith(`writes go through unchecked — the hook gave no answer: ${unfound}`));
     } finally {
-      await writeFile(file, original);
+      await rm(empty, { recursive: true, force: true });
+    }
+  });
+
+  // A token of the person's would let a probe through and be spent on it, and
+  // the journal only grows: each half runs against a home of its own, and the
+  // one the doctor was given — the live one, from a session — stays as it was.
+  test('leaves the home it is given as it was', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'pdkit-doctor-home-'));
+
+    try {
+      const checks = await gateSelftest({ pluginRoot: plugin, env: { ...process.env, PDKIT_HOME: home } });
+
+      assert.equal(find(checks, 'gate:selftest').status, 'ok');
+      assert.deepEqual(await readdir(home), []);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  // From a session the doctor's environment is the one Open Code gives the
+  // shell — the server's PATH (F93) — and that is what the hook starts with,
+  // not the PATH of whatever ran the doctor's process.
+  test('diagnose starts the hook with the environment it is given', { skip: !POSIX && 'T10.10' }, async () => {
+    const repo = await initRepo('pdkit-doctor-selftest-env-');
+    const empty = await mkdtemp(join(tmpdir(), 'pdkit-no-node-'));
+
+    try {
+      const report = await diagnose({ cwd: repo, pluginRoot: plugin, gateSelftest: true, askServer: offline, env: onPath(empty) });
+
+      assert.equal(find(report.checks, 'gate:selftest').status, 'fail');
+      assert.match(find(report.checks, 'gate:selftest').detail, /the hook gave no answer: cannot run: "node" was not found on the PATH/);
+      assert.equal(report.status, 'fail');
+    } finally {
+      await cleanup(repo);
+      await rm(empty, { recursive: true, force: true });
+    }
+  });
+
+  // lib/ does not import the bridge, so the self-test spells out the payloads
+  // the bridge builds. This holds the two to one shape: what reaches the hook
+  // from a probe is what reaches it from a command of the session the doctor
+  // runs in.
+  test('gives the hook what the bridge gives it, run where the payload says', async () => {
+    const record = join(plugin, 'record.jsonl');
+    const standIn = [
+      "import { appendFileSync, readFileSync, realpathSync } from 'node:fs';",
+      "const payload = JSON.parse(readFileSync(0, 'utf8'));",
+      'const here = process.cwd() === realpathSync(payload.cwd);',
+      "appendFileSync(process.env.PDKIT_TEST_RECORD, JSON.stringify({ event: process.argv.slice(2), here, payload }) + '\\n');",
+      '',
+    ].join('\n');
+    const json = (value) => JSON.parse(JSON.stringify(value));
+
+    try {
+      await withEntryPoint(standIn, () => gateSelftest({ pluginRoot: plugin, env: { ...process.env, ...SESSION, PDKIT_TEST_RECORD: record } }));
+      const runs = (await readFile(record, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+
+      const shell = runs.filter((run) => run.event.join(' ') === 'hook pre-bash');
+      assert.deepEqual(
+        shell.map(({ payload }) => payload.tool_input.command),
+        GATE_PROBES.map((probe) => probe.command),
+      );
+      shell.forEach(({ here, payload }, index) => {
+        const event = { tool: 'shell', sessionID: SESSION.OPENCODE_SESSION_ID, input: { command: GATE_PROBES[index].command } };
+        assert.deepEqual(payload, json(preBash(event, payload.cwd)));
+        assert.equal(basename(payload.cwd), GATE_PROBES[index].outside ? 'elsewhere' : 'podman-desktop');
+        assert.equal(here, true, `${GATE_PROBES[index].command} ran outside ${payload.cwd}`);
+      });
+
+      const writes = runs.filter((run) => run.event.join(' ') === 'hook pre-write');
+      assert.deepEqual(
+        writes.map(({ payload }) => payload.tool_input.file_path.slice(payload.cwd.length)),
+        [join('/', 'other', 'x.ts'), join('/', 'owned', 'x.ts')],
+      );
+      for (const { here, payload } of writes) {
+        const event = { tool: 'write', sessionID: SESSION.OPENCODE_SESSION_ID, input: { path: payload.tool_input.file_path } };
+        assert.deepEqual([payload], json(preWrite(event, { directory: payload.cwd, home: homedir() })));
+        assert.equal(here, true);
+      }
+      assert.equal(runs.length, shell.length + writes.length);
+    } finally {
+      await rm(record, { force: true });
+    }
+  });
+
+  // From a terminal there is no session, and the bridge would name none.
+  test('names no session outside one', async () => {
+    const record = join(plugin, 'record.jsonl');
+    const standIn = "import { appendFileSync, readFileSync } from 'node:fs';\nappendFileSync(process.env.PDKIT_TEST_RECORD, readFileSync(0, 'utf8') + '\\n');\n";
+    const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !(name in SESSION)));
+
+    try {
+      await withEntryPoint(standIn, () => gateSelftest({ pluginRoot: plugin, env: { ...env, PDKIT_TEST_RECORD: record } }));
+      const payloads = (await readFile(record, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+
+      assert.equal(payloads.length, GATE_PROBES.length + 2);
+      assert.deepEqual(payloads.filter((payload) => 'session_id' in payload), []);
+    } finally {
+      await rm(record, { force: true });
     }
   });
 
@@ -169,14 +357,14 @@ describe('the self-test', () => {
 
       assert.equal(result.status, 'fail');
       assert.match(result.detail, /THE GATE DOES NOT SEE/);
-      assert.match(result.detail, /nohup git push/);
+      assert.match(result.detail, /nohup git push {2}\(behind a wrapper program\) — allowed$/m);
       assert.match(result.detail, /\(git push\)/);
     } finally {
       await writeFile(file, original);
     }
   });
 
-  test('the ownership hook is exercised through the manifest too', async () => {
+  test('the ownership hook is exercised the same way', async () => {
     assert.equal(find(await gateSelftest({ pluginRoot: plugin }), 'owns:selftest').status, 'ok');
   });
 
@@ -192,6 +380,23 @@ describe('the self-test', () => {
 
       assert.equal(result.status, 'fail');
       assert.match(result.detail, /ownership map is not enforced/);
+    } finally {
+      await writeFile(file, original);
+    }
+  });
+
+  // pre-write fails open: runHook lets the write through when owns.js does not
+  // load, and says so on stderr. That line is the why worth showing.
+  test('an ownership handler that does not load is named with runHook’s words', async () => {
+    const file = join(plugin, 'lib', 'hooks', 'owns.js');
+    const original = await readFile(file, 'utf8');
+    await writeFile(file, 'this is not valid javascript {{{\n');
+
+    try {
+      const result = find(await gateSelftest({ pluginRoot: plugin }), 'owns:selftest');
+
+      assert.equal(result.status, 'fail');
+      assert.match(result.detail, /^a write outside the active task's files was allowed — the ownership map is not enforced \(pdkit: hook "pre-write" handler "owns\.js" is unavailable \(.+\); allowing\)$/);
     } finally {
       await writeFile(file, original);
     }
@@ -254,16 +459,11 @@ describe('the hook table', () => {
     }
   });
 
-  // Claude Code's manifest, which the self-tests still read, says nothing of
-  // what the plugin registers in Open Code.
+  // Claude Code's manifest is gone from the plugin, and nothing here missed it:
+  // which hooks run in Open Code is the plugin's own doing.
   test('reads no hooks/hooks.json', async () => {
-    await rename(join(plugin, 'hooks'), join(plugin, 'hooks.away'));
-
-    try {
-      assert.equal((await checkHooks(plugin, {}))[0].status, 'ok');
-    } finally {
-      await rename(join(plugin, 'hooks.away'), join(plugin, 'hooks'));
-    }
+    await assert.rejects(access(join(plugin, 'hooks')), { code: 'ENOENT' });
+    assert.equal((await checkHooks(plugin, {}))[0].status, 'ok');
   });
 });
 
