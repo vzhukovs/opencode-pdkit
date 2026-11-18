@@ -119,8 +119,10 @@ describe('unknown flags', () => {
     assert.equal(unknownFlags('init', { b: true })[0].suggestion, null, 'a one-letter flag is within two of everything');
   });
 
-  // Invoked by the host rather than typed. Refusing an argument a future
-  // Claude Code adds would take the gate down to report a typo nobody made.
+  // Run by a program rather than typed: lib/hooks/runner.js, for the hook
+  // bridge and the doctor; in the Claude Code version the host, which could add
+  // arguments of its own. Refusing an argument its caller adds would take the
+  // gate down to report a typo nobody made.
   test('hook is exempt, and so is a command that does not exist', () => {
     assert.deepEqual(unknownFlags('hook', { anything: true, later: true }), []);
     assert.deepEqual(unknownFlags('nonsense', { whatever: true }), [], 'the unknown command is the error, not its flags');

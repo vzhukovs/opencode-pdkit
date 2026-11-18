@@ -237,7 +237,7 @@ describe('conflict entries', () => {
 // detail used to reach the command line: `1h` sorted above every date so the
 // whole journal came back, `24h` sorted below every date so nothing did. Two
 // opposite wrong answers, neither of them an error.
-// What SessionStart injects, and what it must not spend its budget on.
+// What session-start injects, and what it must not spend its budget on.
 //
 // The summary exists to remind somebody returning to the work of what happened.
 // `agent-done` is written once per subagent completion, so one `/pd:exec` with

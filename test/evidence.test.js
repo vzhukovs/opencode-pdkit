@@ -91,7 +91,8 @@ describe('capture', () => {
   // rewritten on its way here (section 6, receipts).
   //
   // The guarantee is the spawn. capture() starts the process from Node, so an
-  // output rewriter hooked onto Claude Code's Bash tool never sees the command.
+  // output rewriter hooked onto the agent's shell tool — Claude Code's Bash,
+  // Open Code's shell — never sees the command.
   // These two assert the property that follows from it, which is the one worth
   // keeping whether or not any such rewriter is ever installed: bulk arrives
   // whole, and the command is the one the receipt names.
