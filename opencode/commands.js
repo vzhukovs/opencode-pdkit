@@ -422,8 +422,9 @@ export async function registerCommands(ctx, plugin) {
   });
 
   // The doctor shows each command's model and where it came from (`models`,
-  // lib/doctor.js), read as commandModels reads it.
-  // TODO(T7.14): and finds a command or skill another source has replaced.
+  // lib/doctor.js), read as commandModels reads it; and finds a command or a
+  // skill something else put under one of these names (`commands`): by the
+  // description skillDescription builds, and by the path given here.
   return Object.freeze({
     commands: Object.freeze(commands),
     skills: Object.freeze(loadable),

@@ -31,12 +31,14 @@ import {
   agentModels,
   agentRules,
   catalog,
+  commands,
   configuredAgents,
   get,
   mcpServers,
   mcpStatuses,
   pluginEntry,
   plugins,
+  skills,
   takenBy,
   toolPrefix,
   turnedOff,
@@ -463,5 +465,55 @@ describe('the entry whose options reach the plugin', () => {
     const url = process.platform === 'win32' ? 'file:///C:/src/opencode-pdkit' : 'file:///src/opencode-pdkit';
     const fromUrl = pluginEntry([doc(g, { plugins: [url] })], ID).entry.target;
     assert.match(fromUrl, /src[\\/]opencode-pdkit$/);
+  });
+});
+
+describe('the commands and skills the server offers', () => {
+  // As Open Code 2.3.0 gives them (F318): a command is a name and, when it has
+  // one, a description; a skill carries its whole text besides its path.
+  test('commands by name, with the description shown, or none', () => {
+    const listed = commands({
+      location: { directory: '/fork' },
+      data: [
+        { name: 'review', description: 'review changes [commit|branch|pr], defaults to uncommitted' },
+        { name: 'pd:sync', description: 'Report fork status against upstream and the state of every worktree.' },
+        { name: 'pd:close' },
+        { description: 'no name' },
+      ],
+    });
+
+    assert.deepEqual(
+      [...listed],
+      [
+        ['review', 'review changes [commit|branch|pr], defaults to uncommitted'],
+        ['pd:sync', 'Report fork status against upstream and the state of every worktree.'],
+        ['pd:close', undefined],
+      ],
+    );
+  });
+
+  test('skills by ID, with the file each is read from and nothing of its text', () => {
+    const listed = skills({
+      location: { directory: '/fork' },
+      data: [
+        { id: 'opencode', name: 'OpenCode', description: 'd', path: 'skill://opencode/SKILL.md', content: '# OpenCode' },
+        { id: 'pd:package-map', name: 'pd:package-map', description: 'd', path: '/fork/.opencode/skills/pd:package-map/SKILL.md', content: 'x' },
+      ],
+    });
+
+    assert.deepEqual(
+      [...listed],
+      [
+        ['opencode', { path: 'skill://opencode/SKILL.md' }],
+        ['pd:package-map', { path: '/fork/.opencode/skills/pd:package-map/SKILL.md' }],
+      ],
+    );
+  });
+
+  test('an answer of another shape is an empty list', () => {
+    for (const answer of [undefined, null, {}, { data: {} }, { data: 'x' }]) {
+      assert.equal(commands(answer).size, 0);
+      assert.equal(skills(answer).size, 0);
+    }
   });
 });

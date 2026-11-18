@@ -36,7 +36,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import plugin from '../opencode/server.js';
 import { HOOK_HANDLERS } from '../lib/hooks/events.js';
-import { minimumVersion } from '../lib/opencode-version.js';
+import { minimumVersion, unavailableSummary } from '../lib/opencode-version.js';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 
@@ -517,6 +517,8 @@ describe('below the minimum Open Code version', () => {
     );
     for (const { args } of added) {
       assert.match(args[0].description, new RegExp(`Open Code >= ${minimum.replace(/\./g, '\\.')}`));
+      // The one text pdkit doctor knows them by (commands).
+      assert.equal(args[0].description, unavailableSummary('opencode-pdkit', minimum));
       await assert.rejects(args[0].execute({ sessionID: 'ses_test', prompt: {}, delivery: 'immediate' }), {
         message: `opencode-pdkit requires Open Code >= ${minimum}, running 2.2.7. Update it with: opencode upgrade`,
       });

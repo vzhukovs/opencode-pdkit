@@ -57,6 +57,20 @@ fixes — see [RELEASING.md](RELEASING.md).
   never prints a provider's settings, and without a server to ask it says it
   cannot tell. It takes the place of `settings:model`; `pdkit init`'s
   `models` line points at it.
+- **`pdkit doctor` finds a `/pd:` command or a `pd:` skill that is not the
+  plugin's** (`commands`). Open Code keeps one command per name and one skill
+  per ID, and the last to add one wins without a word: a markdown command
+  `pd:<skill>.md` in a commands directory of its config, `command."pd:<skill>"`
+  with a `template` in `opencode.json`, or a plugin after this one in
+  `plugins` replaces the command, and a `SKILL.md` of the same ID in a skills
+  directory — Open Code's, `~/.claude/skills`, `.agents/skills` — replaces
+  the skill. Such a command runs its own text, on no model of the plugin's and
+  without the label the prompt hook reads. The line names each one with the
+  description Open Code shows for it, or the file it reads the skill from,
+  and each command or skill that is not registered at all. Below the minimum
+  Open Code, where every `/pd:` command refuses, it says so rather than
+  calling them someone else's. A warning, not a failure; without a server to
+  ask it says it cannot tell.
 
 ### Changed
 

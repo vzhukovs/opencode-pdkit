@@ -39,6 +39,7 @@ import {
   GATE_PROBES,
   RETIRED_KEYS,
   checkAgentRuns,
+  checkCommands,
   checkHookNode,
   checkHooks,
   checkMcp,
@@ -54,6 +55,7 @@ import { HOOK_HANDLERS } from '../lib/hooks/events.js';
 import { append as appendJournal } from '../lib/journal.js';
 import { WRAPPERS } from '../lib/hooks/command-parse.js';
 import { modelText } from '../lib/opencode-models.js';
+import { unavailableSummary } from '../lib/opencode-version.js';
 import { create } from '../lib/worktree.js';
 import { preBash, preWrite } from '../opencode/bridge/payload.js';
 
@@ -1731,6 +1733,214 @@ describe('the models the agents and commands run on', () => {
       assert.equal(starts.size, 1, key);
     }
     assert.match(rows.find((line) => line.includes('pd-scout')), /mock\/alpha#ultra +options\.models +mock\/alpha has no variant ultra, only low, high$/);
+  });
+});
+
+describe('the commands and skills under the plugin’s names', () => {
+  const DIR = '/fork';
+  const ID = 'opencode-pdkit';
+  const answer = (data) => ({ ok: true, data });
+  const ACTIVE = { id: 'plugin', level: 'required', status: 'ok', detail: 'x' };
+
+  let skills;
+  before(async () => {
+    skills = (await import('../opencode/commands.js')).readSkills;
+    skills = (await skills(process.cwd())).skills;
+  });
+
+  /** GET /api/command: Open Code's own three, then each of the registrar's, as it adds them; `over` puts another description over one, undefined for none; `without` leaves some out. */
+  const commandList = ({ over = {}, without = [] } = {}) => ({
+    location: { directory: DIR },
+    data: [
+      { name: 'init', description: 'guided AGENTS.md setup' },
+      { name: 'review', description: 'review changes [commit|branch|pr], defaults to uncommitted' },
+      { name: 'goal', description: 'keep working until an objective is met [pause|resume|clear]' },
+      ...skills
+        .map((skill) => `pd:${skill.name}`)
+        .filter((name) => !without.includes(name))
+        .map((name) => {
+          const description = name in over ? over[name] : skills.find((skill) => `pd:${skill.name}` === name).description;
+          return description === undefined ? { name } : { name, description };
+        }),
+    ],
+  });
+  /** GET /api/skill: Open Code's own, then the registrar's at the path it gives each; `over` reads one from another file. */
+  const skillList = ({ over = {}, without = [], root = process.cwd() } = {}) => ({
+    location: { directory: DIR },
+    data: [
+      { id: 'opencode', name: 'OpenCode', description: 'd', path: 'skill://opencode/SKILL.md', content: '# OpenCode' },
+      ...skills
+        .filter((skill) => !skill.personOnly && !without.includes(`pd:${skill.name}`))
+        .map((skill) => ({
+          id: `pd:${skill.name}`,
+          name: `pd:${skill.name}`,
+          description: skill.listed,
+          path: over[`pd:${skill.name}`] ?? join(root, 'skills', skill.name, 'SKILL.md'),
+          content: skill.body,
+        })),
+    ],
+  });
+  const answers = ({ commands = commandList(), skillsListed = skillList() } = {}) => ({
+    '/api/command': [answer(commands)],
+    '/api/skill': [answer(skillsListed)],
+  });
+  const run = async (answers, more = {}) => {
+    const server = serverWith(answers);
+    const result = await checkCommands({ pluginRoot: process.cwd(), id: ID, directory: DIR, minimum: '2.3.0', plugin: ACTIVE, ask: server.ask, ...clock(), ...more });
+    return { result, asked: server.asked };
+  };
+  /** The findings, past the count the line starts with. */
+  const said = (result) => result.detail.slice(result.detail.indexOf(': ') + 2).split('; ');
+
+  test('every command with the description the registrar gives it, every skill from its own file: ok', async () => {
+    const { result, asked } = await run(answers());
+
+    assert.deepEqual(result, {
+      id: 'commands',
+      level: 'optional',
+      status: 'ok',
+      detail: '24 commands and 3 skills of opencode-pdkit are registered for /fork, each as the plugin made it',
+    });
+    assert.deepEqual(asked, ['/api/command', '/api/skill']);
+    // What it compared with is what the registrar adds: the same function builds both.
+    assert.equal(skills.length, 24);
+    assert.deepEqual(
+      skills.filter((skill) => !skill.personOnly).map((skill) => skill.name),
+      ['package-map', 'upstream-rules', 'worktree-kit'],
+    );
+  });
+
+  test('a command Open Code shows with another description, or with none, is named with what it shows', async () => {
+    const commands = commandList({ over: { 'pd:sync': "the project's sync", 'pd:close': undefined, 'pd:triage': "another plugin's triage" } });
+    const { result } = await run(answers({ commands }));
+
+    assert.equal(result.status, 'warn');
+    assert.equal(result.level, 'optional');
+    assert.ok(result.detail.startsWith('24 commands and 3 skills of opencode-pdkit: '), result.detail);
+    for (const line of [
+      '/pd:close is not the plugin\'s: Open Code shows it with no description',
+      '/pd:sync is not the plugin\'s: Open Code shows it as "the project\'s sync"',
+      '/pd:triage is not the plugin\'s: Open Code shows it as "another plugin\'s triage"',
+    ]) {
+      assert.ok(said(result).includes(line), line);
+    }
+    assert.match(
+      result.detail,
+      /; a markdown command of the name in a commands directory of Open Code's config, command\."<name>" with a template in a config document, or a plugin after opencode-pdkit in plugins replaces the plugin's command without a word, and runs its own text: on no model of the plugin's, without the label pdkit's prompt hook reads$/,
+    );
+    // Only those three.
+    assert.equal(said(result).filter((line) => line.includes("is not the plugin's")).length, 3);
+  });
+
+  test('a skill read from another file is named with the file', async () => {
+    const other = '/fork/.opencode/skills/pd:package-map/SKILL.md';
+    const { result } = await run(answers({ skillsListed: skillList({ over: { 'pd:package-map': other } }) }));
+
+    assert.equal(result.status, 'warn');
+    assert.ok(said(result).includes(`the skill pd:package-map is not the plugin's: Open Code reads it from ${other}`), result.detail);
+    assert.match(result.detail, /; a SKILL\.md of the same ID in a skills directory — ~\/\.config\/opencode, ~\/\.claude, ~\/\.agents, or the project's \.opencode, \.claude, \.agents — or under the skills key of a config document replaces the plugin's skill whole, and the model loads that one$/);
+    assert.ok(!result.detail.includes('pd:upstream-rules'));
+  });
+
+  test('a skill read through a link to the plugin’s own file is the plugin’s', { skip: !POSIX && 'symbolic links' }, async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pdkit-doctor-link-'));
+    try {
+      await symlink(process.cwd(), join(dir, 'opencode-pdkit'));
+      const { result } = await run(answers({ skillsListed: skillList({ root: join(dir, 'opencode-pdkit') }) }));
+      assert.equal(result.status, 'ok', result.detail);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a command or skill Open Code does not list is not registered, after the wait — see plugin', async () => {
+    const commands = commandList({ without: ['pd:sync'] });
+    const { result, asked } = await run(answers({ commands, skillsListed: skillList({ without: ['pd:worktree-kit'] }) }));
+
+    assert.equal(result.status, 'warn');
+    assert.equal(
+      result.detail,
+      '24 commands and 3 skills of opencode-pdkit: not registered for /fork: /pd:sync, pd:worktree-kit (skill) — see plugin; ' +
+        'what the plugin could not register, it names on the Open Code server\'s stderr ("opencode-pdkit: cannot …")',
+    );
+    // Waited for, each: 5 s of questions every 250 ms.
+    assert.ok(asked.filter((path) => path === '/api/command').length > 10);
+    assert.ok(asked.filter((path) => path === '/api/skill').length > 10);
+  });
+
+  test('commands a moment late are waited for', async () => {
+    const early = answer({ location: { directory: DIR }, data: [{ name: 'init' }] });
+    const { result, asked } = await run({ ...answers(), '/api/command': [early, early, answer(commandList())] });
+
+    assert.equal(result.status, 'ok', result.detail);
+    assert.deepEqual(asked, ['/api/command', '/api/command', '/api/command', '/api/skill']);
+  });
+
+  test('none listed: with the plugin running, none registered; otherwise cannot tell', async () => {
+    const none = answer({ location: { directory: DIR }, data: [{ name: 'init' }] });
+
+    const running = (await run({ ...answers(), '/api/command': [none] })).result;
+    assert.equal(running.status, 'warn');
+    assert.match(running.detail, /^24 commands and 3 skills of opencode-pdkit: not registered for \/fork: \/pd:audit, .*, \/pd:worktree-kit — see plugin; /);
+
+    const unknown = await run({ ...answers(), '/api/command': [none] }, { plugin: undefined });
+    assert.deepEqual(unknown.result, {
+      id: 'commands',
+      level: 'optional',
+      status: 'skip',
+      detail: "cannot tell: none of opencode-pdkit's commands is listed for /fork within 5 s — see plugin, or run pdkit doctor again",
+    });
+    assert.ok(!unknown.asked.includes('/api/skill'));
+  });
+
+  test('below the minimum: the plugin’s own refusals, named as such, and no skills asked for', async () => {
+    const refusal = unavailableSummary(ID, '2.3.0');
+    const commands = commandList({ over: Object.fromEntries(skills.map((skill) => [`pd:${skill.name}`, refusal])) });
+    const { result, asked } = await run({ '/api/command': [answer(commands)] });
+
+    assert.equal(result.status, 'warn');
+    assert.equal(
+      result.detail,
+      `24 commands and 3 skills of opencode-pdkit: all 24 refuse: Open Code shows them as "${refusal}" — opencode-pdkit runs below its minimum Open Code, with the gate alone, and adds no skills`,
+    );
+    assert.deepEqual(asked, ['/api/command']);
+
+    // Another minimum than the one the description names: someone else's.
+    const other = (await run({ '/api/command': [answer(commands)], '/api/skill': [answer(skillList())] }, { minimum: '2.4.0' })).result;
+    assert.ok(said(other).includes(`/pd:sync is not the plugin's: Open Code shows it as "${refusal}"`), other.detail);
+  });
+
+  test('a plugin Open Code does not run: nothing is asked, and the line points at plugin', async () => {
+    const { result, asked } = await run(answers(), { plugin: { id: 'plugin', level: 'required', status: 'fail', detail: 'x' } });
+
+    assert.deepEqual(asked, []);
+    assert.deepEqual(result, { id: 'commands', level: 'optional', status: 'skip', detail: 'cannot tell: Open Code does not run opencode-pdkit for /fork — see plugin' });
+  });
+
+  test('no server: cannot tell, in the words of the failure', async () => {
+    const result = await checkCommands({ pluginRoot: process.cwd(), id: ID, directory: DIR, ask: offline });
+
+    assert.deepEqual(result, { id: 'commands', level: 'optional', status: 'skip', detail: 'cannot tell: no Open Code server in this test' });
+  });
+
+  test('a skill list the server cannot give: cannot tell', async () => {
+    const { result } = await run({ ...answers(), '/api/skill': [{ ok: false, error: 'opencode api GET /api/skill: HTTP 500 Internal Server Error' }] });
+
+    assert.deepEqual(result, { id: 'commands', level: 'optional', status: 'skip', detail: 'cannot tell: opencode api GET /api/skill: HTTP 500 Internal Server Error' });
+  });
+
+  test('a plugin root without skills/: nothing to compare with', async () => {
+    const result = await checkCommands({ pluginRoot: plugin, id: ID, directory: DIR, ask: offline });
+
+    assert.deepEqual(result, { id: 'commands', level: 'optional', status: 'skip', detail: `cannot tell: ${plugin} has no skills/ to compare with` });
+  });
+
+  test('the doctor prints it after models', async () => {
+    const report = await diagnose({ pluginRoot: process.cwd(), askServer: offline, env: {} });
+    const ids = report.checks.map((entry) => entry.id);
+
+    assert.equal(ids.indexOf('commands'), ids.indexOf('models') + 1);
+    assert.deepEqual(find(report.checks, 'commands'), { id: 'commands', level: 'optional', status: 'skip', detail: 'cannot tell: no Open Code server in this test' });
   });
 });
 

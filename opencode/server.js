@@ -117,7 +117,7 @@ async function load(ctx) {
     const { registerAgents } = await import('./agents.js');
     const { registerCommands, registerRefusals } = await import('./commands.js');
     const { readOptions } = await import('../lib/opencode-models.js');
-    const { checkOpenCode, minimumVersion } = await import('../lib/opencode-version.js');
+    const { checkOpenCode, minimumVersion, unavailableSummary } = await import('../lib/opencode-version.js');
 
     const plugin = { root: ROOT, settings: readOptions(ctx.options), log };
     return {
@@ -130,6 +130,7 @@ async function load(ctx) {
       registerRefusals,
       checkOpenCode,
       minimumVersion,
+      unavailableSummary,
     };
   } catch (error) {
     return { failure: reason(error) };
@@ -220,7 +221,7 @@ export default {
       log(`${update}. Until then only the upstream gate runs, and every /pd:* command refuses.`);
       await register('refusing commands', () =>
         loaded.registerRefusals(ctx, loaded.plugin, {
-          summary: `Unavailable: ${ID} requires Open Code >= ${host.minimum}`,
+          summary: loaded.unavailableSummary(ID, host.minimum),
           refusal: update,
         }),
       );
