@@ -58,16 +58,12 @@ let MAIN;
 let AWAY_TREE;
 const savedHome = process.env.PDKIT_HOME;
 
-// No CLAUDE_PID and a sessions directory of the test's own: run inside Claude
-// Code, the real ones would make the model notice depend on that session.
-let SESSIONS;
-const context = (extra = {}) => ({ event: 'prompt-submit', pluginRoot: PLUGIN_ROOT, env: {}, sessionsDir: SESSIONS, ...extra });
+const context = () => ({ event: 'prompt-submit', pluginRoot: PLUGIN_ROOT });
 const submit = (prompt, cwd = MAIN) => handle({ prompt, cwd }, context());
 
 before(async () => {
   home = await mkdtemp(join(tmpdir(), 'pdkit-prompt-'));
   base = await realpath(await mkdtemp(join(tmpdir(), 'pdkit-prompt-repo-')));
-  SESSIONS = join(base, 'sessions');
   process.env.PDKIT_HOME = home;
 
   // The main checkout left on one issue's branch, a registered worktree for
@@ -329,7 +325,7 @@ describe('everything else is quiet', () => {
   });
 });
 
-// Part (1) on Open Code's form. Open Code's prompt hook never sees what the
+// The cases above on Open Code's form. Open Code's prompt hook never sees what the
 // person typed (F76): a pdkit command labels the prompt it sends with its name
 // and arguments (D6), and the hook bridge puts `/pd:<skill> <arguments>` back
 // together from the label and runs this handler on it, through bin/pdkit, in
@@ -499,84 +495,6 @@ describe('in Open Code: the prompt a pdkit command sends, through the hook bridg
   });
 });
 
-// A skill's model lasts its first turn, and the person types /model. The hook
-// is not given the model, so it reads the transcript, and the one before it in
-// the same process when /clear has just opened a fresh one.
-describe('the model the phase runs on', () => {
-  let n = 0;
-  /** A transcript made of the records Claude Code writes, as measured on 2.1.301. */
-  const transcript = async (...records) => {
-    const path = join(base, `t${(n += 1)}.jsonl`);
-    await writeFile(path, `${records.map((record) => JSON.stringify(record)).join('\n')}\n`);
-    return path;
-  };
-  const said = (model) => ({ type: 'assistant', message: { model, content: [{ type: 'text', text: 'ok' }] } });
-  const typed = (label) => ({ type: 'system', subtype: 'local_command', content: `<local-command-stdout>Set model to \`${label}\` for this session only</local-command-stdout>` });
-  const cleared = { type: 'user', message: { role: 'user', content: '<command-name>/clear</command-name>' } };
-  const ask = (prompt, transcriptPath, extra = {}) => handle({ prompt, cwd: AWAY_TREE, transcript_path: transcriptPath }, context(extra));
-
-  test('the session on another model than the phase is told what to type', async () => {
-    const decision = await ask(`/pd:exec ${AWAY}`, await transcript(said('claude-opus-5-5')));
-
-    assert.equal(decision.notice, 'pdkit: /pd:exec runs on sonnet, and this session is on opus — type /model sonnet now. A skill\'s model lasts its first turn; /model lasts the session.');
-    assert.match(decision.message, /pdkit told the person: .*You cannot switch the model yourself/);
-  });
-
-  test('/model typed after the last answer counts, and the same model says nothing', async () => {
-    const switched = await transcript(said('claude-opus-5-5'), typed('Sonnet 5.5'));
-    assert.equal((await ask(`/pd:exec ${AWAY}`, switched)).notice, undefined);
-    assert.equal((await ask(`/pd:exec ${AWAY}`, await transcript(said('claude-sonnet-5-5')))).notice, undefined);
-  });
-
-  test('Claude Code answering for itself is not a model', async () => {
-    const decision = await ask(`/pd:exec ${AWAY}`, await transcript(said('claude-opus-5-5'), said('<synthetic>')));
-    assert.match(decision.notice, /this session is on opus/);
-  });
-
-  // The common case: every phase starts with /clear, and the model carries over.
-  test('after /clear the previous transcript of the same process answers', async () => {
-    const env = { CLAUDE_PID: '4242' };
-    await ask(`/pd:plan-review ${AWAY}`, await transcript(said('claude-opus-5-5')), { env });
-
-    const decision = await ask(`/pd:exec ${AWAY}`, await transcript(cleared), { env });
-    assert.match(decision.notice, /runs on sonnet, and this session is on opus/);
-
-    // Another process's history is not this one's.
-    const other = await ask(`/pd:exec ${AWAY}`, await transcript(cleared), { env: { CLAUDE_PID: '4343' } });
-    assert.equal(other.notice, undefined);
-  });
-
-  test('a pull-request skill is reminded too, whether or not the number is ours', async () => {
-    const decision = await ask('/pd:pr-sync 19999', await transcript(said('claude-sonnet-5-5')));
-    assert.match(decision.notice, /\/pd:pr-sync runs on opus, and this session is on sonnet — type \/model opus now/);
-  });
-
-  test('a skill that takes no number is reminded as well', async () => {
-    const decision = await ask('/pd:pr-status', await transcript(said('claude-opus-5-5')));
-    assert.match(decision.notice, /\/pd:pr-status runs on sonnet/);
-  });
-
-  test('with nothing to read, the fork\'s default is the assumption, and it says so', async () => {
-    const settings = join(MAIN, '.claude', 'settings.local.json');
-    await mkdir(join(MAIN, '.claude'), { recursive: true });
-    await writeFile(settings, JSON.stringify({ model: 'sonnet' }));
-    try {
-      const decision = await ask(`/pd:triage ${AWAY}`, await transcript(cleared));
-      assert.match(decision.notice, /runs on opus, and this session most likely started on sonnet, the fork's default/);
-    } finally {
-      await rm(join(MAIN, '.claude'), { recursive: true, force: true });
-    }
-  });
-
-  test('nothing to read and no default is silence, not a guess', async () => {
-    assert.equal((await ask(`/pd:triage ${AWAY}`, await transcript(cleared))).notice, undefined);
-  });
-
-  test('a haiku skill finishes in its first turn and is left alone', async () => {
-    assert.equal((await ask('/pd:editor', await transcript(said('claude-opus-5-5')))).notice, undefined);
-  });
-});
-
 // The wiring, which a direct call to handle() cannot prove — the lesson of the
 // receipt gate that sat on an event subagents never raise. The plugin stands
 // the event on Open Code's prompt hook (opencode/bridge/hooks.js, WIRING), and
@@ -610,11 +528,10 @@ describe('the hook is registered on the prompt', () => {
     assert.ok(!FAIL_CLOSED.includes('prompt-submit'));
   });
 
-  /** The hook through bin/pdkit, without the CLAUDE_PID of whatever session runs the suite. */
+  /** The hook through bin/pdkit. */
   const viaBinary = (payload) =>
     new Promise((resolve) => {
       const env = { ...process.env, PDKIT_HOME: home };
-      delete env.CLAUDE_PID;
       const child = spawn('node', [join(PLUGIN_ROOT, 'bin', 'pdkit'), 'hook', 'prompt-submit'], { env, stdio: ['pipe', 'pipe', 'pipe'] });
       let stdout = '';
       child.stdout.on('data', (chunk) => (stdout += chunk));
@@ -627,19 +544,5 @@ describe('the hook is registered on the prompt', () => {
 
     assert.equal(run.code, 0);
     assert.match(run.stdout, new RegExp(`${esc(AWAY_TREE)} on DESKTOP-${AWAY}/1-quit-and-install-race`));
-  });
-
-  // Plain stdout reaches the model only; the person sees systemMessage.
-  test('a notice goes out as systemMessage, with the context for the model beside it', async () => {
-    const path = join(base, 'binary.jsonl');
-    await writeFile(path, `${JSON.stringify({ type: 'assistant', message: { model: 'claude-opus-5-5', content: [] } })}\n`);
-    const run = await viaBinary({ prompt: `/pd:exec ${AWAY}`, cwd: MAIN, transcript_path: path });
-
-    assert.equal(run.code, 0);
-    const out = JSON.parse(run.stdout);
-    assert.match(out.systemMessage, /^pdkit: \/pd:exec runs on sonnet, and this session is on opus/);
-    assert.equal(out.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
-    assert.match(out.hookSpecificOutput.additionalContext, /EnterWorktree tool with path/);
-    assert.match(out.hookSpecificOutput.additionalContext, /pdkit told the person/);
   });
 });

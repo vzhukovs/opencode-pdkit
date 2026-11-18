@@ -974,8 +974,7 @@ describe('prompt-submit', () => {
     }
   });
 
-  // The model question asks only for the skill (until T7.4); the tree
-  // question finds no number, and is quiet.
+  // The handler finds no number in it, and is quiet.
   test('a command without arguments is the command alone', () => {
     for (const args of [undefined, '', '   ', 7, null]) {
       assert.equal(promptSubmit(submitted(label('pd:pr-status', args)), at)[0].prompt, '/pd:pr-status', String(args));

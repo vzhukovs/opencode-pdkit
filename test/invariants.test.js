@@ -1025,19 +1025,6 @@ describe('harness identifiers have one owner', () => {
     ['ses_ (an Open Code session ID)', /\bses_/g],
   ];
 
-  /**
-   * What may still name one outside the owner, and how many times: the chain of
-   * transcripts prompt-submit follows by Claude Code's process ID, which goes
-   * with the session-model check (D12), and the hook runner, which keeps that
-   * variable from the hook's process until then. An exact count, as above.
-   * TODO(T7.4): empty once the check and the chain are gone.
-   */
-  const STILL_NAMED = new Map([
-    ['lib/hooks/prompt-submit.js: CLAUDE_PID', 1],
-    ['lib/hooks/runner.js: CLAUDE_PID', 1],
-    ['lib/session-model.js: CLAUDE_PID', 1],
-  ]);
-
   test(`no module of lib/ but ${OWNER} names one`, async () => {
     const named = new Map();
     for (const { name, source } of await libModules()) {
@@ -1050,10 +1037,9 @@ describe('harness identifiers have one owner', () => {
 
     assert.deepEqual(
       named,
-      STILL_NAMED,
-      `harness identifiers named outside ${OWNER}: ${JSON.stringify([...named])}, allowed: ${JSON.stringify([...STILL_NAMED])}.\n` +
-        `Export the name or the format from ${OWNER} and read it from there. ` +
-        'If an entry in STILL_NAMED stopped naming it, drop it from the list.',
+      new Map(),
+      `harness identifiers named outside ${OWNER}: ${JSON.stringify([...named])}.\n` +
+        `Export the name or the format from ${OWNER} and read it from there.`,
     );
   });
 

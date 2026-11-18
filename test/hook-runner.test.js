@@ -37,7 +37,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
-import { DEADLINE_MS, childEnv, decide, invoke, refusal, run } from '../lib/hooks/runner.js';
+import { DEADLINE_MS, decide, invoke, refusal, run } from '../lib/hooks/runner.js';
 import { FAIL_CLOSED } from '../lib/hooks/events.js';
 import { handle } from '../lib/hooks/dispatch.js';
 import { handle as handleOwns } from '../lib/hooks/owns.js';
@@ -145,18 +145,22 @@ describe('run', () => {
     assert.equal(JSON.parse(outcome.stdout).cwd, await realpath(work));
   });
 
-  test('passes the environment on, less what a hook must not inherit', async () => {
-    const base = { ...process.env, CLAUDE_PID: '4242', RUNNER_TEST_KEPT: 'kept' };
+  // The bridge decides what a hook runs with, per call: nothing is dropped from
+  // what it gives, and nothing of the caller's own is added.
+  test('passes on the environment it is given, as it is', async (t) => {
+    process.env.RUNNER_TEST_CALLER = 'the caller only';
+    t.after(() => {
+      delete process.env.RUNNER_TEST_CALLER;
+    });
+    const base = { ...process.env, RUNNER_TEST_KEPT: 'kept' };
+    delete base.RUNNER_TEST_CALLER;
+    const given = { ...base };
     const outcome = await runStub('echo', {}, { env: base });
 
     const env = JSON.parse(outcome.stdout).env;
     assert.equal(env.RUNNER_TEST_KEPT, 'kept');
-    assert.equal('CLAUDE_PID' in env, false);
-    assert.equal(base.CLAUDE_PID, '4242', 'the environment it was given is left as it was');
-  });
-
-  test('childEnv drops only what it must', () => {
-    assert.deepEqual(childEnv({ A: '1', CLAUDE_PID: '2', PATH: '/bin' }), { A: '1', PATH: '/bin' });
+    assert.equal('RUNNER_TEST_CALLER' in env, false, "the caller's own environment is not the child's");
+    assert.deepEqual(base, given, 'the environment it was given is left as it was');
   });
 
   test('a node that is not there is a failure to start, named', async () => {
@@ -1048,7 +1052,7 @@ describe('invoke agrees with handle, for prompt-submit', () => {
 
   for (const [label, payloadOf] of FIXTURES) {
     test(label, async () => {
-      const expected = carried(await handlePromptSubmit(payloadOf(), { event: 'prompt-submit', pluginRoot: ROOT, env: {} }));
+      const expected = carried(await handlePromptSubmit(payloadOf(), { event: 'prompt-submit', pluginRoot: ROOT }));
       const actual = carried(await invoke('prompt-submit', payloadOf(), { root: ROOT }));
 
       assert.deepEqual(actual, expected);
@@ -1058,10 +1062,47 @@ describe('invoke agrees with handle, for prompt-submit', () => {
   test('the fixtures cover every outcome: a message, and silence', async () => {
     const outcomes = new Set();
     for (const [, payloadOf] of FIXTURES) {
-      const decision = await handlePromptSubmit(payloadOf(), { event: 'prompt-submit', pluginRoot: ROOT, env: {} });
+      const decision = await handlePromptSubmit(payloadOf(), { event: 'prompt-submit', pluginRoot: ROOT });
       outcomes.add(decision.block ? 'refuse' : decision.notice ? 'notice' : decision.message ? 'message' : 'pass');
     }
     assert.deepEqual([...outcomes].sort(), ['message', 'pass']);
+  });
+});
+
+// runHook has one shape of stdout no handler gives any more: a notice, the line
+// for the person, sent as systemMessage with the context for the model beside
+// it. The model check that returned one is gone (D12) and the branch stays
+// (D7), so a handler that returns one stands in for it, and what runHook writes
+// is read back by decide() — the two ends of one protocol, held together.
+describe('a notice through runHook comes back as it went out', () => {
+  let plugin;
+
+  before(async () => {
+    plugin = await mkdtemp(join(tmpdir(), 'pdkit-runner-notice-'));
+    for (const entry of ['bin', 'lib', 'defaults', 'package.json']) {
+      await cp(join(ROOT, entry), join(plugin, entry), { recursive: true });
+    }
+    await writeFile(
+      join(plugin, 'lib', 'hooks', 'prompt-submit.js'),
+      "export async function handle() {\n  return { block: false, message: 'pdkit: for the model', notice: 'pdkit: for the person' };\n}\n",
+    );
+  });
+
+  after(async () => {
+    await rm(plugin, { recursive: true, force: true });
+  });
+
+  test('as systemMessage, with the context for the model beside it', async () => {
+    const outcome = await run('prompt-submit', { hook_event_name: 'UserPromptSubmit', prompt: '/pd:exec 1', cwd: work }, { root: plugin });
+
+    assert.equal(outcome.failure, null);
+    assert.equal(outcome.code, 0);
+    assert.equal(outcome.stderr, '');
+    assert.deepEqual(JSON.parse(outcome.stdout), {
+      systemMessage: 'pdkit: for the person',
+      hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: 'pdkit: for the model' },
+    });
+    assert.deepEqual(decide('prompt-submit', outcome), { block: false, notice: 'pdkit: for the person', message: 'pdkit: for the model' });
   });
 });
 

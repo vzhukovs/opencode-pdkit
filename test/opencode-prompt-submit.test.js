@@ -234,7 +234,7 @@ const attachments = (event) =>
     .map((file) => ({ ...file, text: Buffer.from(file.uri.replace(/^data:text\/plain;base64,/, ''), 'base64').toString('utf8') }));
 
 /** What handle() says for the command as typed, in `cwd`. */
-const typed = async (command, args, cwd = main) => (await handle({ prompt: `/${command} ${args}`.trimEnd(), cwd }, { event: 'prompt-submit', pluginRoot: PLUGIN_ROOT, env: {} })).message;
+const typed = async (command, args, cwd = main) => (await handle({ prompt: `/${command} ${args}`.trimEnd(), cwd }, { event: 'prompt-submit', pluginRoot: PLUGIN_ROOT })).message;
 
 describe('the context of a pdkit command goes with its prompt', () => {
   // HK-24, on Open Code's form: what the handler says for `/pd:preflight

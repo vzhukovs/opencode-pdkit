@@ -715,7 +715,7 @@ const COMMAND = /^pd:[a-z][a-z-]*$/;
  * calls it in the plugin instance of the directory the session is in — after
  * a move, the one it moved to (F75, F275). Read only for a labeled prompt:
  * `host.directory` may be a getter. `transcript_path` is not set: Open Code
- * keeps no transcript file, and the handler finds no model through it (D12).
+ * keeps no transcript file, and the handler reads none.
  *
  * @param {{sessionID?: string, metadata?: unknown}} event  the prompt hook's event
  * @param {{directory: string|undefined}} host  ctx.location.directory

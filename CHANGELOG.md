@@ -146,6 +146,12 @@ fixes — see [RELEASING.md](RELEASING.md).
 - **`pdkit next` prints the step alone**, without `/model <model>` before it
   or the line on how long a skill's model holds: the command the step names
   switches the model itself.
+- **No reminder to type `/model` when the session is on another model than
+  the phase.** The command switches the session to the phase's model before
+  its prompt is sent, and refuses one Open Code cannot use, so the prompt hook
+  has nothing left to compare. With it go the session's transcripts it read
+  and the list of them it kept in the system temp directory: the prompt hook
+  writes nothing at all.
 
 ## [0.15.0] - 2026-11-13
 
