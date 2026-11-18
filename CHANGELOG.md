@@ -198,6 +198,13 @@ fixes — see [RELEASING.md](RELEASING.md).
   Code's `Grep head_limit <n>`. Open Code's grep drops a `head_limit` it does
   not have, so a model widening the window by that name got the same matches
   back.
+- **The pitfall on a window cut inside a block names Open Code's tools.**
+  "A window that ends inside a block" in `knowledge/pitfalls.md`, the entry
+  that rule points the model at, said to use `Read`, and that the hooks catch
+  a Bash command, a `Read`, or a `Grep` with context lines or a cap. It now
+  says `read`, a `shell` command, and a `grep` cut short by its `limit`:
+  Open Code's grep has no context lines, and context read through the shell
+  is caught as any other shell window is.
 
 ### Removed
 
