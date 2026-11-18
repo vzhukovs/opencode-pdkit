@@ -34,6 +34,7 @@ import { homedir, platform, tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { database } from './helpers/opencode-db.js';
 import { cleanup, commitAll, initRepo } from './helpers/repo-fixture.js';
 import {
   GATE_PROBES,
@@ -587,7 +588,7 @@ describe('the agent-done liveness check', () => {
       entry.detail,
       'no agent-done of Open Code’s in the journal for 30d. If subagents ran in Open Code in that time, the ' +
         'subagent-stop hook is not connected and the receipt gate is off; run any subagent, then ' +
-        '`pdkit journal --event agent-done`',
+        '`pdkit journal --event agent-done`. Open Code’s sessions were not read: not run inside the clone',
     );
   });
 
@@ -608,7 +609,10 @@ describe('the agent-done liveness check', () => {
     const [entry] = await checkAgentRuns(home, Date.now());
 
     assert.equal(entry.status, 'ok');
-    assert.match(entry.detail, /^2 in the last 30d, latest \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+    assert.match(
+      entry.detail,
+      /^2 in the last 30d, latest \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z; Open Code’s sessions were not read: not run inside the clone$/,
+    );
   });
 
   test('beside the other harness, only its own are counted, and the rest is said', async () => {
@@ -619,7 +623,7 @@ describe('the agent-done liveness check', () => {
     const [entry] = await checkAgentRuns(home, Date.now());
 
     assert.equal(entry.status, 'ok');
-    assert.match(entry.detail, /^1 in the last 30d, latest \S+; 2 more not counted: Claude Code’s, or with no run ID$/);
+    assert.match(entry.detail, /^1 in the last 30d, latest \S+; 2 more not counted: Claude Code’s, or with no run ID; Open Code’s sessions/);
   });
 
   test('an entry of its own older than the window still warns', async () => {
@@ -643,6 +647,261 @@ describe('the agent-done liveness check', () => {
     await appendJournal({ issue: 1, event: 'task-receipt', detail: 'T1 accepted; agent task ses_e1ab4cdafffd9uGCEIYqzzA0zh' }, { home });
 
     assert.equal((await checkAgentRuns(home, Date.now()))[0].status, 'warn');
+  });
+});
+
+// The journal alone cannot tell a hook Open Code no longer calls from a month
+// with no subagents (F304: a renamed hook registers without a word). Open
+// Code's session database can, and what it shows is held to the journal here:
+// a subagent of the plugin's that stopped and left no agent-done is a failure,
+// said as what was measured; anything the database cannot vouch for is not.
+describe('the agent-done check against Open Code’s sessions', () => {
+  const NOW = Date.parse('2026-11-18T12:00:00Z');
+  const HOUR = 60 * 60 * 1000;
+  const AGENTS = ['pd-scout', 'pd-implementer'];
+  const OWN = (id) => `agent task ses_${id}; pd-scout`;
+  const FAILED =
+    'Open Code does not call the subagent-stop hook, so the receipt gate is off — unless the server’s hooks write ' +
+    'to another PDKIT_HOME, or cannot run node (see hooks:node).';
+  let dir;
+  let repo;
+  let home;
+  let db;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'pdkit-doctor-sessions-'));
+    repo = join(dir, 'clone');
+    home = join(dir, 'home');
+    db = join(dir, 'opencode.db');
+    await mkdir(repo, { recursive: true });
+    await mkdir(join(dir, 'elsewhere'), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  /** Subagents started by one session in the clone: `[id, agent, ms before NOW, outcome?, directory?]`. */
+  const ran = (children) =>
+    database(db, {
+      sessions: [
+        { id: 'top', directory: repo, created: NOW - 40 * 24 * HOUR },
+        ...children.map(([id, agent, ago, outcome = 'succeeded', directory = repo]) => ({
+          id,
+          parent: 'top',
+          directory,
+          agent,
+          created: NOW - ago,
+          outcome: outcome ?? undefined,
+        })),
+      ],
+      messages: [],
+    });
+
+  const wrote = (at, detail = OWN('e1ab4cdafffd9uGCEIYqzzA0zh')) =>
+    appendJournal({ issue: 1, event: 'agent-done', detail, at: new Date(at).toISOString().slice(0, 19) + 'Z' }, { home });
+
+  const checked = async (more = {}) => (await checkAgentRuns(home, NOW, { db, repoRoot: repo, agents: AGENTS, ...more }))[0];
+
+  test('a subagent of the plugin’s that stopped, and no agent-done at all: a failure that says what was measured', async () => {
+    await ran([['child-1', 'pd-scout', HOUR]]);
+
+    const entry = await checked();
+
+    assert.equal(entry.status, 'fail');
+    assert.equal(entry.level, 'required');
+    assert.equal(
+      entry.detail,
+      `1 of the plugin’s subagents stopped in Open Code in this clone in the last 30d, and none of them wrote an ` +
+        `agent-done to ${home}: ${FAILED} Latest: pd-scout, started 2026-11-18T11:00:00Z; read from ${db}`,
+    );
+  });
+
+  test('Claude Code’s entries do not vouch for it, and are counted aside', async () => {
+    await ran([
+      ['child-1', 'pd-implementer', 3 * HOUR],
+      ['child-2', 'pd-scout', 2 * HOUR],
+    ]);
+    await wrote(NOW - HOUR, 'agent task ac7658da6ee90e084; pd:pd-plan-critic');
+
+    const entry = await checked();
+
+    assert.equal(entry.status, 'fail');
+    assert.match(entry.detail, /^2 of the plugin’s subagents stopped .* \(1 more not counted: Claude Code’s, or with no run ID\): /);
+    assert.match(entry.detail, /Latest: pd-scout, started 2026-11-18T10:00:00Z;/);
+  });
+
+  // The case F304 leaves: Open Code updated, the hook renamed, and the entries
+  // written before still inside the window.
+  test('started after the latest agent-done of its own and stopped without one: a failure', async () => {
+    await wrote(NOW - 5 * HOUR);
+    await ran([
+      ['before', 'pd-scout', 6 * HOUR],
+      ['after-1', 'pd-scout', 4 * HOUR],
+      ['after-2', 'pd-implementer', HOUR],
+    ]);
+
+    const entry = await checked();
+
+    assert.equal(entry.status, 'fail');
+    assert.equal(entry.level, 'required');
+    assert.equal(
+      entry.detail,
+      '2 of the plugin’s subagents started in Open Code in this clone after the latest agent-done of Open Code’s ' +
+        `(2026-11-18T07:00:00Z) and stopped, and none of them wrote one to ${home}: ${FAILED} ` +
+        `Latest: pd-implementer, started 2026-11-18T11:00:00Z; read from ${db}`,
+    );
+  });
+
+  // How many entries a run wrote is not known — a refused stop writes one
+  // more — so runs before the latest entry are not counted against it.
+  test('subagents started before the latest agent-done are not held to a count', async () => {
+    await ran([
+      ['child-1', 'pd-scout', 3 * HOUR],
+      ['child-2', 'pd-scout', 2 * HOUR],
+      ['child-3', 'pd-implementer', 2 * HOUR],
+    ]);
+    await wrote(NOW - HOUR);
+
+    const entry = await checked();
+
+    assert.equal(entry.status, 'ok');
+    assert.notEqual(entry.level, 'required');
+    assert.equal(
+      entry.detail,
+      `1 in the last 30d, latest 2026-11-18T11:00:00Z; of the plugin’s subagents started in this clone since, none ` +
+        `stopped without one (read from ${db})`,
+    );
+  });
+
+  // The journal keeps the second, Open Code the millisecond.
+  test('one started within the second of the latest entry may be the one that wrote it', async () => {
+    await wrote(NOW - HOUR);
+    await ran([['child-1', 'pd-scout', HOUR - 500]]);
+
+    assert.equal((await checked()).status, 'ok');
+  });
+
+  test('a subagent that failed, was interrupted, or still runs has not stopped', async () => {
+    await ran([
+      ['failed', 'pd-scout', 3 * HOUR, 'failed'],
+      ['interrupted', 'pd-scout', 2 * HOUR, 'interrupted'],
+      ['running', 'pd-implementer', HOUR, null],
+    ]);
+
+    const entry = await checked();
+
+    assert.equal(entry.status, 'warn');
+    assert.notEqual(entry.level, 'required');
+    assert.equal(
+      entry.detail,
+      'no agent-done of Open Code’s in the journal for 30d. None of the plugin’s subagents stopped in Open Code in this ' +
+        'clone in that time either (2 failed or were interrupted, which ends one without a stop), so nothing shows yet ' +
+        `that the subagent-stop hook runs; run any subagent, then \`pdkit journal --event agent-done\` (read from ${db})`,
+    );
+  });
+
+  // Any other agent can have run before the plugin was installed, or with it
+  // turned off; one of the plugin's ran only where the plugin was loaded.
+  test('a subagent of another agent is not counted', async () => {
+    await ran([
+      ['general', 'general', 2 * HOUR],
+      ['explore', 'explore', HOUR],
+      ['nameless', '', HOUR],
+    ]);
+
+    const entry = await checked();
+    assert.equal(entry.status, 'warn');
+    assert.match(entry.detail, /None of the plugin’s subagents stopped/);
+  });
+
+  test('a subagent outside the clone, or older than the window, is not counted', async () => {
+    await ran([
+      ['elsewhere', 'pd-scout', HOUR, 'succeeded', join(dir, 'elsewhere')],
+      ['old', 'pd-scout', 31 * 24 * HOUR],
+    ]);
+
+    assert.equal((await checked()).status, 'warn');
+  });
+
+  test('under worktrees.root the subagents are the clone’s', async () => {
+    await mkdir(join(dir, 'trees', 'DESKTOP-1'), { recursive: true });
+    await ran([['in-tree', 'pd-implementer', HOUR, 'succeeded', join(dir, 'trees', 'DESKTOP-1')]]);
+
+    assert.equal((await checked({ config: { worktrees: { root: '../trees' } } })).status, 'fail');
+    assert.equal((await checked()).status, 'warn');
+  });
+
+  test('without the database the journal is read alone, as before, and why is said', async () => {
+    const entry = await checked({ db: join(dir, 'none.db') });
+
+    assert.equal(entry.status, 'warn');
+    assert.equal(
+      entry.detail,
+      'no agent-done of Open Code’s in the journal for 30d. If subagents ran in Open Code in that time, the ' +
+        'subagent-stop hook is not connected and the receipt gate is off; run any subagent, then ' +
+        `\`pdkit journal --event agent-done\`. Open Code’s sessions were not read: no Open Code database at ` +
+        `${join(dir, 'none.db')} — another machine, or a different OPENCODE_DB or XDG_DATA_HOME`,
+    );
+  });
+
+  test('a database of another schema is not read, and the schema is named', async () => {
+    const { DatabaseSync } = await import('node:sqlite');
+    const other = new DatabaseSync(db);
+    other.exec('create table session_v2 (id text primary key, parent_id text, agent text, directory text, time_created integer)');
+    other.exec('create table session_message (id text primary key, session_id text, type text, seq integer, data text)');
+    other.close();
+    await wrote(NOW - HOUR);
+
+    const entry = await checked();
+
+    assert.equal(entry.status, 'ok');
+    assert.match(entry.detail, /; Open Code’s sessions were not read: the Open Code database at .* has no session_v2\.idle_outcome — /);
+  });
+
+  test('a database that cannot be opened is said, not failed on', async () => {
+    await ran([['child-1', 'pd-scout', HOUR]]);
+
+    const entry = await checked({
+      open: async () => {
+        throw new Error('no such built-in module: node:sqlite');
+      },
+    });
+
+    assert.equal(entry.status, 'warn');
+    assert.match(entry.detail, /Open Code’s sessions were not read: the Open Code database at .* could not be read: no such built-in module/);
+  });
+
+  test('without the plugin’s agents there is nothing to count', async () => {
+    await ran([['child-1', 'pd-scout', HOUR]]);
+
+    const entry = await checked({ agents: [] });
+    assert.equal(entry.status, 'warn');
+    assert.match(entry.detail, /Open Code’s sessions were not read: the plugin’s agents could not be read$/);
+  });
+
+  // The wiring: the database the doctor's environment names, the clone it
+  // resolved, and the agents of the plugin it runs from.
+  test('diagnose holds the journal to the database OPENCODE_DB names, with the plugin’s agents', async () => {
+    const clone = await initRepo('pdkit-doctor-sessions-clone-');
+    try {
+      await database(db, {
+        sessions: [
+          { id: 'top', directory: clone, created: Date.now() - 2 * HOUR },
+          { id: 'child-1', parent: 'top', directory: clone, agent: 'pd-scout', created: Date.now() - HOUR, outcome: 'succeeded' },
+        ],
+        messages: [],
+      });
+
+      const report = await diagnose({ cwd: clone, home, pluginRoot: process.cwd(), askServer: offline, env: { ...process.env, OPENCODE_DB: db } });
+      const entry = find(report.checks, 'hooks:agent-done');
+
+      assert.equal(entry.status, 'fail');
+      assert.equal(entry.level, 'required');
+      assert.match(entry.detail, new RegExp(`Latest: pd-scout, started \\S+; read from ${db.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`));
+    } finally {
+      await cleanup(clone);
+    }
   });
 });
 

@@ -39,7 +39,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 import { tally, unitsOf } from '../lib/cost.js';
-import { databasePath, modelName, openReadOnly, read } from '../lib/opencode-sessions.js';
+import { databasePath, modelName, openReadOnly, read, readSubagentRuns } from '../lib/opencode-sessions.js';
 import { database } from './helpers/opencode-db.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -384,5 +384,107 @@ describe('a counter a step does not carry', () => {
     );
     assert.equal(unitsOf(scan.calls[0].usage, scan.calls[0].model), 27);
     assert.equal(tally(scan.calls).units, 27);
+  });
+});
+
+// What `pdkit doctor` holds the journal's agent-done entries to: the
+// subagents that ran in the clone, each with the agent it ran as and how it
+// ended. Read wrong, the doctor would fail on a hook that runs (a session of
+// another project, a top-level session, a subagent that was interrupted and
+// never stopped) or pass one that does not (a worktree's subagent missed).
+describe('reading the subagents that ran in one clone', () => {
+  let dir;
+  let file;
+  let repo;
+  let runs;
+
+  before(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'pdkit-oc-runs-'));
+    repo = join(dir, 'clone');
+    const trees = join(dir, 'trees');
+    for (const path of [repo, join(repo, 'packages'), join(trees, 'DESKTOP-1'), join(dir, 'clone-other'), join(dir, 'elsewhere')]) {
+      await mkdir(path, { recursive: true });
+    }
+    file = join(dir, 'opencode.db');
+
+    const child = (id, at, more = {}) => ({ id, parent: 'top-1', directory: repo, created: T0 + at, agent: 'pd-scout', outcome: 'succeeded', ...more });
+    await database(file, {
+      sessions: [
+        { id: 'top-1', directory: repo, created: T0, agent: 'build', outcome: 'succeeded' },
+        child('old', -2 * 60_000),
+        child('scout', 1000),
+        child('in-tree', 2000, { directory: join(await realpath(trees), 'DESKTOP-1'), agent: 'pd-implementer' }),
+        child('in-sub', 3000, { directory: join(repo, 'packages') }),
+        child('beside', 4000, { directory: join(dir, 'clone-other') }),
+        child('moved-out', 5000, { directory: join(dir, 'elsewhere') }),
+        child('failed', 6000, { outcome: 'failed' }),
+        child('interrupted', 7000, { outcome: 'interrupted' }),
+        child('running', 8000, { outcome: undefined }),
+        child('nameless', 9000, { agent: '' }),
+        child('odd', 10_000, { outcome: 'paused' }),
+      ],
+      messages: [{ id: 'mv-1', session: 'moved-out', type: 'location-switched', seq: 1, data: moved(T0 + 5500, repo, join(dir, 'elsewhere')) }],
+    });
+
+    ({ runs } = await readSubagentRuns({ db: file, repoRoot: repo, config: { worktrees: { root: '../trees' } }, since: T0 - 60_000 }));
+  });
+
+  after(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  test('child sessions only, of the clone, its subdirectories and its worktrees, oldest first', () => {
+    assert.deepEqual(
+      runs.map((run) => run.id),
+      ['scout', 'in-tree', 'in-sub', 'moved-out', 'failed', 'interrupted', 'running', 'nameless', 'odd'],
+    );
+  });
+
+  test('a run started before the time asked from is not read', () => {
+    assert.ok(!runs.some((run) => run.id === 'old'));
+  });
+
+  test('a subagent that moved out was in the clone, and counts', () => {
+    assert.ok(runs.some((run) => run.id === 'moved-out'));
+  });
+
+  test('each with the agent it ran as and when it started', () => {
+    const run = runs.find((entry) => entry.id === 'in-tree');
+    assert.equal(run.agent, 'pd-implementer');
+    assert.equal(run.created, iso(T0 + 2000));
+    assert.equal(runs.find((entry) => entry.id === 'nameless').agent, null);
+  });
+
+  // F57: Open Code calls the hook a subagent's stop is caught with only when it
+  // finished its work; a failed or interrupted one may never have got there.
+  test('only a run that succeeded has stopped', () => {
+    const by = Object.fromEntries(runs.map((run) => [run.id, [run.outcome, run.stopped]]));
+    assert.deepEqual(by.scout, ['succeeded', true]);
+    assert.deepEqual(by.failed, ['failed', false]);
+    assert.deepEqual(by.interrupted, ['interrupted', false]);
+    assert.deepEqual(by.running, [null, false]);
+    assert.deepEqual(by.odd, [null, false]);
+  });
+
+  test('a database without the outcome is a skip that names it, and says nothing of --db', async () => {
+    const older = join(dir, 'older.db');
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(older);
+    db.exec('create table session_v2 (id text primary key, parent_id text, agent text, directory text, time_created integer)');
+    db.exec('create table session_message (id text primary key, session_id text, type text, seq integer, data text)');
+    db.close();
+
+    const read = await readSubagentRuns({ db: older, repoRoot: repo, since: 0 });
+    assert.deepEqual(read.runs, []);
+    assert.equal(
+      read.skip.reason,
+      `the Open Code database at ${older} has no session_v2.idle_outcome — a schema this reader does not know (it reads the one of Open Code 2.3.0)`,
+    );
+  });
+
+  test('no database, or one kept in memory, is a skip with the reason', async () => {
+    const none = await readSubagentRuns({ db: join(dir, 'none.db'), repoRoot: repo, since: 0 });
+    assert.match(none.skip.reason, /^no Open Code database at .*none\.db — another machine, or a different OPENCODE_DB or XDG_DATA_HOME$/);
+    assert.match((await readSubagentRuns({ db: null, repoRoot: repo, since: 0 })).skip.reason, /:memory:/);
   });
 });

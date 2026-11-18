@@ -219,6 +219,18 @@ fixes — see [RELEASING.md](RELEASING.md).
   shared with the Claude Code version of the plugin, whose `agent-done`
   entries would otherwise keep the check green for a month while the hook in
   Open Code never ran; they are counted aside.
+- **`hooks:agent-done` holds the journal to Open Code's sessions** instead of
+  guessing. It reads the subagents that ran in the clone from Open Code's
+  session database, read-only: one of the plugin's agents that finished there
+  in the last 30 days and left no `agent-done` — none at all, or none since
+  the latest one — fails the check (required): Open Code does not call the
+  subagent-stop hook, so the receipt gate is off, unless the server's hooks
+  write to another `PDKIT_HOME` or have no `node`, which it says too. Open Code
+  takes a hook of any name, so a version that renames the one the receipt gate
+  stands on shows here and nowhere else. Subagents that failed or were
+  interrupted, and other agents than the plugin's, are not counted. Without
+  the database, outside the clone, or on a schema the plugin does not know, it
+  reads the journal alone as before, and says why.
 - **The session moves into an issue's tree with `session_move`.** Where
   Claude Code's hooks told Claude to call `EnterWorktree`, a pdkit command
   typed outside its issue's tree, a session started in the main checkout on an

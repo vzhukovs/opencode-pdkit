@@ -36,7 +36,9 @@ export const SCHEMA = join(dirname(dirname(fileURLToPath(import.meta.url))), 'fi
  *
  * @param {string} file
  * @param {{sessions: object[], messages: object[]}} rows
- *   a session: `{id, directory, created, parent?, forkOf?, boundary?}`;
+ *   a session: `{id, directory, created, parent?, forkOf?, boundary?, agent?, outcome?}`,
+ *   `outcome` the way Open Code ends an execution (`succeeded`, `failed`,
+ *   `interrupted`), recorded a second after `created`;
  *   a message: `{id, session, type, seq, data}`, with `data.time.created`
  */
 export async function database(file, rows) {
@@ -47,11 +49,23 @@ export async function database(file, rows) {
   // node:sqlite enforces foreign keys, and every session belongs to a project.
   db.prepare("insert into project (id, worktree, time_created, time_updated, sandboxes) values ('project-1', '/', 0, 0, '[]')").run();
   const session = db.prepare(
-    'insert into session_v2 (id, project_id, parent_id, fork_session_id, fork_boundary, slug, directory, version, time_created, time_updated) ' +
-      "values (?, 'project-1', ?, ?, ?, 'slug', ?, '2.3.0', ?, ?)",
+    'insert into session_v2 (id, project_id, parent_id, fork_session_id, fork_boundary, slug, directory, version, agent, ' +
+      "time_created, time_updated, time_idle, idle_outcome) values (?, 'project-1', ?, ?, ?, 'slug', ?, '2.3.0', ?, ?, ?, ?, ?)",
   );
   for (const row of rows.sessions) {
-    session.run(row.id, row.parent ?? null, row.forkOf ?? null, row.boundary ? JSON.stringify(row.boundary) : null, row.directory, row.created, row.created);
+    const idle = row.outcome ? row.created + 1000 : null;
+    session.run(
+      row.id,
+      row.parent ?? null,
+      row.forkOf ?? null,
+      row.boundary ? JSON.stringify(row.boundary) : null,
+      row.directory,
+      row.agent ?? null,
+      row.created,
+      idle ?? row.created,
+      idle,
+      row.outcome ?? null,
+    );
   }
   const message = db.prepare('insert into session_message (id, session_id, type, seq, time_created, time_updated, data) values (?, ?, ?, ?, ?, ?, ?)');
   for (const row of rows.messages) {
