@@ -60,12 +60,24 @@ named:
   two directories cover everything a prompt or a brief names outside the
   project.
 - **The person's own rules come last.** Permissions at the top level of an Open
-  Code config are appended to every agent's, the plugin's included, and widen
-  them: `shell` allowed there reaches a read-only reviewer too. The plugin
-  cannot stand after a config, and does not fight it; the gate and the
-  ownership check hold whatever an agent may run. `pdkit doctor` names one case,
-  a rule that takes the Playwright tools away from `pd-validator`
-  ([section 8](08-mcp-servers.md)).
+  Code config are appended to every agent's, the plugin's included; after them
+  come `agents.<id>.permissions` of the config and the `permissions` of an
+  agent file `<id>.md` in a config directory, for that one agent. They widen
+  what `tools:` gave — `shell` allowed there reaches a read-only reviewer too —
+  or narrow it: `playwright_* deny` takes the Playwright tools away from
+  `pd-validator` ([section 8](08-mcp-servers.md)). The plugin cannot stand
+  after a config, and does not fight it; the gate and the ownership check hold
+  whatever an agent may run. `pdkit doctor` (`permissions`) compares each
+  agent's rules, as Open Code reports them, with the ones the registrar built
+  from `tools:`, by the registrar's own code, and names every rule after them
+  that lets an agent do more than its `tools:` give or keeps from it what they
+  give: the agent, the rule, the config document it is in, and what it
+  changes. What it does not see: what a person allowed with "always" and a
+  session's own rules, which Open Code keeps apart from an agent's; and which
+  line of an agent file a rule comes from — Open Code reports the directory,
+  not the file, so the doctor names the agent's file when there is one. Open
+  Code asking before the plugin's own files is not a change: the plugin
+  answers that itself.
 - **`skill` is listed and refused.** An agent without `Skill` in `tools:` still
   sees the `skill` tool, because a built-in plugin of Open Code adds a rule of
   its own after every plugin's; a call is refused by the first rule, and no
