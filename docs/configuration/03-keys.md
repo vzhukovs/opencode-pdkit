@@ -61,7 +61,7 @@ a key is set, and which layer wins, is in [Layers](01-layers.md).
 | `preflight.scripts.*` | Overrides for script-name resolution. **Empty by default**, and it should stay that way: names are resolved from the repository's own `package.json`, which is the right source. Filling one in is worth doing exactly when the resolver got it wrong — which is a reason to fix the resolver |
 | `preflight.typecheck_scope` | `repo` (default) or `packages`. What `typecheck` means in preflight **and** in `pdkit slice verify`: the repository's whole `typecheck`, or the touched packages' own scripts. A type error lands in the package that consumes a change, so `packages` misses exactly the break a slice causes: on DESKTOP-19818 a preload-only slice passed `typecheck:preload` in both gates and failed upstream CI's typecheck in the renderer. On podman-desktop the whole one took 36 s on a warm tree. A narrowed run says so in its summary |
 | `exec.max_attempts` | How many failed captures of `Done when` block a task. Three by default; zero switches blocking off entirely. It can only weaken the rule, never tighten it — the count itself comes from the captures, not from anyone's account of them |
-| `budget.turns.*` | A soft ceiling per phase, in turns: `triage`, `plan`, `exec_per_task`, `validate`, `audit`, `slice`, `pr`, `pr_sync`. Nothing refuses at it, and nothing could — no command sees how many turns a session has taken. The `SessionStart` summary prints the one for the phase it opens, and the skill names it when it suggests stopping and restarting. Context is re-read whole on every call, so a phase twice as long costs about four times as much |
+| `budget.turns.*` | A soft ceiling per phase, in turns: `triage`, `plan`, `exec_per_task`, `validate`, `audit`, `slice`, `pr`, `pr_sync`. Nothing refuses at it, and nothing could — no command sees how many turns a session has taken. The session summary — what the `session-start` hook gives a session on its first prompt, on a fork and after a compaction — prints the one for the phase it opens, and the skill names it when it suggests stopping and restarting. Context is re-read whole on every call, so a phase twice as long costs about four times as much |
 
 ## Review, journal and languages
 
@@ -70,7 +70,7 @@ a key is set, and which layer wins, is in [Layers](01-layers.md).
 | `review.stale_after_days` | When an open pull request is reported as idle |
 | `review.bots_collapsed` | Accounts collapsed to one line in `pr threads`. Collapsed, never dropped |
 | `review.bot_escalate` | Words that expand a collapsed bot back to full text. One direction only: a match raises a thread and never lowers one |
-| `journal.reanchor_scope` | How much of the journal `SessionStart` injects. `issue` by default, because the whole file starts eating context within a month |
+| `journal.reanchor_scope` | How much of the journal the session summary carries. `issue` by default, because the whole file starts eating context within a month — and the summary is part of the session's instructions, sent with every request |
 | `languages.*` | The language each artefact is written in. The review report is the one worth setting: it is read by you, not by upstream |
 
 ---

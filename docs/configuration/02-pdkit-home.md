@@ -4,12 +4,19 @@
 
 Defaults to `~/.pdkit/podman-desktop`. Holds config, the package map, gate
 tokens, per-issue state and artefacts, the journal, review reports, and the
-snapshots `pdkit cost --snapshot` writes to `cost/`.
+snapshots `pdkit cost --snapshot` writes to `cost/` and `pdkit cost --planning
+--snapshot` to `cost/planning/`.
 
-`pdkit cost` also reads outside it: Claude Code's transcripts, under
-`$CLAUDE_CONFIG_DIR/projects/` (or `~/.claude/projects/`) in the directory named
-after the repository's path. `--transcripts <dir>` overrides that. Without
-transcripts the command reports a skip, not zeros.
+`pdkit cost` also reads outside it: Open Code's session database,
+`opencode.db` in Open Code's data directory — `$XDG_DATA_HOME/opencode`, or
+`~/.local/share/opencode` — or the file `OPENCODE_DB` names. `--db <file>`
+overrides that, for `--planning` as well; a build of Open Code that is not a
+release keeps its database under another name, and `--db` is how to name it.
+The database is only read. Of its steps, those taken in the clone, its
+subdirectories or a worktree under `worktrees.root` count, wherever the session
+moved. Without a database, or with one whose tables it does not know, the
+command reports a skip that says why, not zeros. Both reports refuse to run
+outside the clone.
 
 Resolution order:
 
@@ -20,16 +27,48 @@ Resolution order:
 `$PDKIT_HOME/config.yaml` deliberately has no say in where `$PDKIT_HOME` is — a
 file cannot be consulted about its own location.
 
-Keeping it in its own private git repository is worthwhile — `pdkit` commits
-after each state transition, so losing the directory loses the reasoning behind
-every decision. It must be a **separate** repository, never the fork.
+Keeping it in its own private git repository is worthwhile — losing the
+directory loses the reasoning behind every decision — and committing is yours:
+`pdkit` writes the files and commits nothing. It must be a **separate**
+repository, never the fork.
+
+## Shared with the Claude Code version
+
+The default path is the one the Claude Code version 0.15 uses, the formats are
+its formats, and no record says which harness wrote it, so an issue begun under
+Claude Code carries on here. Three things depend on the harness, and each is
+told apart by its data:
+
+- `active/` — a task's pointer names the session it was started in: Claude
+  Code's session ID there, Open Code's `ses_…` here. A task started under one
+  belongs, for the other, to somebody else's session until `pdkit task start`
+  runs again.
+- `agent-done` in the journal names a subagent's run as its host does.
+  `pdkit doctor` counts only this harness's entries when it asks, on its
+  `hooks:agent-done` line, whether the hook runs.
+- `cost/` — a snapshot says where its calls came from: Claude Code's
+  transcripts, or Open Code's database. This version reads only the database,
+  and measures from the newest snapshot read from the transcripts. For an
+  issue with work before it, `pdkit cost` prints `measured since` that
+  snapshot, and what came before as outside Open Code's data, not measured —
+  never as zero; `pdkit cost --planning` prints `outside` for a planning window
+  that opened before it. A snapshot taken here on the day of a Claude Code one
+  goes beside it, as `<date>.opencode.json` in `cost/` or `cost/planning/`,
+  never over it.
+
+One issue is worked under one harness at a time. What to do once before the
+first issue in Open Code, and before going back, is in the README:
+[Moving from the Claude Code version, and back](../../README.md#moving-from-the-claude-code-version-and-back).
 
 ## Creating it
 
-```bash
-cd /path/to/your/podman-desktop/fork
-pdkit init          # creates the directory, copies the config, builds the map
-pdkit doctor        # says what is missing and what degrades because of it
+In an Open Code session started in the fork, where the plugin puts `pdkit` on
+PATH; a line that starts with `!` goes to the shell, not to the model
+([README · First run](../../README.md#first-run)):
+
+```text
+!pdkit init          # creates the directory, copies the config, builds the map
+!pdkit doctor        # says what is missing and what degrades because of it
 ```
 
 **One clone, two remotes — not two clones.** The upstream repository is never
