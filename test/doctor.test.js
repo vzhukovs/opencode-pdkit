@@ -2417,11 +2417,14 @@ describe('the rules the agents end up with', () => {
     const plain = await run(answers({}, registered(() => [], elsewhere)));
     assert.equal(plain.result.status, 'ok');
 
-    const ask = rule('external_directory', '/elsewhere/*', 'ask');
+    // As the registrar spells the two directories: resolved, so with a drive
+    // letter on Windows.
+    const outside = `${resolve('/elsewhere').replaceAll('\\', '/')}/*`;
+    const ask = rule('external_directory', outside, 'ask');
     const { result } = await run(answers({ global: { permissions: [ask] } }, registered(() => [ask], elsewhere)));
     assert.equal(
       rowsOf(result, 'pd-scout')[0].change,
-      "has it ask before directories outside the project, the plugin's and $PDKIT_HOME (/elsewhere/*); has it ask before $PDKIT_HOME, which pdkit lets it into",
+      `has it ask before directories outside the project, the plugin's and $PDKIT_HOME (${outside}); has it ask before $PDKIT_HOME, which pdkit lets it into`,
     );
   });
 
