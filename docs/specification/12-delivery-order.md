@@ -22,6 +22,12 @@ orchestrating ones with `disable-model-invocation: true`, knowledge ones
 phrase-triggered. Shipping `commands/` as well would be two sources of truth for
 one behavior.
 
+The answer stands in Open Code, where it is carried out in code rather than by
+the host: Open Code reads no skills from a plugin, so the plugin registers every
+`SKILL.md` as a `/pd:` command, and the three without
+`disable-model-invocation: true` as skills as well — from the same files, so
+there is still one source ([section 3](03-commands.md)).
+
 ---
 
 ← [11 · Known weaknesses](11-known-weaknesses.md) · [Contents](README.md) · [13 · Status](13-status.md) →
