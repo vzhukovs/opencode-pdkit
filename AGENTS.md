@@ -5,7 +5,8 @@ Zero-dependency ESM on Node >= 22.13, no build: `lib/` is what runs. The plugin
 works on **somebody else's** repository, and most rules below follow from that.
 
 Read before changing anything: [`CONTRIBUTING.md`](CONTRIBUTING.md) (where code
-goes, how to add a command, check, state, skill or agent) and
+goes, how to add a command, check, state, skill, agent or hook, how to load a
+working copy into Open Code) and
 [section 2.2 of the specification](docs/specification/02-plugin-structure.md#22-state-outside-the-repository)
 (the invariants a change must not break). This file does not repeat them; it
 lists what has gone wrong more than once.
@@ -66,6 +67,12 @@ reintroduce what was removed.
   no domain logic.
 - **No new import cycles.** The three runtime `await import()` cycles in
   `lib/state.js` are documented and the only ones allowed.
+- **The server part stays in `opencode/`.** `lib/` imports nothing from it, and
+  it loads from `lib/` only the leaves listed in `LEAVES` in
+  `test/invariants.test.js`; the rest of `lib/` runs under Node, in the process
+  the hook bridge starts for each hook or in `pdkit`. What `lib/` has to know of
+  Open Code — identifiers, the CLI and API, the session database — goes in
+  `lib/harness.js` or a `lib/opencode-*.js` module, not into a domain module.
 
 `test/invariants.test.js` enforces most of this; a failure there is the design
 talking, not a test to adjust. SOLID is not a license to split: size alone is
@@ -75,13 +82,17 @@ Do not reopen a split the round-2 review rejected without new facts.
 ## Other recurring mistakes
 
 - **Collect facts, reach no verdict.** What must be *true* goes in `lib/` with a
-  test; what needs *judgement* goes in `skills/` or `agents/`. No `score` or
+  test; what needs *judgment* goes in `skills/` or `agents/`. No `score` or
   `recommendation` fields in `lib/`.
 - **Writes upstream go through the gate.** `git push` and `gh pr create` only
   with a `push` token for the branch, review replies only with a `reply` token
   for the PR, the issue tracker never. `pre-bash` fails closed — a handler that
   cannot decide denies — and every other hook fails open. The rules are in
   [section 6 of the specification](docs/specification/06-hooks.md).
+- **Nothing in `opencode/` throws out of `setup()` or a transform.** Open Code
+  disables a plugin whose transform fails and starts sessions without one that
+  fails to load — and the gate goes with it. The gate's callback is registered
+  first; a registrar that fails is reported and skipped.
 - **Plugin files from prompts go through `${CLAUDE_PLUGIN_ROOT}/`.** Skills and
   subagents run in the podman-desktop checkout, so a bare `knowledge/x.md`
   resolves against the wrong repository. Open Code has no such variable: the
@@ -100,7 +111,7 @@ Do not reopen a split the round-2 review rejected without new facts.
 - **Comments say why, and must stay true.** When code moves, update or remove
   comments that name the old place.
 - **`docs/` is one file per section**, with stable numbers; a new section is a
-  new numbered file linked from its `README.md` and its neighbours' footers.
+  new numbered file linked from its `README.md` and its neighbors' footers.
 - **American spelling everywhere** — prose, comments, identifiers, test
   names: `license`, `behavior`, `color`, `initialize`, `judgment`. Three
   exceptions are data, not prose, and stay as they are: the `'cancelled'` CI
@@ -114,8 +125,7 @@ Do not reopen a split the round-2 review rejected without new facts.
 - Conventional commits, `type(scope): subject`; the body says why.
 - History starts at a snapshot of podman-desktop-kit 0.15.0: the why behind
   code up to 0.15.0 is in the commit messages of `vzhukovs/podman-desktop-kit`.
-  To read it with `git log` and `git blame` here, graft it locally (never push
-  `refs/replace/`):
+  To read it with `git log` and `git blame` here, graft it locally:
 
   ```bash
   git fetch --no-tags https://github.com/vzhukovs/podman-desktop-kit.git \
@@ -123,6 +133,9 @@ Do not reopen a split the round-2 review rejected without new facts.
   git replace --graft "$(git rev-list --max-parents=0 HEAD)" \
     d9805347f7e61d06d0651644c0a6bfe5d5bf7972
   ```
+
+  The graft and `cc/main` stay in the clone: push branches by name, never
+  `git push --mirror` or `git push origin 'refs/*'`.
 
 - User-visible change → `CHANGELOG.md` under `## [Unreleased]`.
 - Squash with `git reset --soft <base> && git commit`, never `git rebase -i`.
