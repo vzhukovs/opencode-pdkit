@@ -158,10 +158,12 @@ So `lib/state.js` carries `ADVANCES`, a state → skill table, and `nextStep()`
 resolves it against the record — against the record rather than the state,
 because one answer depends on the route: a `triaged` issue on the quickfix route
 goes to `/pd:quickfix`, and sending it to `/pd:plan` is what `escalate` exists to
-undo. Three places print it: the transition, the record, and the SessionStart
-summary. The skills say it too, but the table is what is printed by the command
-the model has just run, whether or not it read anything — the same argument
-[section 6](06-hooks.md) makes for hooks.
+undo. Three places print it: the transition, the record, and the summary the
+`session-start` hook gives a session — on its first prompt, on a fork and after
+a compaction, as an entry of the session's instructions that the model reads on
+every request. The skills say it too, but the table is what is printed by the
+command the model has just run, whether or not it read anything — the same
+argument [section 6](06-hooks.md) makes for hooks.
 
 Two states answer with a sentence rather than a command, and deliberately.
 `sliced` and `planned`-after-review wait on an approval that is a person's to
