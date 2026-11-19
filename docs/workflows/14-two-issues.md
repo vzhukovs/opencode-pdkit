@@ -24,17 +24,18 @@ Where each step runs and on which model — the columns are explained in
 What you type:
 
 ```
-terminal 1: cd <fork> && claude     every phase of 12345, as in scenario 1
-terminal 2: cd <fork> && claude     every phase of 12908, as in scenario 2
+terminal 1: cd <fork> && opencode   every phase of 12345, as in scenario 1
+terminal 2: cd <fork> && opencode   every phase of 12908, as in scenario 2
 ```
 
-| Step | Session | `/model` | Subagents |
+| Step | Session | Default model | Subagents |
 |---|---|---|---|
 | `pdkit worktree create …` | **terminal** | — | — |
 | every phase of either issue | **new** · that issue's tree | as in [scenario 1](01-bug-fix.md#sessions-and-models) | — |
 
-Two issues are two sets of sessions. One session moving between trees carries
-the first issue into every turn of the second.
+Two issues are two sets of sessions, one Open Code in each terminal: the hook
+moves each session into its own issue's tree. One session moving between trees
+carries the first issue into every turn of the second.
 
 ---
 

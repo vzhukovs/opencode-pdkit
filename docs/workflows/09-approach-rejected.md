@@ -80,9 +80,7 @@ What you type, session by session — `/clear` starts the next one:
 pdkit issue rework 12345 --reason "…"     no model: a terminal, or the pr-sync session
 
 /clear
-/model opus                         ← planning again, on opus
-/effort high
-/pd:plan 12345
+/pd:plan 12345                      planning again
 
   the reviewer wants something landed first:
 
@@ -90,26 +88,22 @@ pdkit issue draft-blocker 18833 …
 pdkit issue block 18833 --by <new issue> --reason "…"
 
 /clear
-/model opus
-/effort high
 /pd:triage <new issue>
 
   once the blocker has merged:
 
 pdkit issue unblock 18833 --by <new issue>
 /clear
-/model sonnet                       ← resume is sonnet
-/effort medium
 /pd:resume 18833
 ```
 
-| Step | Session | `/model` | Subagents |
+| Step | Session | Default model | Subagents |
 |---|---|---|---|
 | `pdkit issue rework …` | **terminal**, or the `/pd:pr-sync` session that read the rejection | — | — |
-| next: `/pd:plan 12345` | **new** · main checkout | opus | `pd-scout` · sonnet |
+| next: `/pd:plan 12345` | **new** · main checkout | `opus#high` | `pd-scout` · `sonnet#high` |
 | `pdkit issue draft-blocker`, `pdkit issue block` | **terminal**, or the `/pd:pr-sync` session | — | — |
-| `/pd:triage <new issue>` | **new** · main checkout | opus | `pd-scout` · sonnet |
-| `pdkit issue unblock`, then `/pd:resume 18833` | **terminal**, then **new** · issue tree | sonnet | `pd-conflict-analyst` · opus |
+| `/pd:triage <new issue>` | **new** · main checkout | `opus#high` | `pd-scout` · `sonnet#high` |
+| `pdkit issue unblock`, then `/pd:resume 18833` | **terminal**, then **new** · issue tree | `sonnet#medium` | `pd-conflict-analyst` · `opus#medium` |
 | `pdkit checkpoint list`, `pdkit rollback` | **terminal**, or the session of the phase being undone | — | — |
 
 ---

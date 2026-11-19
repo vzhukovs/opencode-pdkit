@@ -21,19 +21,17 @@ What you type, session by session — `/clear` starts the next one:
 
 ```
 /clear
-/model sonnet                       ← slicing is sonnet, even after an opus review round
-/effort medium
 /pd:slice 17221                     the slicer, on the published diff
 
 /clear
 /pd:pr 17221                        one session per new slice
 ```
 
-| Step | Session | `/model` | Subagents |
+| Step | Session | Default model | Subagents |
 |---|---|---|---|
-| the split: `slice suggest --from-pr`, `set`, `verify` | **new** · issue tree running `/pd:slice 17221`, or **terminal** | sonnet | `pd-slicer` · sonnet |
+| the split: `slice suggest --from-pr`, `set`, `verify` | **new** · issue tree running `/pd:slice 17221`, or **terminal** | `sonnet#medium` | `pd-slicer` · `sonnet#medium` |
 | `pdkit pr threads 17577` | **terminal** | — | — |
-| the new pull requests: `/pd:pr 17221` | **new** · issue tree, one per slice | sonnet | — |
+| the new pull requests: `/pd:pr 17221` | **new** · issue tree, one per slice | `sonnet#medium` | — |
 
 ---
 

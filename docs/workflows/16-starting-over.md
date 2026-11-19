@@ -70,15 +70,13 @@ pdkit reset 12345                   what would go; writes nothing
 pdkit reset 12345 --confirm
 
 /clear
-/model opus                         ← from nothing: triage is opus
-/effort high
-/pd:triage 12345
+/pd:triage 12345                    from nothing
 ```
 
-| Step | Session | `/model` | Subagents |
+| Step | Session | Default model | Subagents |
 |---|---|---|---|
-| `pdkit reset 12345`, then `--confirm` | **terminal**, or **new** · main checkout running `/pd:reset 12345` on sonnet | — | — |
-| `/pd:triage 12345` | **new** · main checkout | opus | `pd-scout` · sonnet |
+| `pdkit reset 12345`, then `--confirm` | **terminal**, or **new** · main checkout running `/pd:reset 12345` on `sonnet#medium` | — | — |
+| `/pd:triage 12345` | **new** · main checkout | `opus#high` | `pd-scout` · `sonnet#high` |
 
 Not from inside the issue's tree when `--worktrees` is passed: the tree is what
 it removes.

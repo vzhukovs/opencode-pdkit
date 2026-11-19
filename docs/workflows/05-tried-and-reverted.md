@@ -40,21 +40,18 @@ Where each step runs and on which model — the columns are explained in
 What you type, session by session — `/clear` starts the next one:
 
 ```
-/model opus                         ← triage is opus
-/effort high
 /pd:triage 12775                    route: redo
 pdkit issue history 12775
 
 /clear
-/effort high
-/pd:plan 12775                      still opus
+/pd:plan 12775
 ```
 
-| Step | Session | `/model` | Subagents |
+| Step | Session | Default model | Subagents |
 |---|---|---|---|
-| `/pd:triage 12775` | **new** · main checkout | opus | `pd-archaeologist` · sonnet, `pd-scout` · sonnet |
+| `/pd:triage 12775` | **new** · main checkout | `opus#high` | `pd-archaeologist` · `sonnet#high`, `pd-scout` · `sonnet#high` |
 | `pdkit issue history 12775` | **terminal**, or the triage session | — | — |
-| next: `/pd:plan 12775` | **new** · main checkout | opus | `pd-scout` · sonnet |
+| next: `/pd:plan 12775` | **new** · main checkout | `opus#high` | `pd-scout` · `sonnet#high` |
 
 ---
 

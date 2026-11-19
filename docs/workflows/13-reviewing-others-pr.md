@@ -92,17 +92,15 @@ What you type, session by session — `/clear` starts the next one:
 
 ```
 /clear
-/model opus                         ← the synthesis and the session are opus
-/effort medium
-/pd:review-pr 2903                  the four axes run on sonnet on their own
+/pd:review-pr 2903                  the four axes run on a model of their own
 ```
 
-| Step | Session | `/model` | Subagents |
+| Step | Session | Default model | Subagents |
 |---|---|---|---|
-| `/pd:review-pr 2903` | **new** · main checkout | opus | `pd-review-architecture`, `-api-compat`, `-tests`, `-product` · sonnet; `pd-review-synth` · opus |
+| `/pd:review-pr 2903` | **new** · main checkout | `opus#medium` | `pd-review-architecture`, `-api-compat`, `-tests`, `-product` · `sonnet#medium`; `pd-review-synth` · `opus#medium` |
 | posting the review | GitHub, by hand | — | — |
 
-One session per pull request reviewed. The `pdkit review …` lines below are
+One session per pull request reviewed. The `pdkit review …` lines above are
 what the skill runs.
 
 ---

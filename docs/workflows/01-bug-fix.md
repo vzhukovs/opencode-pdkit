@@ -49,36 +49,28 @@ Where each step runs and on which model — the columns are explained in
 What you type, session by session — `/clear` starts the next one:
 
 ```
-cd <fork> && claude                 the fork, on main — starts on sonnet
+cd <fork> && opencode               the fork, on main
 
-/model opus                         ← switch 1: planning is opus
-/effort high
 /pd:triage 12345
 
 /clear
-/effort high
-/pd:plan 12345                      still opus
+/pd:plan 12345
 
 /clear
-/effort high
-/pd:plan-review 12345               still opus
+/pd:plan-review 12345
 pdkit ids freeze 12345              your approval
 pdkit state 12345 --to plan-approved
 
 /clear
-/model sonnet                       ← switch 2: sonnet from here to the PR
-/effort medium
 /pd:exec 12345                      moves the session into DESKTOP-12345
 
 /clear
-/pd:validate 12345                  still sonnet
+/pd:validate 12345
 
 /clear
-/effort high
-/pd:audit 12345                     still sonnet — pd-auditor is opus on its own
+/pd:audit 12345                     pd-auditor is opus#high on its own
 
 /clear
-/effort medium
 /pd:slice 12345
 pdkit state 12345 --to slices-approved   your approval
 
@@ -89,24 +81,25 @@ pdkit state 12345 --to slices-approved   your approval
 /pd:pr 12345                        one session per slice
 ```
 
-| Step | Session | `/model` | Subagents |
+| Step | Session | Default model | Subagents |
 |---|---|---|---|
-| `/pd:triage 12345` | **new** · main checkout | opus | `pd-scout` · sonnet |
-| `/pd:plan 12345` | **new** · main checkout | opus | `pd-scout` · sonnet |
-| `/pd:plan-review 12345` | **new** · main checkout | opus | `pd-plan-critic` · opus |
+| `/pd:triage 12345` | **new** · main checkout | `opus#high` | `pd-scout` · `sonnet#high` |
+| `/pd:plan 12345` | **new** · main checkout | `opus#high` | `pd-scout` · `sonnet#high` |
+| `/pd:plan-review 12345` | **new** · main checkout | `opus#high` | `pd-plan-critic` · `opus#high` |
 | approve: `pdkit ids freeze`, `pdkit state --to plan-approved` | the plan-review session, or **terminal** | — | — |
-| `/pd:exec 12345` | **new** · main checkout, then the skill moves it into `DESKTOP-12345` | sonnet | `pd-implementer` · sonnet, one per task |
-| `/pd:validate 12345` | **new** · issue tree | sonnet | `pd-validator` · sonnet |
-| `/pd:audit 12345` | **new** · issue tree | sonnet | `pd-auditor` · opus |
-| `/pd:slice 12345` | **new** · issue tree | sonnet | `pd-slicer` · sonnet |
+| `/pd:exec 12345` | **new** · main checkout, then the skill moves it into `DESKTOP-12345` | `sonnet#medium` | `pd-implementer` · `sonnet#medium`, one per task |
+| `/pd:validate 12345` | **new** · issue tree | `sonnet#medium` | `pd-validator` · `sonnet#medium` |
+| `/pd:audit 12345` | **new** · issue tree | `sonnet#high` | `pd-auditor` · `opus#high` |
+| `/pd:slice 12345` | **new** · issue tree | `sonnet#medium` | `pd-slicer` · `sonnet#medium` |
 | approve: `pdkit state --to slices-approved` | the slice session, or **terminal** | — | — |
-| `/pd:preflight 12345` | **new** · issue tree | sonnet | — |
-| `/pd:pr 12345` | **new** · issue tree, one per slice | sonnet | — |
+| `/pd:preflight 12345` | **new** · issue tree | `sonnet#medium` | — |
+| `/pd:pr 12345` | **new** · issue tree, one per slice | `sonnet#medium` | — |
 
-Two switches on this path: to opus for planning, back to sonnet at `/pd:exec`.
-`/clear` keeps the model of the session before it, so the first `/pd:exec`
-after `/pd:plan-review` is where a forgotten `/model sonnet` runs a whole
-implementation on opus.
+No model to type on this path. Each command switches the session to its own —
+`opus#high` for planning, `sonnet#medium` from `/pd:exec` on — before its
+instructions reach the model, and the session keeps it until the next command,
+whatever it was on before: the planning model does not carry over into the
+implementation.
 
 ---
 

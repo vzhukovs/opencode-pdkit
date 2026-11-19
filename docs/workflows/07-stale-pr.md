@@ -149,25 +149,21 @@ What you type, session by session — `/clear` starts the next one:
 
 ```
 /clear
-/model sonnet
 /pd:pr-status                       the dashboard
 
 /clear
-/model opus                         ← switch: review rounds are opus
-/effort high
-/pd:pr-sync 17577                   pdkit next does not name it — the hook reminds
+/pd:pr-sync 17577                   pdkit next does not name it: a review round is your call
 
 … the reviewer answers, days later …
 
 /clear
-/effort high
-/pd:pr-sync 17577                   the next round — still opus
+/pd:pr-sync 17577                   the next round
 ```
 
-| Step | Session | `/model` | Subagents |
+| Step | Session | Default model | Subagents |
 |---|---|---|---|
-| `/pd:pr-status` | **new** · anywhere in the fork | sonnet | — |
-| `/pd:pr-sync 17577` | **new** · issue tree, **one per review round** | opus | `pd-thread-resolver` · sonnet; on the first round of an adopted issue also the four `pd-review-*` · sonnet and `pd-review-synth` · opus |
+| `/pd:pr-status` | **new** · anywhere in the fork | `sonnet#medium` | — |
+| `/pd:pr-sync 17577` | **new** · issue tree, **one per review round** | `opus#high` | `pd-thread-resolver` · `sonnet#high`; on the first round of an adopted issue also the four `pd-review-*` · `sonnet#medium` and `pd-review-synth` · `opus#medium` |
 | `pdkit gate open …` | the pr-sync session, when it asks — you confirm | — | — |
 | `pdkit pr list` / `refresh` / `ci` / `threads` / `diff` | **terminal** | — | — |
 

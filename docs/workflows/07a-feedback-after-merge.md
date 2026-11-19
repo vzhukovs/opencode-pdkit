@@ -103,12 +103,10 @@ pdkit close 18248 --finish
   or, with the knowledge harvest:
 
 /clear
-/model sonnet                       ← back from the opus of /pd:pr-sync
-/effort medium
 /pd:close 18248
 ```
 
-| Step | Session | `/model` | Subagents |
+| Step | Session | Default model | Subagents |
 |---|---|---|---|
 | `pdkit defer new …` | **terminal**, or the `/pd:pr-sync` session that read the comment | — | — |
 | opening the follow-up issue | GitHub, by hand | — | — |
@@ -116,7 +114,7 @@ pdkit close 18248 --finish
 | `pdkit defer list` / `resolve` / `drop` | **terminal** | — | — |
 
 `/pd:close 18248` does the same as the closing line, with the knowledge harvest
-— **new** · issue tree, sonnet. It leaves the tree before removing it.
+— **new** · issue tree, `sonnet#medium`. It leaves the tree before removing it.
 
 ---
 
