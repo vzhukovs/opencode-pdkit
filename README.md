@@ -1,27 +1,30 @@
-Work in progress: Open Code port of podman-desktop-kit
+Work in progress: not yet published to npm, so the install below works from the
+first release on; and parts of `docs/` still describe the Claude Code version.
 
-# Podman Desktop Kit
+# Podman Desktop Kit for OpenCode
 
-A Claude Code plugin for working upstream issues in
+An [Open Code](https://opencode.ai) plugin for working upstream issues in
 [podman-desktop](https://github.com/podman-desktop/podman-desktop): triage an
 issue, plan it, implement it, slice the result into atomic pull requests, and
-carry those pull requests through review.
+carry those pull requests through review — each phase and each agent on a model
+of its own, from any provider Open Code is connected to.
+
+It is the Open Code port of
+[podman-desktop-kit](https://github.com/vzhukovs/podman-desktop-kit), the Claude
+Code plugin, as of its 0.15.0. The Claude Code version gets no further updates;
+this one carries on from it, state included — see
+[Moving from the Claude Code version, and back](#moving-from-the-claude-code-version-and-back).
 
 It is built around one fact — **you do not own the repository you are opening
 pull requests against** — and most of what follows is a consequence of that.
 
-> **Status: 0.11.6, pre-1.0.** Used on thirteen podman-desktop issues: fifteen
-> pull requests published upstream, seven of them merged, and seven issues carried
-> all the way to `merged` — four on the `standard` route, three on `quickfix`. One
-> issue went out as a two-slice graph into two pull requests; another as three
-> slices that review asked to be one, rejoined by `slice join` into a single
-> pull request that superseded the three. Fourteen of the twenty-four skills have
-> run as `/pd:*` in a session; `editor`, `knowledge`, `open`, `pr-status`,
-> `reset`, `resume` and `review-pr` have not, nor have the three that trigger by
-> meaning. Pre-1.0, a minor release may still change a command or the state
-> machine — see [RELEASING.md](RELEASING.md).
-> [Status and limitations](#status-and-limitations) has the full accounting,
-> with evidence per line.
+> **Status: pre-1.0, not yet run on a live issue in Open Code.** The Claude Code
+> version was used on thirteen podman-desktop issues and carried seven of them
+> all the way to `merged`. In Open Code, the test suite, the plugin loading and
+> the receipt gate are checked in CI; no issue has yet gone through it. Pre-1.0,
+> a minor release may still change a command or the state machine — see
+> [RELEASING.md](RELEASING.md).
+> [Status and limitations](#status-and-limitations) has the full accounting.
 
 ## Why it exists
 
@@ -42,6 +45,73 @@ asymmetry:
   slice is independent only if it builds, lints, and tests standalone from
   `main`.
 
+## Requirements
+
+| Required | Why |
+|---|---|
+| Open Code 2, 2.3.0 or later | the plugin is written against Open Code 2's plugin API, and tested on 2.3.0. Below 2.3.0 it runs the gate alone, and every `/pd:` command refuses, naming the command that updates Open Code |
+| Node.js >= 22.13 | `pdkit` is zero-dependency ESM, and so is every hook: the plugin starts them with the `node` on the PATH of the Open Code server. `pdkit cost` reads Open Code's sessions with `node:sqlite`, which needs no flag from 22.13. Installing the plugin does not need Node |
+| `git` | branch, worktree, and history primitives |
+| [`gh`](https://cli.github.com/) | issues, pull requests, and review threads |
+| `pnpm` | the package manager podman-desktop uses |
+
+### Open Code 2
+
+Any one of these installs it:
+
+```bash
+brew install anomalyco/tap/opencode-v2           # Homebrew, the project's tap
+brew install opencode                            # Homebrew core: built from the release tag, updated less often
+npm install --global @opencode/cli
+curl -fsSL https://opencode.ai/v2/install | bash
+```
+
+**Open Code 1 is not supported.** It is still published, under the names it
+always had — `opencode-ai` on npm, the `anomalyco/tap/opencode` formula,
+`https://opencode.ai/install` — and the two do not install side by side: one
+`opencode` command, one config directory. Open Code 1 reads that config, skips
+its `plugins` key with a line in its log, and runs without the plugin: no `/pd:`
+commands, no agents, and no gate. `opencode --version` prints `opencode v2.…`
+for Open Code 2; `opencode upgrade --major` moves from 1 to 2.
+
+### Optional MCP servers
+
+All detected by `pdkit doctor`, all degrading gracefully when absent:
+
+| Server | Used by | Without it |
+|---|---|---|
+| Playwright | `/pd:validate` | validation produces a human checklist instead of evidence, and does not mark PASS |
+| context7 | planning and review, for questions about someone else's library | the answer comes from the model's own knowledge of that library's versions, which goes out of date without saying so |
+
+The plugin declares no MCP server on purpose: one declared by a plugin would load
+for everyone, and these are meant to be optional. Configure them yourself; see
+[`docs/configuration/`](docs/configuration/README.md).
+
+Playwright is the one with a setup detail worth stating here. `pdkit validate
+launch` starts the application with remote debugging on and prints the endpoint;
+the server attaches to it, which is how podman-desktop's own e2e suite drives the
+app. Once per machine, beside `plugins` in your global Open Code config,
+`~/.config/opencode/opencode.json`:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "playwright": {
+        "type": "local",
+        "command": ["npx", "@playwright/mcp@latest", "--cdp-endpoint", "http://127.0.0.1:9222"]
+      }
+    }
+  }
+}
+```
+
+The global config matters: `opencode mcp add` writes the `opencode.json` of the
+directory it runs in, and a project config there does not reach the issue
+worktrees, each of which is a directory of its own. `pdkit doctor` reports the
+endpoint it found and whether `pd-validator` is offered the tools it drives the
+app with, not merely that a server exists.
+
 ## Install
 
 **One clone, two remotes.** Upstream is never checked out separately — diffs
@@ -56,43 +126,147 @@ git remote add upstream https://github.com/podman-desktop/podman-desktop.git
 
 Then add the plugin:
 
-```
-/plugin marketplace add vzhukovs/podman-desktop-kit
-/plugin install pd@podman-desktop-kit
-```
-
-Or, to try it without installing:
-
 ```bash
-claude --plugin-dir /path/to/podman-desktop-kit
+opencode plugin add opencode-pdkit
 ```
+
+Open Code installs the package into its own cache and adds it to `plugins` in
+your global config, `~/.config/opencode/opencode.json`; a running server picks it
+up within seconds. Global is the point. The plugin then loads in the fork and in
+every issue worktree beside it (`pd-worktrees/DESKTOP-<n>`), even with
+`OPENCODE_DISABLE_PROJECT_CONFIG` set. A project config would reach neither the
+worktrees nor, being a file in the fork, stay out of your pull requests.
 
 ### First run
 
+Start Open Code in the fork:
+
 ```bash
-pdkit init                      # state directory, config, package map
-pdkit doctor                    # what is missing and what degrades without it
-pdkit doctor --gate-selftest    # the only check that answers "is the gate on"
+cd podman-desktop
+opencode
 ```
+
+and type these there. A line that starts with `!` goes to the shell, not to the
+model:
+
+```text
+!pdkit init                      # state directory, config, package map
+!pdkit doctor                    # what is missing and what degrades without it
+!pdkit doctor --gate-selftest    # the only check that answers "is the gate on"
+```
+
+`pdkit` is on PATH there because the plugin puts its `bin/` first on the PATH of
+every command an Open Code session runs: the model's, a subagent's, and yours
+after `!`.
 
 `init` reads your fork's name from the `origin` remote and writes it into
 `$PDKIT_HOME/config.yaml` — there is nothing to configure by hand before running
-it, and nothing to type that the clone does not already know.
+it, nothing to type that the clone does not already know, and nothing it writes
+into the fork.
 
-Run the self-test after installing and after any upgrade. Every unit test in the
-suite stays green while a plugin whose manifest did not load gates nothing at
-all, so it is the one check that cannot be replaced by the test suite.
+Among the lines of `doctor` about Open Code: `opencode`, the version of the
+server running the plugin, against the minimum; `plugin`, whether Open Code loads
+`opencode-pdkit` for this directory, and whether an update is out; `hooks:node`,
+the `node` the server starts the hooks with; and `models`, below. `/pd:doctor`
+runs the same report and goes through it with you — on a model, as every `/pd:`
+command does, which is why the first run uses `!`.
 
-Upgrading later:
+Run the self-test after installing and after any upgrade. It sends every command
+the gate must refuse, and the ones it must let through, through the runner the
+hook bridge calls when Open Code hands it a command: a `node` from PATH, the
+plugin's `bin/pdkit hook`, the deadline, and a refusal when no answer comes.
+Every unit test in the suite stays green on a machine where the hooks cannot
+start — there the gate refuses every command, and the other hooks check nothing
+— so it is the one check that cannot be replaced by the test suite. Whether Open
+Code runs the bridge at all is the `plugin` line.
 
+### Upgrading
+
+```bash
+opencode plugin check     # is a newer version out
+opencode plugin update    # take it
 ```
-/plugin marketplace update podman-desktop-kit
-/plugin update pd@podman-desktop-kit
-/reload-plugins
+
+`update` reloads the plugin in every directory of the running server; there is
+nothing to restart. To stay on a version, or go back to one:
+
+```bash
+opencode plugin remove opencode-pdkit
+opencode plugin add opencode-pdkit@<version>
 ```
+
+An exact version is never updated. A range is, within itself:
+`opencode-pdkit@^0.16.0` takes 0.16.x and leaves 0.17.0 alone, and pre-1.0 a
+minor release is the one that may ask something of you. `plugin remove` takes
+the entry's `options` with it, models included: put them back after.
 
 See [RELEASING.md](RELEASING.md) for what a release contains and how versions are
 decided.
+
+## Models
+
+Each command and each agent runs on a model of its own, named the way Open Code
+names models: `provider/model#variant`, the variant being the effort. Out of the
+box they name Open Code's Claude Agent provider:
+
+| Default | Commands | Agents |
+|---|---|---|
+| `claude-agent/opus#high` | `pd:triage`, `pd:plan`, `pd:plan-review`, `pd:pr-sync` | `pd-auditor`, `pd-plan-critic` |
+| `claude-agent/opus#medium` | `pd:knowledge`, `pd:review-pr` | `pd-conflict-analyst`, `pd-review-synth` |
+| `claude-agent/sonnet#high` | `pd:audit` | `pd-archaeologist`, `pd-scout`, `pd-thread-resolver` |
+| `claude-agent/sonnet#medium` | the other twelve | `pd-implementer`, `pd-slicer`, `pd-validator`, `pd-review-api-compat`, `pd-review-architecture`, `pd-review-product`, `pd-review-tests` |
+| `claude-agent/haiku#low` | `pd:editor`, `pd:open` | — |
+
+`package-map`, `upstream-rules` and `worktree-kit` name no model, and run on the
+session's.
+
+To put any of them on another model, another provider's included, give the
+plugin's entry a map. `opencode plugin add` wrote the entry as a string; write it
+as an object instead, with the same package name:
+
+```json
+{
+  "plugins": [
+    {
+      "package": "opencode-pdkit",
+      "options": {
+        "models": {
+          "pd:plan": "anthropic/claude-opus-5-5#high",
+          "pd-plan-critic": "anthropic/claude-opus-5-5#high",
+          "pd:exec": "deepseek/deepseek-flash",
+          "pd-implementer": "deepseek/deepseek-flash"
+        }
+      }
+    }
+  ]
+}
+```
+
+A key is a command as you type it, without the slash, or an agent; a command and
+the agents it calls are separate keys. A running server picks the edit up within
+seconds, and `opencode plugin update` leaves the object and its options as they
+are. What wins:
+
+- for an agent, `agents.<id>.model` in an Open Code config (a project's over the
+  global one), then `options.models`, then the agent's default;
+- for a command, `options.models`, then the command's default.
+
+A key that names nothing in the plugin, or a value that is not
+`provider/model#variant`, is dropped, and the default stays. A command checks its
+model against the ones Open Code can use before it switches to it, and refuses to
+start on one it cannot use, saying which model and where it came from; the
+session stays on its model. An agent on such a model fails when it is called.
+`opencode models` lists what your providers offer, and the `models` line of
+`pdkit doctor` lists all 35 agents and commands with the model each one runs on,
+where that came from, and whether Open Code can use it — and every key it
+dropped.
+
+A command switches the session to its model and leaves it there for the phase:
+until you pick another with `/models`, or run the next command. Outside the
+commands, the session runs on whatever model you chose. Your variant does not
+reach the plugin's agents: theirs is part of their model.
+
+[`docs/configuration/05-models.md`](docs/configuration/05-models.md) has the rest.
 
 ## Commands
 
@@ -127,13 +301,14 @@ Three more skills trigger by meaning rather than by slash: `package-map`,
 
 Everything they do rests on `pdkit`, a zero-dependency CLI the plugin puts on
 `PATH`. `pdkit --help` lists it; you can drive the whole workflow from a terminal
-without a Claude Code session, which is how most of it was tested.
+without an Open Code session — `bin/pdkit` of a clone at the same version — which
+is how most of it was tested.
 
 Two `pdkit` commands measure rather than act, and no skill runs them. `pdkit
 stats` checks the guessed config thresholds against what upstream merges.
-`pdkit cost` measures the tokens each issue cost, from Claude Code's transcripts,
-split by phase and normalized per task, slice, requirement and changed line. It
-can snapshot a baseline and compare later issues to it. See
+`pdkit cost` measures the tokens each issue cost, from Open Code's session
+database, split by phase and normalized per task, slice, requirement and changed
+line. It can snapshot a baseline and compare later issues to it. See
 [docs/workflows/reference/cost.md](docs/workflows/reference/cost.md).
 
 The cycle is walked one session per phase, not in one sitting. Context is re-read
@@ -142,84 +317,94 @@ triage again on every turn of the review; each phase's artefacts are on disk, an
 a new session opens on a summary of where the issue stands. `pdkit next <n>`
 prints the one command to run, and
 [docs/workflows/reference/sessions.md](docs/workflows/reference/sessions.md)
-says which session and which model each command runs in.
+says which session each command runs in.
+
+## Moving from the Claude Code version, and back
+
+Both versions keep their state in one place: `$PDKIT_HOME`,
+`~/.pdkit/podman-desktop` unless you set it, in the formats of the Claude Code
+version's 0.15.0. Nothing is imported. An issue begun in Claude Code carries on
+in Open Code — its state, plan, tasks, pull requests and journal are where they
+were — and so does what earlier issues left for later ones.
+
+Once, before the first work in Open Code, with the Claude Code version's `pdkit`,
+in the fork:
+
+```bash
+tar -czf ~/pdkit-home-backup.tgz -C ~/.pdkit podman-desktop   # or wherever $PDKIT_HOME points
+pdkit cost --snapshot
+pdkit cost --planning --snapshot
+pdkit task show
+```
+
+The copy comes first, because nothing in that directory is under version control
+and its journal is only ever appended to: an entry written there stays. The two
+snapshots are what the issues cost by Claude Code's transcripts: the "before"
+that `pdkit cost --compare <date>` puts later issues beside, and the point where
+Open Code's measuring starts. `pdkit task show` must answer `no task is running
+in any working tree`.
+
+While both are installed:
+
+- **One issue, one harness at a time.** Two harnesses on one issue work like two
+  Claude Code sessions on it: the journal takes both, and the cost of each is
+  attributed approximately.
+- **A task begun in Claude Code is started again in Open Code.** Until `pdkit
+  task start` runs here — `/pd:exec` runs it — the task belongs to a Claude Code
+  session, which to Open Code is somebody else's, as it would be to a new Claude
+  Code session.
+- **`pdkit cost` here sees Open Code only.** For an issue with work from before
+  the switch, it prints no total: it says where measuring starts, `measured
+  since` the newest snapshot read from Claude Code's transcripts, and that what
+  came before is outside Open Code's data and not measured. Not measured is not
+  zero.
+
+Going back to the Claude Code version: run `pdkit cost --snapshot` here first.
+The Claude Code version reads what this one wrote, but none of its model calls,
+so in its own `pdkit cost` an issue carried on in Open Code looks cheaper than it
+was, and nothing says so; the snapshot is the record. A task under way is started
+again there too. Going back is safe while the two read the same formats: a
+release that changes one says so in [CHANGELOG.md](CHANGELOG.md) — "the Claude
+Code version 0.15 no longer reads …" — and from that release on, going back is
+not.
 
 ## Status and limitations
 
 Stated in full, because "the plugin is tested" should not be read more widely
-than it is. [section 13 of `docs/specification/`](docs/specification/13-status.md) keeps this
-list, and it has a rule: a line leaves the second table by the same thing that
-puts one there — a journal entry, or an artefact you can point at.
+than it is.
 
-**Verified against live upstream:**
+**In Open Code.** What runs in CI on every change:
 
-| What | Evidence |
+| What | How |
 |---|---|
-| The `quickfix` route end to end | issue #18248 → [PR #18561](https://github.com/podman-desktop/podman-desktop/pull/18561), the whole journal from `triaged` to `pr-open` |
-| The `standard` route end to end | issue #17221 → [PR #18562](https://github.com/podman-desktop/podman-desktop/pull/18562), including plan approval, receipts, validation, slicing and materialization |
-| A **multi-slice graph** end to end, on the `standard` route | issue #18967 → [PR #19001](https://github.com/podman-desktop/podman-desktop/pull/19001) and [PR #19002](https://github.com/podman-desktop/podman-desktop/pull/19002): two slices cut, verified, materialized and preflighted separately, the second from its predecessor's branch. Three plan-review rounds and four approved amendments along the way. The `multi-slice` *route* — chosen as such at triage — is still untaken |
-| The whole machine to `merged`, with a reviewer in the middle | issue #18832 → [PR #18889](https://github.com/podman-desktop/podman-desktop/pull/18889): review threads read and answered, two amendments raised from what reviewers said, a rebase, then `pr-merged … observed by refresh` → `merged` |
-| A real rebase against real upstream drift | on #18832, after upstream `ea086a5d599`: both journal entries exist, `conflict-mechanical` and `conflict-semantic`. The semantic one is the case the module was written for — by its own text the dangerous half never surfaced as a git conflict at all |
-| Validation with Playwright and a codified e2e test | four green runs in a row, tied to a digest of the spec |
-| Reviewing other people's pull requests | two reports, `REQUEST_CHANGES` and `APPROVE_WITH_NITS` |
-| The gate firing as a hook rather than as a function | a `denied` journal entry from a handler the host launched |
-| Slicing from a published pull request, and the archaeology behind `redo` | dry runs against upstream PRs, no writes |
-| The plugin loading, and a skill running as `/pd:*` | `claude --plugin-dir . -p "/pd:doctor"` against the fork returns the full report, so the manifest loads and `bin/` reaches `PATH` |
-| `close --finish`, the invariant-4 rollup, and the move to `merged` | a browser merge picked up by `pr refresh`, then the rollup read and the issue closed, both in the journal. Seven issues closed this way: 18248, 18832, 18834, 18835, 17221, 19901 and 18778, and on 18832, 18834 and 18835 the worktrees of a squash-merged pull request removed in the same run |
-| Three slices joined into one pull request after review | issue #19818: [#19829](https://github.com/podman-desktop/podman-desktop/pull/19829), [#19830](https://github.com/podman-desktop/podman-desktop/pull/19830) and [#19831](https://github.com/podman-desktop/podman-desktop/pull/19831) cut by layer, rejected as three, rejoined as [PR #19849](https://github.com/podman-desktop/podman-desktop/pull/19849) with a commit per old slice; the three journaled as `pr-closed … superseded by #19849` |
-| Flake detection | five jobs on one commit reported `flake` after a re-run turned them green |
-| The SessionStart summary fired by the host | sixteen `SessionStart` attachments in session transcripts whose command is `pdkit hook session-start` and whose content is the summary |
-| Windows | ubuntu, macOS and Windows all run the suite in CI, and all three block. Windows has been blocking and green since 2026-08-31, after the two defects that kept it from testing anything were fixed |
-| Fourteen skills through a session, and six agent types dispatched by name | `/pd:doctor`, `/pd:sync`, `/pd:plan`, `/pd:plan-review` on 18832; `/pd:triage`, `/pd:exec`, `/pd:audit`, `/pd:slice`, `/pd:preflight` on 18967; `/pd:pr-sync` on 18889; `/pd:validate` and `/pd:pr` on 18833, 18835 and 18915; `/pd:close` on 18835; `/pd:quickfix` on 19901 — from the plugin as enabled in `settings.json`. The agents: `pd-scout`, `pd-plan-critic`, `pd-implementer`, `pd-auditor`, `pd-slicer`, `pd-thread-resolver` |
-| Review sending a plan back | `plan check` green, `pd-plan-critic` returning three must-change findings anyway, and the issue going `planned` → `triaged` → replanned |
-| The gate holding under widened permissions | a session given `--allowedTools Bash` refused `git push --dry-run`, journaled as `denied` |
+| The test suite | on ubuntu, macOS and Windows; all three block |
+| The plugin loading | the packed plugin, installed into a fresh Open Code at the minimum, 2.3.0, and at the latest release: Open Code reports it active for the project |
+| The receipt gate holding | on a real model, at the minimum and at the latest release, an implementer that stops without a receipt is held exactly once, and `pdkit doctor` finds its stop in the journal. It runs when the repository has a provider key to run it with |
 
-**Never executed, in order of risk:**
+The last two do not block a change yet.
 
-| What | Why it matters |
-|---|---|
-| **Ten of the twenty-four skills** — `editor`, `open`, `knowledge`, `pr-status`, `reset`, `resume`, `review-pr`, `package-map`, `upstream-rules`, `worktree-kit` — and installing from a marketplace fetched over the network | Skill bodies are prose, which is the half of this plugin nothing covers, and two were caught getting it wrong: `/pd:preflight` advised standing on a branch the graph had invented, and `/pd:pr` documented a base `pr create` could not open against. Not invoked is not the same as not exercised — `close --finish`, `review fetch`/`render`, `pr list` and `drift` have all run from a terminal with the skill that wraps them never loaded. What is untested is the prose: what to do with the output, in what order, and when to stop and ask. The manifest now loads from a marketplace entry in `settings.json`, but that entry points at a local directory — the fetch is still the untested half |
-| **Three of the ten hook events** | `pre-bash` has genuine firings, `subagent-stop` has host firings as `agent-done` in the journal (watched by `pdkit doctor`), `session-start` has host firings in session transcripts, and `pre-write` is exercised through the manifest. `post-write`, `post-bash`, `post-read`, `post-claim`, `pre-compact` and `prompt-submit` have only ever been spawned by a self-test, which proves the handler works and not that the host calls it — and a handler that passes silently leaves the same trace as one never wired up |
-| **`cascade`, and rebasing dependents** | Cutting, verifying, materializing and preflighting a stacked slice all ran on #18967, so that half is closed. What `cascade` is for has not happened: a review fix landing in a slice something else is stacked on. It needs a reviewer, not a fixture |
-| **`replyToThread`, both GraphQL mutations** | `pr-sync` itself has now run against real threads on #18889 — read, classified, two of them fixed, two turned into approved amendments. Only the reply was posted by hand, by choice. That last step writes into somebody else's pull request, which is why it will not be closed with synthetic material |
-| **`pd-conflict-analyst`** | The conflicts it exists to classify have now happened and are journaled, so this stops waiting for material. What is unknown is the agent: the session classified them itself, and whether a fresh-context read reaches the same verdict is a different question |
+Never executed in Open Code: an issue worked in it. Not the `quickfix` route, not
+`standard`, not `pr-sync` against a real review thread, not a run with planning
+and implementation on models of different providers, and not the gate or the
+ownership hook in a live session in the fork. Until they have run, what follows
+is the Claude Code version's, and none of it is evidence for this one.
 
-None of it blocks use. Each closes with the next issue of the right kind.
+The receipt gate rests on a hook Open Code calls experimental,
+`experimental.idle`. A version that renames or reshapes it switches the gate off
+without a word. The CI check above notices, and so does `pdkit doctor`, on its
+`hooks:agent-done` line, once subagents have stopped and none of their stops was
+recorded.
 
-## Requirements
-
-| Required | Why |
-|---|---|
-| Node.js >= 22.13 | `pdkit` is zero-dependency ESM and uses the built-in test runner; `pdkit cost` reads Open Code's sessions with `node:sqlite`, which needs no flag from 22.13 |
-| `git` | branch, worktree, and history primitives |
-| [`gh`](https://cli.github.com/) | issues, pull requests, and review threads |
-| `pnpm` | the package manager podman-desktop uses |
-
-Optional MCP servers, all detected by `/pd:doctor`, all degrading gracefully when
-absent:
-
-| Server | Used by | Without it |
-|---|---|---|
-| Playwright | `/pd:validate` | validation produces a human checklist instead of evidence, and does not mark PASS |
-| context7 | planning and review, for questions about someone else's library | the answer comes from the model's own knowledge of that library's versions, which goes out of date without saying so |
-
-The plugin ships no `.mcp.json` on purpose: a plugin-level MCP declaration would
-load for everyone, and these are meant to be optional. Configure them yourself;
-see [`docs/configuration/`](docs/configuration/README.md).
-
-Playwright is the one with a setup detail worth stating here. `pdkit validate
-launch` starts the application with remote debugging on and prints the endpoint;
-the server attaches to it, which is how podman-desktop's own e2e suite drives the
-app. One command, once per machine:
-
-```bash
-claude mcp add playwright -s user -- \
-  npx @playwright/mcp@latest --cdp-endpoint http://127.0.0.1:9222
-```
-
-`-s user` matters: the default scope is keyed by the directory you ran it in, and
-every issue worktree is a different directory. `/pd:doctor` reports the endpoint
-it found, not merely that a server exists.
+**In the Claude Code version, before the port.** Used on thirteen podman-desktop
+issues: fifteen pull requests published upstream, seven of them merged, and seven
+issues carried all the way to `merged` — four on the `standard` route, three on
+`quickfix`. One issue went out as a two-slice graph into two pull requests;
+another as three slices that review asked to be one, rejoined by `slice join`
+into a single pull request that superseded the three. Fourteen of the twenty-four
+skills ran as `/pd:*` in a session; `editor`, `knowledge`, `open`, `pr-status`,
+`reset`, `resume` and `review-pr` did not, nor did the three that trigger by
+meaning. [Section 13 of `docs/specification/`](docs/specification/13-status.md)
+keeps that accounting, with the evidence per line, as the history of 0.15.0.
 
 ## Documentation
 
@@ -237,15 +422,21 @@ it found, not merely that a server exists.
 ## Layout
 
 ```text
-bin/pdkit          deterministic CLI, added to PATH by the plugin
+opencode/          the Open Code plugin: registers the commands, the agents and
+                   the hook bridge, and puts bin/ on PATH
+bin/pdkit          deterministic CLI, put on PATH by the plugin
 lib/               its implementation: state machine, slicing, gates, preflight,
                    validation, reviews of other people's pull requests
-skills/            24 skills — the workflow surface
+lib/hooks/         the hook rules; events.js is the one list of hook events,
+                   with the module each one runs
+skills/            24 skills — the workflow surface, each a /pd: command
 agents/            14 agents — scouts, implementers, auditors, reviewers
-hooks/hooks.json   seven entries; the rules live in lib/hooks/
 knowledge/         upstream constitution, maintainer review rules, package map, known traps
 templates/         issue, plan, task, receipt, validation, slices, PR body, amendment,
                    deferral, blocker, findings, archaeology, review report
+defaults/          the shipped configuration, which your config.yaml overrides
+scripts/           CI checks against a real Open Code: the plugin loads, the
+                   receipt gate holds. Not shipped
 test/              node --test, zero dependencies
 docs/              workflows/, specification/, architecture/, configuration/ —
                    one file per scenario, section or part
