@@ -16,7 +16,7 @@ exists, into the manual for the commands.
 | 3 | [The lifecycle, and its two ways out](03-lifecycle.md) | the state machine an issue moves through: the usual path, `rework`, `answered`, and why `pdkit reset` is not a transition |
 | 4 | [What the slicer is, in one paragraph](04-slicer.md) | how a slice is verified before any branch exists, and how preflight knows the verdict is still about this diff |
 | 5 | [What validation promises, and what it does not](05-validation.md) | what PASS means, and why `unverified` does not block the transition |
-| 6 | [Why hooks rather than instructions](06-hooks.md) | the push gate and its tokens, file ownership, receipts, the SessionStart summary, how the gate reads a command |
+| 6 | [Why hooks rather than instructions](06-hooks.md) | the push gate and its tokens, file ownership, receipts, the `session-start` summary, how the gate reads a command, how the hooks reach Open Code and where they behave otherwise there |
 | 7 | [Known weaknesses](07-known-weaknesses.md) | where the design is known to be weak, stated rather than discovered later |
 
 ## Reading order
@@ -42,6 +42,7 @@ read last.
 | why a worker cannot write outside its task's `Owns` set | [6 · Hooks](06-hooks.md) |
 | why a task cannot be completed without a receipt | [6 · Hooks](06-hooks.md) |
 | why a session per phase is cheap | [6 · Hooks](06-hooks.md) |
+| how a hook runs in Open Code, and where it behaves otherwise than under Claude Code | [6 · Hooks](06-hooks.md) |
 | where the design is known to be weak | [7 · Known weaknesses](07-known-weaknesses.md) |
 
 ## Other documents
