@@ -14,11 +14,22 @@ point of failure.
 | Chrome DevTools MCP | — | **No.** Covered by Playwright |
 | sequential-thinking / memory-graph and similar | — | **No.** Orchestration is set by the skills and by `pdkit`; a separate "thinking" server only spends tokens |
 
-**The plugin ships no `.mcp.json`, and that is the point:** a plugin-level MCP
-declaration loads for everyone who enables the plugin, which would make optional
+**The plugin declares no MCP server, and that is the point:** a server declared
+by the plugin would load for everyone who installs it, which would make optional
 servers mandatory. `/pd:doctor` checks what is present and degrades gracefully —
 no Playwright means `/pd:validate` produces a human checklist instead of a run,
 and says explicitly that PASS was not recorded.
+
+**Where the person connects a server: once per machine, in Open Code's global
+config.** A server is an entry under `mcp.servers` of
+`~/.config/opencode/opencode.json` — for Playwright a `local` server whose
+`command` runs `@playwright/mcp` with `--cdp-endpoint` (8.2). The global config
+is the one that reaches every place the work happens: `opencode mcp add`
+writes the `opencode.json` of the directory it runs in, and a project config
+there does not reach the issue worktrees, each of which is a directory of its
+own — the same trap as a local-scope server under Claude Code. Open Code names
+a server's tools `<server>_<tool>` (`playwright_browser_navigate`), and the
+plugin's agents see them only as their `tools:` allows ([section 5](05-agents.md)).
 
 ## 8.1 e2e tests as a first-class output
 
@@ -68,20 +79,31 @@ The division of labor follows directly:
   name a program from outside the tree, so they are read only from what the
   person wrote — `$PDKIT_HOME/config.yaml` and the environment, never a
   repository's `.pdkit.yaml` — and must be absolute.
-- **The user connects the server.** No `.mcp.json` ships, deliberately, and the
-  plugin cannot grant a server to one agent. `/pd:doctor` checks that the server
-  is configured **with `--cdp-endpoint` and at the right port**, and says what to
-  fix rather than just "Playwright is missing".
+- **The user connects the server.** The plugin declares none, deliberately, and
+  a server is not granted to one agent: `pd-validator`'s permissions allow the
+  six Playwright tools its `tools:` names, and the other agents are denied
+  everything they were not given. `/pd:doctor` checks that the server is
+  configured **with `--cdp-endpoint` and at the right port**, that Open Code
+  reports it running rather than failed, and that `pd-validator` is offered its
+  tools — a top-level permission rule in a person's config can take them away
+  from every agent — and says what to fix rather than just "Playwright is
+  missing". Whether the server runs is asked of Open Code's background service,
+  and only while it runs: the doctor does not start it.
 
-**Verified end to end on 2026-08-02, against a live application.** `validate
-launch` brought up the development build (`PodmanDesktop/1.30.0-next
-Electron/42.3.3`), CDP answered on `/json/version`, `@playwright/mcp` with
-`--cdp-endpoint` attached, and `browser_snapshot` returned an 11.9 KB real
-accessibility tree — navigation buttons, search.
+**Verified end to end on 2026-08-02, against a live application**, in the
+Claude Code version. `validate launch` brought up the development build
+(`PodmanDesktop/1.30.0-next Electron/42.3.3`), CDP answered on
+`/json/version`, `@playwright/mcp` with `--cdp-endpoint` attached, and
+`browser_snapshot` returned an 11.9 KB real accessibility tree — navigation
+buttons, search. In Open Code that half — `pd-validator` driving the
+application — has not run yet ([section 13](13-status.md)); what has been
+checked is the wiring: the server's tools by Open Code's names, offered to
+`pd-validator` and to no other agent of the plugin.
 
 Two findings came with it. **Pointing the server at nothing is safe:** a server
 with a `--cdp-endpoint` leading nowhere starts normally and offers all its tools,
-because it connects lazily on the first call. So it can be registered once per
+because it connects lazily on the first call — Open Code reports it connected
+with no browser behind it. So it can be registered once per
 machine rather than per run. And **restarting the application breaks the first
 Playwright call** — three times out of three — after which it recovers on its
 own; `validate launch` warns about this rather than leaving it to be discovered
