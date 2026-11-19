@@ -86,8 +86,10 @@ The division of labor follows directly:
   configured **with `--cdp-endpoint` and at the right port**, that Open Code
   reports it running rather than failed, and that `pd-validator` is offered its
   tools — a top-level permission rule in a person's config can take them away
-  from every agent — and says what to fix rather than just "Playwright is
-  missing". Whether the server runs is asked of Open Code's background service,
+  from every agent; the `permissions` line names that rule and the config
+  document it is in, as it does for every agent's
+  ([section 5](05-agents.md)) — and says what to fix rather than just
+  "Playwright is missing". Whether the server runs is asked of Open Code's background service,
   and only while it runs: the doctor does not start it.
 
 **Verified end to end on 2026-08-02, against a live application**, in the
