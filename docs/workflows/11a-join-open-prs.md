@@ -33,8 +33,6 @@ What you type, session by session — `/clear` starts the next one:
 
 ```
 /clear
-/model sonnet                       ← back from the opus of /pd:pr-sync
-/effort medium
 /pd:slice 19818                     checkpoint, join, verify, render
 pdkit state 19818 --to slices-approved   your approval
 
@@ -43,10 +41,10 @@ pdkit state 19818 --to slices-approved   your approval
 pdkit pr supersede 19829 --by <new> --body close.md
 ```
 
-| Step | Session | `/model` | Subagents |
+| Step | Session | Default model | Subagents |
 |---|---|---|---|
-| `checkpoint` … `slice render` | **new** · issue tree running `/pd:slice 19818`, or **terminal** | sonnet | `pd-slicer` · sonnet |
-| `/pd:pr 19818` | **new** · issue tree | sonnet | — |
+| `checkpoint` … `slice render` | **new** · issue tree running `/pd:slice 19818`, or **terminal** | `sonnet#medium` | `pd-slicer` · `sonnet#medium` |
+| `/pd:pr 19818` | **new** · issue tree | `sonnet#medium` | — |
 | `pdkit pr supersede`, `pdkit gate open --kind reply` | **terminal** | — | — |
 
 ---

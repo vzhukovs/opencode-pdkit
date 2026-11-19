@@ -77,8 +77,6 @@ What you type, session by session — `/clear` starts the next one:
 
 ```
 /clear
-/model sonnet                       already sonnet if you came from /pd:audit
-/effort medium
 /pd:slice 12345
 pdkit state 12345 --to slices-approved   your approval
 
@@ -89,14 +87,14 @@ pdkit state 12345 --to slices-approved   your approval
 /pd:pr 12345                        slice 2 — a new session for each
 ```
 
-| Step | Session | `/model` | Subagents |
+| Step | Session | Default model | Subagents |
 |---|---|---|---|
-| `/pd:slice 12345` | **new** · issue tree | sonnet | `pd-slicer` · sonnet |
+| `/pd:slice 12345` | **new** · issue tree | `sonnet#medium` | `pd-slicer` · `sonnet#medium` |
 | approve: `pdkit state --to slices-approved` | the slice session, or **terminal** | — | — |
-| `/pd:pr 12345` | **new** · issue tree, **one per slice** | sonnet | — |
+| `/pd:pr 12345` | **new** · issue tree, **one per slice** | `sonnet#medium` | — |
 | `pdkit slice cascade …` | **terminal**, or the `/pd:pr-sync` session that made the fix | — | — |
 
-The `pdkit slice …` lines below are what the two skills run; typed by hand they
+The `pdkit slice …` lines above are what the two skills run; typed by hand they
 need no model. The path before slicing is [scenario 1](01-bug-fix.md#sessions-and-models).
 
 ---

@@ -31,19 +31,18 @@ pdkit task attempts --issue 12345
 pdkit task unblock --issue 12345 --task T1 --reason "…"     the reason is yours
 
 /clear
-/model sonnet                       ← exec is sonnet
-/effort medium
 /pd:exec 12345 T1
 ```
 
-| Step | Session | `/model` | Subagents |
+| Step | Session | Default model | Subagents |
 |---|---|---|---|
 | `pdkit task attempts` | **terminal** | — | — |
 | `pdkit task unblock … --reason` | **terminal** — the reason is yours | — | — |
-| next: `/pd:exec 12345 T1` | **new** · issue tree | sonnet | `pd-implementer` · sonnet |
+| next: `/pd:exec 12345 T1` | **new** · issue tree | `sonnet#medium` | `pd-implementer` · `sonnet#medium` |
 
-If the reason is that the plan is wrong, the amendment is planning work: the
-session that writes it runs on opus.
+If the reason is that the plan is wrong, the amendment is planning work, on
+planning's model — `opus#high` by default. No command switches to it for an
+amendment, so pick it in `/models` for the session that writes one.
 
 ---
 

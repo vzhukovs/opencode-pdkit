@@ -33,34 +33,28 @@ What you type, session by session — `/clear` starts the next one:
 
 ```
 /clear
-/model sonnet
-/effort medium
 /pd:sync
 
 /clear
-/pd:resume 12345                    still sonnet — pd-conflict-analyst is opus on its own
+/pd:resume 12345                    pd-conflict-analyst is opus#medium on its own
 
 /clear
-/model opus                         ← switch: the review round is opus
-/effort high
 /pd:pr-sync <pr#>
 
 /clear
-/model sonnet                       ← and back
-/effort medium
 /pd:preflight 12345
 
 /clear
 /pd:pr 12345
 ```
 
-| Step | Session | `/model` | Subagents |
+| Step | Session | Default model | Subagents |
 |---|---|---|---|
-| `/pd:sync` | **new** · main checkout | sonnet | — |
-| `/pd:resume 12345` | **new** · issue tree | sonnet | `pd-conflict-analyst` · opus |
-| `/pd:pr-sync <pr#>` | **new** · issue tree | opus | `pd-thread-resolver` · sonnet |
-| `/pd:preflight 12345` | **new** · issue tree | sonnet | — |
-| `/pd:pr 12345` | **new** · issue tree | sonnet | — |
+| `/pd:sync` | **new** · main checkout | `sonnet#medium` | — |
+| `/pd:resume 12345` | **new** · issue tree | `sonnet#medium` | `pd-conflict-analyst` · `opus#medium` |
+| `/pd:pr-sync <pr#>` | **new** · issue tree | `opus#high` | `pd-thread-resolver` · `sonnet#high` |
+| `/pd:preflight 12345` | **new** · issue tree | `sonnet#medium` | — |
+| `/pd:pr 12345` | **new** · issue tree | `sonnet#medium` | — |
 
 ---
 

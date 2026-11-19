@@ -25,13 +25,9 @@ Where each step runs and on which model — the columns are explained in
 What you type, session by session — `/clear` starts the next one:
 
 ```
-/model opus                         ← triage is opus
-/effort high
 /pd:triage 12908                    route: quickfix
 
 /clear
-/model sonnet                       ← sonnet from here to the PR
-/effort medium
 /pd:quickfix 12908
 
 /clear
@@ -41,12 +37,12 @@ What you type, session by session — `/clear` starts the next one:
 /pd:pr 12908
 ```
 
-| Step | Session | `/model` | Subagents |
+| Step | Session | Default model | Subagents |
 |---|---|---|---|
-| `/pd:triage 12908` | **new** · main checkout | opus | `pd-scout` · sonnet |
-| `/pd:quickfix 12908` | **new** · the checkout that will carry the branch: `pdkit branch create` checks it out there | sonnet | — |
-| `/pd:preflight 12908` | **new** · the same checkout | sonnet | — |
-| `/pd:pr 12908` | **new** · the same checkout | sonnet | — |
+| `/pd:triage 12908` | **new** · main checkout | `opus#high` | `pd-scout` · `sonnet#high` |
+| `/pd:quickfix 12908` | **new** · the checkout that will carry the branch: `pdkit branch create` checks it out there | `sonnet#medium` | — |
+| `/pd:preflight 12908` | **new** · the same checkout | `sonnet#medium` | — |
+| `/pd:pr 12908` | **new** · the same checkout | `sonnet#medium` | — |
 | `pdkit issue escalate 12908`, if it outgrows the thresholds | **terminal** | — | — |
 
 ---

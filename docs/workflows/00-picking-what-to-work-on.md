@@ -35,21 +35,18 @@ Where each step runs and on which model — the columns are explained in
 What you type, session by session — `/clear` starts the next one:
 
 ```
-/model opus                         ← triage runs on opus
-/effort high
 /pd:triage                          no number: the shortlist
 pdkit issue list --label "area/terminal" --limit 20
 
 /clear
-/effort high
-/pd:triage <n>                      the one picked — still opus
+/pd:triage <n>                      the one picked
 ```
 
-| Step | Session | `/model` | Subagents |
+| Step | Session | Default model | Subagents |
 |---|---|---|---|
-| `/pd:triage`, no number | **new** · main checkout | opus | — |
+| `/pd:triage`, no number | **new** · main checkout | `opus#high` | — |
 | `pdkit issue list …` | **terminal** | — | — |
-| `/pd:triage <n>` for the one picked | **new** · main checkout | opus | `pd-scout` · sonnet |
+| `/pd:triage <n>` for the one picked | **new** · main checkout | `opus#high` | `pd-scout` · `sonnet#high` |
 
 The shortlist has nothing the triage of one issue needs: it is re-read from
 GitHub there. Pick in one session, triage in the next.

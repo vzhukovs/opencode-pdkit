@@ -27,15 +27,13 @@ What you type, session by session — `/clear` starts the next one:
 pdkit issue adopt 17577 --pr 17577 --branch … --reason "…"     no model: a terminal
 
 /clear
-/model opus                         ← review rounds are opus
-/effort high
 /pd:pr-sync 17577                   the first round adds the full self-review
 ```
 
-| Step | Session | `/model` | Subagents |
+| Step | Session | Default model | Subagents |
 |---|---|---|---|
 | `pdkit issue adopt …` | **terminal**, or a `/pd:resume` session in the existing tree | — | — |
-| next: `/pd:pr-sync 17577` | **new** · the existing tree | opus | first round: the four `pd-review-*` · sonnet, `pd-review-synth` · opus, then `pd-thread-resolver` · sonnet |
+| next: `/pd:pr-sync 17577` | **new** · the existing tree | `opus#high` | first round: the four `pd-review-*` · `sonnet#medium`, `pd-review-synth` · `opus#medium`, then `pd-thread-resolver` · `sonnet#high` |
 
 ---
 

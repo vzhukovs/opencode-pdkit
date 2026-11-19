@@ -52,23 +52,22 @@ What you type, session by session — `/clear` starts the next one:
 
 ```
 /clear
-/model sonnet                       already sonnet if you came from /pd:exec
-/effort medium
-/pd:validate 12345                  Playwright MCP connected to this session
+/pd:validate 12345                  Playwright MCP from your global config
 
 /clear
-/effort high
-/pd:audit 12345                     still sonnet
+/pd:audit 12345
 ```
 
-| Step | Session | `/model` | Subagents |
+| Step | Session | Default model | Subagents |
 |---|---|---|---|
-| `/pd:validate 12345` | **new** · issue tree | sonnet | `pd-validator` · sonnet |
-| next: `/pd:audit 12345` | **new** · issue tree | sonnet | `pd-auditor` · opus |
+| `/pd:validate 12345` | **new** · issue tree | `sonnet#medium` | `pd-validator` · `sonnet#medium` |
+| next: `/pd:audit 12345` | **new** · issue tree | `sonnet#high` | `pd-auditor` · `opus#high` |
 
-Playwright MCP is connected to the session, not to the agent: connect it before
-`/pd:validate`, in the session that runs it. The `pdkit validate …` lines below
-are what the skill runs.
+Playwright MCP is a server of the session, not of the agent, and comes from
+Open Code's global config: added there once with `--global`, every session has
+it, the issue tree's included, and of the plugin's agents only `pd-validator`
+is given its tools ([configuration · MCP servers](../configuration/06-mcp-servers.md)).
+The `pdkit validate …` lines above are what the skill runs.
 
 ---
 

@@ -47,8 +47,6 @@ What you type, session by session — `/clear` starts the next one:
 
 ```
 /clear
-/model sonnet                       ← validation is sonnet
-/effort medium
 /pd:validate 12345                  the reproduction, attached as evidence
 pdkit findings new --issue 12345
 pdkit state 12345 --to answered
@@ -58,9 +56,9 @@ pdkit state 12345 --to answered
 pdkit close --issue 12345 --finish --confirmed "@reporter, 2026-08-09"
 ```
 
-| Step | Session | `/model` | Subagents |
+| Step | Session | Default model | Subagents |
 |---|---|---|---|
-| `/pd:validate 12345` | **new** · the checkout the reproduction is built in | sonnet | `pd-validator` · sonnet |
+| `/pd:validate 12345` | **new** · the checkout the reproduction is built in | `sonnet#medium` | `pd-validator` · `sonnet#medium` |
 | `pdkit findings new`, `pdkit state --to answered` | **terminal**, or the validate session | — | — |
 | `pdkit close … --confirmed`, when the reporter answers | **terminal** | — | — |
 

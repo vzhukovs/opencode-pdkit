@@ -31,7 +31,7 @@ What you type:
 pdkit pr closed 17577 --superseded-by 18562      no model: a terminal
 ```
 
-| Step | Session | `/model` | Subagents |
+| Step | Session | Default model | Subagents |
 |---|---|---|---|
 | `pdkit pr closed …` | **terminal** | — | — |
 | `pdkit pr supersede … --confirm` | **terminal**, after a reply token for the old pull request | — | — |
