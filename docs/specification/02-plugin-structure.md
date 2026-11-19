@@ -3,21 +3,38 @@
 [Specification](README.md) › Section 2
 
 ```
-podman-desktop-kit/                  # repository root = plugin root
-├── .claude-plugin/
-│   ├── plugin.json                  # name: "pd", displayName: "Podman Desktop Kit"
-│   └── marketplace.json             # one entry, source: "./"
+opencode-pdkit/                      # repository root = plugin root = the npm package
+├── package.json                     # name, the one version, exports "." → opencode/server.js,
+│                                    #   engines (node, opencode), files: what ships
+├── opencode/                        # the Open Code plugin, loaded inside the Open Code server
+│   ├── server.js                    # entry point: the gate on execute.before first, then the rest
+│   ├── commands.js                  # skills/ registered as /pd:<skill> commands, three as skills too
+│   ├── agents.js                    # agents/ registered as subagents: model, tools → permissions
+│   ├── access.js                    # reading the plugin's own files from outside the project
+│   ├── allowed.js                   # a skill's allowed-tools, granted for one turn
+│   ├── environment.js               # bin/ first on the PATH of every shell command
+│   ├── prompts.js                   # the plugin root spelled out in agent and skill bodies
+│   └── bridge/                      # the hook bridge: Open Code events → bin/pdkit hook <event>
 ├── bin/pdkit                        # the only file in bin/; +x, #!/usr/bin/env node
 ├── lib/                             # ESM, zero-dependency, stdlib only
-├── skills/                          # 18 orchestrating + 3 phrase-triggered
+├── skills/                          # 21 orchestrating + 3 phrase-triggered
 ├── agents/                          # 14, prefixed pd- (agent names are not namespaced)
-├── hooks/hooks.json                 # thin: 6 entries on bin/pdkit, logic in lib/hooks/
 ├── templates/                       # the shape of every artefact
 ├── knowledge/                       # the constitution, shipped with the plugin
 ├── defaults/config.yaml             # section 9 defaults
+├── scripts/                         # CI checks against a real Open Code; not in the package
 ├── test/                            # node --test, zero-dependency
 └── docs/
 ```
+
+`opencode/` is everything that knows Open Code, and it is the only part the
+server loads as code. The hook rules stay in `lib/hooks/` and run as they always
+did, in a `node` process of their own per event; the bridge starts that process
+and turns its answer into what Open Code does with a tool call, a prompt or a
+stopping subagent ([section 6](06-hooks.md)). Of `lib/`, the server imports only
+a handful of modules that reach nothing beyond one another — the `LEAVES` of
+`test/invariants.test.js`, which holds `lib/` to importing nothing from
+`opencode/` as well.
 
 ## What `lib/` holds
 
@@ -64,24 +81,41 @@ podman-desktop-kit/                  # repository root = plugin root
 | `render.js` | `templates/*.md` → text |
 | `upstream.js` | shared primitives for upstream rules: SPDX, conventional commits, `Signed-off-by`. Used by **both** hooks and preflight so a rule lives in one place |
 | `evidence.js` | raw capture of command output for receipts |
-| `hooks/` | `events.js` (event → handler table), `rules.js` (deny rules as data), `dispatch.js`, `command-parse.js`, `owns.js`, `post-write.js`, `post-bash.js`, `post-read.js`, `cut.js`, `post-claim.js`, `session-start.js`, `task-completed.js` |
+| `harness.js` | what the harness names in what `pdkit` records and says: the variable a shell command finds its session in, the shape of a subagent run's ID, the tool a session moves into a tree with, the harness's name in a pull request footer. The one module of `lib/` that knows them, which `test/invariants.test.js` holds |
+| `session-model.js` | what a skill's frontmatter says about how its command runs — its model, its argument hint, its description — read the same way by the command registrar, the `prompt-submit` hook and the doctor |
+| `opencode-*.js` | what `lib/` reads from Open Code itself, as facts: `opencode-version.js` (whether the host is new enough for `engines.opencode`), `opencode-models.js` (the plugin's `options.models` and the `provider/model#variant` grammar), `opencode-api.js` (what the running server says about a directory, for `pdkit doctor`), `opencode-sessions.js` (Open Code's session database, read-only: the calls for `pdkit cost`, the subagents for the doctor), `opencode-parents.js` (the session at the top of a subagent's chain, for `pdkit task start`) |
+| `hooks/` | `events.js` (event → handler table), `runner.js` (the host's side of `pdkit hook`: the child process, its deadline, the fail-closed policy), `rules.js` (deny rules as data), `dispatch.js`, `command-parse.js`, `scope.js`, `owns.js`, `post-write.js`, `post-bash.js`, `post-read.js`, `cut.js`, `post-claim.js`, `session-start.js`, `task-completed.js`, `prompt-submit.js` |
 | `preflight/` | `index.js` runner plus one file per check under `checks/`; `body.js` is the skip a check returns while the PR body is not drafted, imported by checks instead of the runner; `scope.js` is what the script checks share — an unrunnable script, the slice verification's run — and re-exports `scripts.js` |
 
 ## What is deliberately absent from the tree
 
-- **`.mcp.json`** — a plugin's MCP servers load with the plugin as a whole, and
-  [section 8](08-mcp-servers.md) requires Playwright and context7 to be optional. Configuration is
-  documented instead, and `/pd:doctor` checks it.
+- **An MCP server of the plugin's own** — a server the plugin declared would load
+  with the plugin for everyone, and [section 8](08-mcp-servers.md) requires Playwright and context7
+  to be optional. Configuration is documented instead, and `/pd:doctor` checks it.
 - **`commands/`** — the skills-versus-commands fork was settled in favor of
-  `skills/`. Two sources of truth for one behavior is not a trade.
-- **`scripts/`** — every hook goes through the single `bin/pdkit` binary.
+  `skills/`. Two sources of truth for one behavior is not a trade. Open Code
+  reads neither commands nor skills from a plugin's directory, so
+  `opencode/commands.js` registers each skill as the command `/pd:<skill>`
+  from its `SKILL.md`, which stays the one source.
+- **Hook scripts** — every hook goes through the single `bin/pdkit` binary.
+  `scripts/` holds CI checks that start a real Open Code; none of it is in the
+  package (`files` in `package.json`).
+- **A manifest and a hook table** — the Claude Code version had both,
+  `.claude-plugin/plugin.json` and `hooks/hooks.json`. Here the package is the
+  manifest, so the version lives in `package.json` alone, and the hook events
+  are the one table in `lib/hooks/events.js`, which the bridge registers whole
+  ([section 6](06-hooks.md)): a second list of events is how a hook comes to
+  be registered nowhere and say nothing.
 
 ## 2.1 What planning got wrong, and how
 
-The tree above is the result of checking the original design against Claude
-Code's actual documentation, and then against the code as it was built. The
-corrections are worth keeping because the same shape recurs.
+This section is the history of the Claude Code version, up to 0.15.0, and is
+kept as it was written: the plugin it corrects ran in Claude Code, and the
+corrections are worth keeping because the same shape recurs. What each of them
+became in Open Code follows the table.
 
+That version's tree was the result of checking the original design against
+Claude Code's actual documentation, and then against the code as it was built.
 Nine mismatches came out of the documentation check. The load-bearing ones:
 
 | Was | Became | Why |
@@ -91,6 +125,20 @@ Nine mismatches came out of the documentation check. The load-bearing ones:
 | `lib/*.js` as ESM with no manifest | A root `package.json` with `"type": "module"` | Node reads an extensionless `bin/pdkit` as CommonJS, and `import` fails |
 | MCP servers understood as a property of an agent | Servers are session-level; scope comes from `tools:` in agent frontmatter | Plugin agents support neither `mcpServers` nor `hooks` nor `permissionMode` in frontmatter |
 | Model set both by frontmatter and by a `routing:` config block | Frontmatter only | A skill's own model is switchable only in frontmatter, so a config key would control the subagents and not the skill — a lever that half works |
+
+In Open Code none of the five is undone, and each holds for a reason of its
+own. The commands are still `/pd:<skill>`, because the plugin registers every
+skill under that name itself rather than because a manifest's name makes it so.
+The bridge sees every tool call, so the conditions on a command string are
+still code in `lib/hooks/` ([section 6](06-hooks.md)). `package.json` still says
+`"type": "module"`, and is now the package Open Code installs. MCP servers are
+still the person's to configure, and an agent's permissions, made from its
+`tools:`, decide which of their tools it sees ([section 5](05-agents.md),
+[section 8](08-mcp-servers.md)). And `$PDKIT_HOME/config.yaml` still has no
+`routing:` block. What changed is the lever that worked by half: a command
+now switches the session to its model for the whole phase, and one map in the
+plugin's options overrides the frontmatter of agents and commands alike
+([section 5](05-agents.md)).
 
 **Then a pattern appeared, once per stage, always in a new place: an entity had
 no owner.**
@@ -155,9 +203,13 @@ $PDKIT_HOME/                     # default: ~/.pdkit/podman-desktop
 │   ├── prs.json, prs/2871.md    # open pull requests; .md is rendered
 │   └── amendments/A1.md         # plan amendments arising from review
 ├── archive/12345/2026-08-20-1114/   # what `pdkit reset` moved out of the way
+├── checkpoints/12345/C1/        # the start of a phase that changes things: issue/ (a copy of
+│                                #   issues/<n>/) and meta.json (branches, trees); `pdkit checkpoint`
 ├── journal/YYYY-MM.md           # global, append-only, sliced by month
 ├── cost/YYYY-MM-DD.json         # `pdkit cost --snapshot`: the baseline a later run compares to
+├── cost/YYYY-MM-DD.opencode.json # one taken in Open Code on the day of a Claude Code one, beside it
 ├── cost/planning/YYYY-MM-DD.json # `pdkit cost --planning --snapshot`: planning, round by round
+├── cost/planning/YYYY-MM-DD.opencode.json # the same, for planning
 └── reviews/2903.md              # reviews of other people's PRs, tied to no issue
 ```
 
@@ -169,9 +221,36 @@ as the issue it is a copy of.
 
 `$PDKIT_HOME` is created at runtime by `pdkit init` and is **not part of the
 plugin tree**: the plugin's path changes on every update, so state cannot be
-written there. Keeping it in its own private git repository is worthwhile —
-`pdkit` commits after each transition — but it must be a **separate** repository,
-never the fork.
+written there. Keeping it in a private git repository of its own is worthwhile,
+and it is the owner's to commit: `pdkit` writes the files and commits nothing.
+It must be a **separate** repository, never the fork.
+
+**The directory is shared with the Claude Code version.** The default path is
+the one 0.15.0 used, the formats are its formats, and no record says which
+harness wrote it, so an issue begun under Claude Code carries on here. Three
+things differ by harness, and each can be told apart by its data rather than by
+a field:
+
+- `active/` — a task's pointer names the session it was started in: Claude
+  Code's session UUID there, Open Code's `ses_…` here. The two never match, so a
+  task started under one harness belongs, for the other, to someone else's
+  session until `pdkit task start` is run again.
+- `agent-done` in the journal — `agent task <agent_id>; <agent_type>` names a
+  run as the host does: under Claude Code an `a` and sixteen hex digits and
+  `pd:pd-implementer`, here the child session's `ses_…` and `pd-implementer`.
+  `pdkit doctor` counts only this harness's entries when it asks whether the
+  hook runs.
+- `cost/` — a snapshot says where its calls came from: Claude Code's
+  transcripts, or Open Code's session database. `pdkit cost` here reads only
+  the second, and measures from the newest Claude Code snapshot, the
+  transition: what happened before it is printed as outside Open Code's data,
+  not measured, rather than summed as if it were all there was. A snapshot
+  taken here on the day of a Claude Code one goes beside it, as
+  `<date>.opencode.json`, so the transition is not overwritten.
+
+One issue is worked under one harness at a time. Everything else — the issue
+records, gates, the journal's other entries, archives, checkpoints, reviews —
+reads the same in both.
 
 **Five invariants, each covered by tests.**
 
@@ -248,7 +327,7 @@ prefix:
 ```
 
 The per-issue view is generated, not stored: `pdkit journal --issue 12345`.
-Re-anchoring on `SessionStart` injects the filtered view rather than the file —
+Re-anchoring by the `session-start` hook ([section 6](06-hooks.md)) injects the filtered view rather than the file —
 otherwise the journal starts eating context within a month. The monthly slicing
 exists so `--since` never reads a gigabyte.
 
@@ -257,7 +336,7 @@ browser reaches the plugin by exactly one route, `pdkit pr refresh`. An entry is
 written once, on a state change; a second refresh of the same state writes
 nothing.
 
-**`agent-done` counts the machinery.** The `SubagentStop` hook is the only place
+**`agent-done` counts the machinery.** The `subagent-stop` hook is the only place
 that sees every subagent finish — the scouts of `/pd:plan`, the plan critic, the
 auditor, the slicer, the reviewers — and it writes one entry per completion,
 before it decides anything about the claim being made. Counting only the accepted
@@ -267,22 +346,29 @@ It answers "how much machinery did this issue take", which is the question that
 survives comparison between issues when a bare cost does not: an issue with seven
 tasks and two slices is supposed to be dearer than a one-task fix, and the two
 are told apart by `pdkit journal --issue <n> --event agent-done`. `pdkit cost`
-uses it as a denominator, but counts agent runs from the subagent transcripts
+uses it as a denominator, but counts agent runs from Open Code's child sessions
+— a subagent runs in a session of its own under the one that called it —
 rather than from this entry, and prints the journal's count beside it: a count
 that depends on a hook firing reads as zero for every issue before the hook did.
 
-Which agent ran is recorded when the host says so: `SubagentStop` carries
-`agent_id` and `agent_type` (`pd:pd-scout`, `general-purpose`), and the entry
-reads `agent task <agent_id>; <agent_type>`. When a field is absent the entry
-leaves it out rather than inventing it. Until 0.4.0 the hook was registered on
-`TaskCompleted`, which Claude Code raises for task-list items and agent-team
-teammates and never for a subagent returning, so neither this count nor the
-receipt gate [below](06-hooks.md#receipts-and-why-the-ceiling-holds) ever ran; `pdkit doctor` now warns when `agent-done` has been
-silent for 30 days. The issue comes from the active task pointer when there is one
+Which agent ran is recorded when the host says so: the bridge gives the hook
+the child session's ID as `agent_id` and the ID of the agent it runs as
+`agent_type` (`pd-scout`, `general`), and the entry reads
+`agent task <agent_id>; <agent_type>`. When a field is absent the entry
+leaves it out rather than inventing it. In the Claude Code version, until 0.4.0
+the hook was registered on `TaskCompleted`, which Claude Code raises for
+task-list items and agent-team teammates and never for a subagent returning, so
+neither this count nor the receipt gate [below](06-hooks.md#receipts-and-why-the-ceiling-holds) ever ran. A hook that is
+never called leaves the same journal as one with nothing to catch, so
+`pdkit doctor` does not rely on the journal alone: it reads the plugin's
+subagents in Open Code's session database, and one that stopped in the last 30
+days, having started after this harness's latest `agent-done` — or any that
+stopped, when there is none — fails the check.
+The issue comes from the active task pointer when there is one
 and from the branch name when there is not — `DESKTOP-<issue>/<slug>` is a name
 this plugin wrote — and from nothing else: an entry with no issue is honest,
 while one attributed by guess is not. The branch is held to the same test as the
-SessionStart summary: when another issue in progress was moved after the
+`session-start` summary: when another issue in progress was moved after the
 branch's issue (its state.json `updatedAt`), the branch is only where the last
 piece of work left the checkout, and the entry is written with no issue and
 `not filed under <n>: the tree is on <branch>, and <m> moved since`. On
