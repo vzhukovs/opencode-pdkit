@@ -11,4 +11,4 @@ to do. The fix is always the same: delete it.
 
 **The design** — [9 · Configuration](../specification/09-configuration.md)
 
-← [Hooks other tools install](07-hooks-from-other-tools.md) · [Contents](README.md)
+← [Hooks other plugins install](07-hooks-from-other-tools.md) · [Contents](README.md)
