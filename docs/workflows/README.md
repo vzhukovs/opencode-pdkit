@@ -7,21 +7,23 @@ Each use case is a file of its own and can be opened directly. A file carries it
 scenario number in its name and its title, so "scenario 9" is
 [`09-approach-rejected.md`](09-approach-rejected.md). Every scenario has a
 **Sessions and models** table: for each step, whether it needs a new session,
-where to open it, which `/model` to type first, and which subagents it starts —
-the columns are explained once, in
+where to open it, which model the command runs on by default, and which
+subagents it starts — the columns are explained once, in
 [Which session, which model](reference/sessions.md#which-session-which-model).
 Every file ends with links to the previous and next scenario and to the part of
 [`specification/`](../specification/README.md) that holds the reasoning.
 
 **What works today:** every scenario below has machinery behind it and is covered
-by tests. **What has been proven against a live repository is narrower**, and the
-difference is worth knowing before trusting a step — [section 13 of
-`specification/`](../specification/13-status.md) keeps the full accounting, with evidence
-per row. In short: the `quickfix` and `standard` routes have each gone end to end
-to a published upstream pull request, once as a two-slice graph into two of them,
-and one issue has been through the whole machine to `merged` with a reviewer and
-a rebase in the middle. Much of that was driven through `pdkit` in a terminal —
-so eleven of the twenty-four skills below have never been invoked as `/pd:*`.
+by tests. **What has been proven against a live repository is narrower, and was
+proven with the Claude Code version, up to 0.15.0** — none of it in Open Code
+yet. The difference is worth knowing before trusting a step:
+[section 13 of `specification/`](../specification/13-status.md) keeps the full
+accounting, with evidence per row, as that version's record. In short: there,
+the `quickfix` and `standard` routes have each gone end to end to a published
+upstream pull request, once as a two-slice graph into two of them, and one issue
+has been through the whole machine to `merged` with a reviewer and a rebase in
+the middle. Much of that was driven through `pdkit` in a terminal — so ten of
+the twenty-four skills below were never invoked as `/pd:*` even there.
 
 ## Before anything
 
@@ -30,42 +32,45 @@ pdkit doctor                  # required tools, config, hook wiring
 pdkit doctor --gate-selftest  # drives every forbidden command through the real hook
 ```
 
+In an Open Code session started in the fork, as `!pdkit …`: the plugin puts
+`pdkit` on that session's PATH ([README · First run](../../README.md#first-run)).
 Run the second one after installing, after upgrading, and after touching anything
-under `lib/hooks/`. It is the only check that answers "is the gate actually on" —
-every unit test in the suite stays green while a plugin with a broken manifest
-gates nothing at all.
+under `lib/hooks/`, `opencode/` or `bin/pdkit`. It is the only check that answers
+"is the gate actually on" — every unit test in the suite stays green on a
+machine where the hooks cannot start, and a plugin Open Code does not load for
+the directory gates nothing at all, which the `plugin` line of `pdkit doctor`
+tells.
 
 ## Models, at a glance
 
-A skill's `model:` holds for its first turn; the session's model runs the rest
-of the phase and survives `/clear`. So each phase starts with what you type:
+Each command switches the session to its own model, the effort included as the
+model's variant, and the session keeps it for the phase. So each phase starts
+with only the command:
 
 ```
 /clear
-/model <model>        only where the line below switches
-/effort <level>
 /pd:<skill> <n>
 ```
 
-and in one cycle the model switches here:
+and in one cycle the model changes here, with nothing typed for it:
 
 ```
-cd <fork> && claude          ──► sonnet, the fork's default
+cd <fork> && opencode          ──► the model you chose, until the first command
 
-/model opus    before /pd:triage       holds through /pd:plan and /pd:plan-review
-/model sonnet  before /pd:exec         holds through validate, audit, slice, preflight, pr, pr-status
-/model opus    before /pd:pr-sync      holds through every review round
-/model sonnet  before /pd:resume, /pd:slice, /pd:pr or /pd:close after a review round
-
-/effort high   /pd:triage, /pd:plan, /pd:plan-review, /pd:audit, /pd:pr-sync
-/effort medium every other phase
+/pd:triage, /pd:plan, /pd:plan-review      opus#high
+/pd:exec, validate, slice, preflight, pr   sonnet#medium
+/pd:audit                                  sonnet#high
+/pd:pr-sync                                opus#high, every review round
 ```
 
-`/pd:review-pr` and `/pd:knowledge` run on opus too. `pdkit next <n>` prints the
-`/model` line above the command, and the hook says when the session is on the
-wrong one. Start `claude` in the fork: the hook moves the session into the
-issue's tree — [Where a session works](reference/trees.md). Every command, with
-its session, model, effort and subagents:
+`/pd:review-pr` and `/pd:knowledge` run on `opus#medium`. Those are the
+defaults, `claude-agent/opus` and `claude-agent/sonnet`; to run a command or an
+agent on another model, another provider's included, map it in the plugin's
+`options.models` — [configuration · Model selection](../configuration/05-models.md).
+`pdkit next <n>` prints the command alone. Start `opencode` in the fork: the
+hook moves the session into the issue's tree —
+[Where a session works](reference/trees.md). Every command, with its session,
+default model and subagents:
 [Which session, which model](reference/sessions.md#which-session-which-model).
 
 ## Part I — Choosing and starting work
@@ -124,7 +129,8 @@ its session, model, effort and subagents:
 |---|---|
 | choose the next issue | [0 · Picking what to work on](00-picking-what-to-work-on.md) |
 | take an issue from triage to a pull request | [1 · A bug fix](01-bug-fix.md) |
-| know which model to switch to before a command | [Which session, which model](reference/sessions.md#which-session-which-model) |
+| know which model a command runs on | [Which session, which model](reference/sessions.md#which-session-which-model) |
+| run a phase on another model, another provider's included | [configuration · The map](../configuration/05-models.md#the-map) |
 | know whether a step needs a new session | [Which session, which model](reference/sessions.md#which-session-which-model), [One session per phase](reference/sessions.md) |
 | skip planning for a small fix | [2 · A one-line fix](02-one-line-fix.md) |
 | publish one change as several pull requests | [3 · A feature, cut into several pull requests](03-feature-in-several-prs.md) |
