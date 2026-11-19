@@ -21,7 +21,3 @@ specs/
 .playwright-mcp/
 coverage/
 *.log
-
-# Personal Claude Code settings. The shared ones belong in the repository; the
-# local overrides are yours.
-.claude/settings.local.json
