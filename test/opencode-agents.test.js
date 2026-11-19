@@ -33,18 +33,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import {
-  ACTIONS,
-  EXTRA_TOOLS,
-  REQUESTS,
-  actionOf,
-  agentModels,
-  extraTools,
-  hideTools,
-  permissionsFor,
-  readAgents,
-  registerAgents,
-} from '../opencode/agents.js';
+import { EXTRA_TOOLS, REQUESTS, agentModels, extraTools, hideTools, readAgents, registerAgents } from '../opencode/agents.js';
+import { ACTIONS, actionOf, permissionsFor } from '../lib/opencode-permissions.js';
 import { ROOT_TOKEN } from '../opencode/prompts.js';
 import { PLUGIN_ROOT, issueDir, resolveHome } from '../lib/config.js';
 import { cutDecision } from '../lib/hooks/cut.js';
@@ -525,6 +515,19 @@ describe('tools and permissions', () => {
 
   test('a directory given twice is one rule', () => {
     assert.equal(permissionsFor([], ['/a/b', '/a/b/']).rules.length, 2);
+  });
+
+  // The doctor builds each agent's rules again with permissionsFor, to tell
+  // the plugin's from the ones Open Code adds after them (checkPermissions in
+  // lib/doctor.js): what it builds has to be what was registered.
+  test('every agent is registered with the rules permissionsFor builds from its tools, the root and $PDKIT_HOME', async () => {
+    const { agents } = await register();
+    const { agents: files } = await readAgents(ROOT);
+
+    assert.equal(files.length, 14);
+    for (const file of files) {
+      assert.deepEqual(agents.get(file.id).permissions, permissionsFor(file.tools, [ROOT, resolveHome()]).rules, file.id);
+    }
   });
 
   test('a tool with no counterpart stays denied, and the agent is registered without it', async (t) => {

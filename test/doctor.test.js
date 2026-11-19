@@ -47,6 +47,7 @@ import {
   checkModels,
   checkNode,
   checkOpenCodeVersion,
+  checkPermissions,
   checkPlugin,
   diagnose,
   format,
@@ -1662,7 +1663,8 @@ describe('the MCP servers Open Code reports', () => {
   ];
 
   before(async () => {
-    const { permissionsFor, readAgents } = await import('../opencode/agents.js');
+    const { readAgents } = await import('../opencode/agents.js');
+    const { permissionsFor } = await import('../lib/opencode-permissions.js');
     const validator = (await readAgents(process.cwd())).agents.find((agent) => agent.id === 'pd-validator');
     validatorRules = [...permissionsFor(validator.tools, ['/plugin', '/pdkit-home']).rules, ...BUILT_IN_TAIL];
   });
@@ -1812,7 +1814,10 @@ describe('the MCP servers Open Code reports', () => {
 
   // F153: a top-level `permissions` in the person's config is appended to
   // every agent's rules, the plugin's included, after the plugin's own.
-  test('a later rule that takes pd-validator’s tools away is a warning that names them and the rule', async () => {
+  // The rule and the document it is in are the permissions line's, which
+  // names them for every agent (the rules the agents end up with, below):
+  // this one says what it does to validation, and where to look.
+  test('a later rule that takes pd-validator’s tools away is a warning that names them and points at the permissions line', async () => {
     const deny = { action: 'playwright_*', resource: '*', effect: 'deny' };
     const rules = [...validatorRules.slice(0, -BUILT_IN_TAIL.length), deny, ...BUILT_IN_TAIL];
     const { checks } = await run({
@@ -1824,9 +1829,8 @@ describe('the MCP servers Open Code reports', () => {
 
     assert.equal(line.status, 'warn');
     assert.match(line.detail, /^attaches to http:\/\/127\.0\.0\.1:9222, but pd-validator is not offered 6 of its 6 tools \(playwright_browser_navigate, /);
-    assert.ok(line.detail.includes('`playwright_* * deny`'), line.detail);
-    assert.match(line.detail, /never sets PASS/);
-    assert.match(line.detail, /agents\.pd-validator\.permissions/);
+    assert.match(line.detail, /never sets PASS — the permissions line names the rule that takes them, and where it is$/);
+    assert.equal(line.detail.includes('playwright_* * deny'), false, line.detail);
   });
 
   test('allowed again under agents.pd-validator.permissions, after the rule, they are offered', async () => {
@@ -2150,6 +2154,338 @@ describe('the models the agents and commands run on', () => {
   });
 });
 
+// What doctor says of the rules each of the plugin's agents ends up with, from
+// two answers of the Open Code server about the fork: the config documents,
+// and the agents with their rules — pdkit's, then every document's top-level
+// `permissions`, then `agents.<id>.permissions` and the rules of agent files,
+// then Open Code's own (F339, F340). The answers are written out in Open Code
+// 2.3.0's shapes; pdkit's rules, by the registrar's own code.
+describe('the rules the agents end up with', () => {
+  const DIR = '/fork';
+  const ID = 'opencode-pdkit';
+  const USER = '/home/u';
+  const GLOBAL = '/home/u/.config/opencode/opencode.json';
+  const PROJECT = '/fork/opencode.json';
+  const HOME = '/pdkit-home';
+  const answer = (data) => ({ ok: true, data });
+  const rule = (action, resource, effect) => ({ action, resource, effect });
+  /** Open Code's own, after every agent's rules (opencode.browser, F340). */
+  const BUILT_IN_TAIL = [rule('browser', '*', 'deny'), rule('skill', 'browser', 'deny')];
+  /** The agents whose tools: give no Bash. */
+  const READ_ONLY = ['pd-plan-critic', 'pd-review-api-compat', 'pd-review-architecture', 'pd-review-product', 'pd-review-synth', 'pd-review-tests'];
+  const SHELL = rule('shell', '*', 'allow');
+  const GATE = "an agent let do more is still held by the gate, which does not go by an agent's rules: pre-bash refuses a push or a write upstream without its token, pre-write a write outside the active task's files";
+  const KEPT = 'an agent kept from what its tools: give fails where its prompt needs it';
+
+  let agents;
+  let permissionsFor;
+  before(async () => {
+    agents = (await (await import('../opencode/agents.js')).readAgents(process.cwd())).agents;
+    ({ permissionsFor } = await import('../lib/opencode-permissions.js'));
+  });
+
+  /**
+   * GET /api/config: the global document and the project's, with `global`
+   * and `project` as their info, and the config directories — the first after
+   * the global document, the rest at the end.
+   */
+  const documents = ({ global = {}, project, directories = ['/home/u/.config/opencode'] } = {}) => [
+    { type: 'document', path: GLOBAL, info: { plugins: ['/src/opencode-pdkit'], ...global } },
+    ...directories.slice(0, 1).map((path) => ({ type: 'directory', path, info: {} })),
+    ...(project ? [{ type: 'document', path: PROJECT, info: project }] : []),
+    ...directories.slice(1).map((path) => ({ type: 'directory', path, info: {} })),
+  ];
+  /** GET /api/agent: one of Open Code's own, then the plugin's — pdkit's rules, then `after(id)`, then Open Code's own. */
+  const registered = (after = () => [], { root = process.cwd(), home = HOME } = {}) => ({
+    location: { directory: DIR },
+    data: [
+      { id: 'build', permissions: [rule('*', '*', 'allow'), ...after('build'), ...BUILT_IN_TAIL] },
+      ...agents.map((agent) => ({ id: agent.id, permissions: [...permissionsFor(agent.tools, [root, home]).rules, ...after(agent.id), ...BUILT_IN_TAIL] })),
+    ],
+  });
+  const answers = (config, ran) => ({ '/api/config': [answer(documents(config))], '/api/agent': [answer(ran)] });
+  const run = async (given, more = {}) => {
+    const server = serverWith(given);
+    const result = await checkPermissions({ pluginRoot: process.cwd(), id: ID, directory: DIR, home: HOME, userHome: USER, ask: server.ask, ...clock(), ...more });
+    return { result, asked: server.asked };
+  };
+  const rowsOf = (result, agent) => (result.table ?? []).filter((row) => row.agent === agent);
+
+  test('nothing after pdkit’s rules but Open Code’s own: ok, without a table', async () => {
+    const { result, asked } = await run(answers({}, registered()));
+
+    assert.deepEqual(result, {
+      id: 'permissions',
+      level: 'optional',
+      status: 'ok',
+      detail: 'the 14 agents of opencode-pdkit registered for /fork have the rules pdkit builds from their tools, and what Open Code adds after them changes none of it',
+    });
+    assert.deepEqual(asked, ['/api/config', '/api/agent']);
+  });
+
+  // DV12: Claude Code's settings never gave a subagent more than its tools:.
+  test('a top-level `shell * allow` gives the shell to every agent without Bash, named with the document it is in', async () => {
+    const { result } = await run(answers({ global: { permissions: [SHELL] } }, registered(() => [SHELL])));
+
+    assert.equal(result.status, 'warn');
+    assert.equal(result.level, 'optional');
+    assert.deepEqual(
+      result.table.map((row) => row.agent),
+      READ_ONLY,
+    );
+    for (const row of result.table) {
+      assert.deepEqual(row, { agent: row.agent, rule: 'shell * allow', from: GLOBAL, change: 'lets it use shell, which its tools: do not give' });
+    }
+    assert.match(result.detail, /^6 rules after pdkit's change what 6 of its 14 agents may do, as the table says; /);
+    assert.ok(result.detail.includes(GATE), result.detail);
+    assert.equal(result.detail.includes(KEPT), false);
+    assert.match(result.detail, /remove the rule, or set the agent its own under agents\.<id>\.permissions$/);
+  });
+
+  test('a top-level `external_directory * allow` lets every agent in anywhere', async () => {
+    const outside = rule('external_directory', '*', 'allow');
+    const { result } = await run(answers({ project: { permissions: [outside] } }, registered(() => [outside])));
+
+    assert.equal(result.table.length, 14);
+    for (const row of result.table) {
+      assert.deepEqual([row.rule, row.from, row.change], ['external_directory * allow', PROJECT, "lets it into directories outside the project, the plugin's and $PDKIT_HOME"]);
+    }
+  });
+
+  test('agents.pd-auditor.permissions is named for that agent alone, with the key it is under', async () => {
+    const edit = rule('edit', '*', 'allow');
+    const config = { project: { agents: { 'pd-auditor': { permissions: [edit] } } } };
+    const { result } = await run(answers(config, registered((id) => (id === 'pd-auditor' ? [edit] : []))));
+
+    assert.deepEqual(result.table, [
+      { agent: 'pd-auditor', rule: 'edit * allow', from: `${PROJECT} (agents.pd-auditor.permissions)`, change: 'lets it use edit, which its tools: do not give' },
+    ]);
+    assert.match(result.detail, /^1 rule after pdkit's change what 1 of its 14 agents may do/);
+  });
+
+  // An agent file's rules are in no answer of the server, only the directory
+  // the file is in (F339): the doctor names the file, when there is one.
+  test('a rule in no document is traced to the agent’s file in a config directory, when there is one', async (t) => {
+    const directory = await mkdtemp(join(tmpdir(), 'pdkit-doctor-agent-file-'));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    await mkdir(join(directory, 'agents'));
+    await writeFile(join(directory, 'agents', 'pd-scout.md'), '---\ndescription: mine\npermissions:\n  - action: edit\n    resource: "*"\n    effect: allow\n---\nmine\n');
+    const edit = rule('edit', '*', 'allow');
+    const ran = registered((id) => (id === 'pd-scout' || id === 'pd-slicer' ? [edit] : []));
+
+    const { result } = await run(answers({ directories: [directory] }, ran));
+
+    assert.deepEqual(rowsOf(result, 'pd-scout'), [
+      { agent: 'pd-scout', rule: 'edit * allow', from: `no config document; agent file ${join(directory, 'agents', 'pd-scout.md')}`, change: 'lets it use edit, which its tools: do not give' },
+    ]);
+    assert.equal(rowsOf(result, 'pd-slicer')[0].from, 'no config document: another plugin, or Open Code itself');
+  });
+
+  test('`playwright_* * deny` takes the validator’s six tools away, and only its', async () => {
+    const deny = rule('playwright_*', '*', 'deny');
+    const { result } = await run(answers({ project: { permissions: [deny] } }, registered(() => [deny])));
+
+    assert.deepEqual(result.table, [
+      {
+        agent: 'pd-validator',
+        rule: 'playwright_* * deny',
+        from: PROJECT,
+        change:
+          'takes 6 of its actions away (playwright_browser_navigate, playwright_browser_click, playwright_browser_type, playwright_browser_snapshot, ' +
+          'playwright_browser_take_screenshot, playwright_browser_wait_for): Open Code does not offer them',
+      },
+    ]);
+    assert.ok(result.detail.includes(KEPT), result.detail);
+    assert.equal(result.detail.includes(GATE), false);
+  });
+
+  test('the six allowed again under agents.pd-validator.permissions, one by one: nothing to say; as a pattern, the pattern is wider', async () => {
+    const deny = rule('playwright_*', '*', 'deny');
+    const tools = permissionsFor(agents.find((agent) => agent.id === 'pd-validator').tools, []).rules.filter((entry) => entry.action.startsWith('playwright_'));
+    const back = await run(
+      answers({ project: { permissions: [deny], agents: { 'pd-validator': { permissions: tools } } } }, registered((id) => [deny, ...(id === 'pd-validator' ? tools : [])])),
+    );
+    assert.equal(back.result.status, 'ok');
+
+    const pattern = rule('playwright_*', '*', 'allow');
+    const wide = await run(
+      answers({ project: { permissions: [deny], agents: { 'pd-validator': { permissions: [pattern] } } } }, registered((id) => [deny, ...(id === 'pd-validator' ? [pattern] : [])])),
+    );
+    assert.deepEqual(wide.result.table, [
+      {
+        agent: 'pd-validator',
+        rule: 'playwright_* * allow',
+        from: `${PROJECT} (agents.pd-validator.permissions)`,
+        change: 'lets it use every action that fits playwright_*, beyond its tools:',
+      },
+    ]);
+  });
+
+  // F340: Open Code's own rules after every agent's deny what pdkit denies
+  // already; so does a person's that does the same. Neither changes a thing.
+  test('a rule that denies what pdkit denies already is not named, whoever adds it', async () => {
+    const denials = [rule('webfetch', '*', 'deny'), rule('browser', '*', 'deny')];
+    const { result } = await run(answers({ global: { permissions: denials } }, registered(() => denials)));
+
+    assert.equal(result.status, 'ok');
+  });
+
+  // D15 (2): the plugin's hook answers yes when Open Code asks before its root.
+  test('`external_directory * ask`: asks before any directory outside, and before $PDKIT_HOME — not before the plugin’s own files', async () => {
+    const ask = rule('external_directory', '*', 'ask');
+    const { result } = await run(answers({ project: { permissions: [ask] } }, registered(() => [ask])));
+
+    assert.equal(result.table.length, 14);
+    for (const row of result.table) {
+      assert.equal(
+        row.change,
+        "has it ask before directories outside the project, the plugin's and $PDKIT_HOME; has it ask before $PDKIT_HOME, which pdkit lets it into",
+        row.agent,
+      );
+    }
+    assert.ok(result.detail.includes(GATE) && result.detail.includes(KEPT), result.detail);
+
+    const root = rule('external_directory', `${process.cwd().replaceAll('\\', '/')}/*`, 'ask');
+    const raised = await run(answers({ project: { permissions: [root] } }, registered(() => [root])));
+    assert.equal(raised.result.status, 'ok');
+  });
+
+  // F179: a deny is decided before the hook is asked, so it stands.
+  test('`external_directory * deny` refuses the plugin’s own files, which the hook never sees, and $PDKIT_HOME', async () => {
+    const deny = rule('external_directory', '*', 'deny');
+    const { result } = await run(answers({ global: { permissions: [deny] } }, registered(() => [deny])));
+
+    assert.equal(result.table.length, 14);
+    assert.equal(
+      rowsOf(result, 'pd-plan-critic')[0].change,
+      "refuses it the plugin's own files, which pdkit lets it into, a deny the plugin's hook never sees; refuses it $PDKIT_HOME, which pdkit lets it into",
+    );
+  });
+
+  test('a rule a later one overrules is not named; of two the same, the later one’s document is', async () => {
+    const deny = rule('shell', '*', 'deny');
+    const config = { global: { permissions: [SHELL] }, project: { permissions: [SHELL], agents: { 'pd-review-synth': { permissions: [deny] } } } };
+    const { result } = await run(answers(config, registered((id) => [SHELL, SHELL, ...(id === 'pd-review-synth' ? [deny] : [])])));
+
+    assert.deepEqual(
+      result.table.map((row) => row.agent),
+      READ_ONLY.filter((id) => id !== 'pd-review-synth'),
+    );
+    for (const row of result.table) assert.equal(row.from, PROJECT, row.agent);
+  });
+
+  test('a pattern in the resource: the shell on `git *` is still the shell', async () => {
+    const git = rule('shell', 'git *', 'allow');
+    const { result } = await run(answers({ global: { permissions: [git] } }, registered(() => [git])));
+
+    assert.deepEqual(
+      result.table.map((row) => row.agent),
+      READ_ONLY,
+    );
+    assert.equal(result.table[0].change, 'lets it use shell on git *, which its tools: do not give');
+  });
+
+  // F339: Open Code spells out `~` in the rules of a path before it adds them,
+  // and reports them so; the documents carry them as written.
+  test('`~` in a rule: read under it changes nothing, edit under it is traced to its document all the same', async () => {
+    const config = { global: { permissions: [rule('read', '~/x/*', 'allow'), rule('edit', '~/x/*', 'allow')] } };
+    const spelled = [rule('read', `${USER}/x/*`, 'allow'), rule('edit', `${USER}/x/*`, 'allow')];
+    const { result } = await run(answers(config, registered(() => spelled)));
+
+    assert.equal(result.table.length, 12);
+    assert.equal(rowsOf(result, 'pd-implementer').length, 0);
+    for (const row of result.table) {
+      assert.deepEqual([row.rule, row.from, row.change], [`edit ${USER}/x/* allow`, GLOBAL, `lets it use edit on ${USER}/x/*, which its tools: do not give`]);
+    }
+  });
+
+  test('`* * allow` lets every agent use every action, and in anywhere', async () => {
+    const all = rule('*', '*', 'allow');
+    const { result } = await run(answers({ global: { permissions: [all] } }, registered(() => [all])));
+
+    assert.equal(result.table.length, 14);
+    assert.equal(
+      rowsOf(result, 'pd-scout')[0].change,
+      "lets it use every action that fits *, beyond its tools:; lets it into directories outside the project, the plugin's and $PDKIT_HOME",
+    );
+  });
+
+  // The doctor from another copy of the plugin, or with another $PDKIT_HOME,
+  // than the server's: the directories are the server's copy's.
+  test('the plugin and $PDKIT_HOME somewhere else on the server: its rules are still pdkit’s, and its directories are the ones judged', async () => {
+    const elsewhere = { root: '/elsewhere/opencode-pdkit', home: '/elsewhere/pdkit-home' };
+    const plain = await run(answers({}, registered(() => [], elsewhere)));
+    assert.equal(plain.result.status, 'ok');
+
+    const ask = rule('external_directory', '/elsewhere/*', 'ask');
+    const { result } = await run(answers({ global: { permissions: [ask] } }, registered(() => [ask], elsewhere)));
+    assert.equal(
+      rowsOf(result, 'pd-scout')[0].change,
+      "has it ask before directories outside the project, the plugin's and $PDKIT_HOME (/elsewhere/*); has it ask before $PDKIT_HOME, which pdkit lets it into",
+    );
+  });
+
+  test('rules that do not begin as pdkit builds them are named, and not compared', async () => {
+    const ran = registered();
+    ran.data.find((agent) => agent.id === 'pd-scout').permissions = [rule('*', '*', 'allow'), ...BUILT_IN_TAIL];
+    const { result } = await run(answers({}, ran));
+
+    assert.equal(result.status, 'warn');
+    assert.equal(result.table, undefined);
+    assert.match(result.detail, /^Open Code's rules for pd-scout do not begin with the ones pdkit builds from its tools \(\* \* deny, read \* allow, /);
+    assert.match(result.detail, /so something after the plugin replaced them, and they were not compared$/);
+  });
+
+  test('an agent not registered is left to the models line', async () => {
+    const ran = registered(() => [SHELL]);
+    ran.data = ran.data.filter((agent) => agent.id !== 'pd-review-synth');
+    const { result } = await run(answers({ global: { permissions: [SHELL] } }, ran));
+
+    assert.equal(rowsOf(result, 'pd-review-synth').length, 0);
+    assert.match(result.detail, /^5 rules after pdkit's change what 5 of its 13 agents may do/);
+  });
+
+  test('without a server, without the plugin, and without its agents in time: cannot tell', async () => {
+    const offline = await run({ '/api/config': [{ ok: false, error: 'opencode: not found' }] });
+    assert.deepEqual(offline.result, { id: 'permissions', level: 'optional', status: 'skip', detail: 'cannot tell: opencode: not found' });
+
+    const failed = await run({}, { plugin: { id: 'plugin', level: 'required', status: 'fail', detail: 'x' } });
+    assert.equal(failed.result.detail, 'cannot tell: Open Code does not run opencode-pdkit for /fork — see plugin');
+    assert.deepEqual(failed.asked, []);
+
+    const builtIn = { location: { directory: DIR }, data: [{ id: 'build', permissions: [] }] };
+    const never = await run(answers({}, builtIn));
+    assert.equal(never.result.status, 'skip');
+    assert.equal(never.result.detail, "cannot tell: none of opencode-pdkit's agents is registered for /fork within 5 s — see plugin, or run pdkit doctor again");
+
+    const late = await run({ '/api/config': [answer(documents())], '/api/agent': [answer(builtIn), answer(registered())] });
+    assert.equal(late.result.status, 'ok');
+    assert.deepEqual(late.asked, ['/api/config', '/api/agent', '/api/agent']);
+  });
+
+  test('the table is printed under the line, a row per rule', async () => {
+    const { result } = await run(answers({ global: { permissions: [SHELL] } }, registered(() => [SHELL])));
+    const text = format({ status: 'warn', checks: [result] }, { version: '0.0.0' });
+    const lines = text.split('\n');
+    const at = lines.findIndex((line) => line.includes('! permissions'));
+
+    assert.ok(at > 0, text);
+    assert.deepEqual(
+      lines.slice(at + 1, at + 7).map((line) => line.trim().split(/\s+/)[0]),
+      READ_ONLY,
+    );
+    assert.match(lines[at + 1], /^ {6}pd-plan-critic +shell \* allow +\/home\/u\/\.config\/opencode\/opencode\.json +lets it use shell, which its tools: do not give$/);
+  });
+
+  test('the doctor prints it after commands, the last of the lines on what the plugin registered', async () => {
+    const report = await diagnose({ pluginRoot: process.cwd(), askServer: offline, env: {} });
+    const ids = report.checks.map((entry) => entry.id);
+
+    assert.equal(ids.indexOf('permissions'), ids.indexOf('commands') + 1);
+    assert.deepEqual(find(report.checks, 'permissions'), { id: 'permissions', level: 'optional', status: 'skip', detail: 'cannot tell: no Open Code server in this test' });
+  });
+});
+
 describe('the commands and skills under the plugin’s names', () => {
   const DIR = '/fork';
   const ID = 'opencode-pdkit';
@@ -2379,7 +2715,7 @@ describe('the server, asked only when the background service runs', () => {
     };
     return { exec, calls };
   }
-  const ASKING = ['plugin', 'models', 'commands', 'mcp'];
+  const ASKING = ['plugin', 'models', 'commands', 'permissions', 'mcp'];
 
   test('stopped: nothing is asked, and each line that would ask says why, as for a server it cannot reach', async () => {
     const { exec, calls } = opencode('stopped');
@@ -2404,7 +2740,7 @@ describe('the server, asked only when the background service runs', () => {
 
     assert.deepEqual(calls, [['service', 'status']]);
     assert.deepEqual(find(report.checks, 'plugin'), { id: 'plugin', level: 'required', status: 'ok', detail: 'opencode-pdkit runs in this session: it labels every command here' });
-    for (const id of ['models', 'commands', 'mcp']) assert.equal(find(report.checks, id).detail, `cannot tell: ${NOT_RUNNING}`);
+    for (const id of ['models', 'commands', 'permissions', 'mcp']) assert.equal(find(report.checks, id).detail, `cannot tell: ${NOT_RUNNING}`);
   });
 
   test('running: the service is asked about the directory, and looked at once', async () => {

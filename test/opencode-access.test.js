@@ -27,7 +27,8 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { directoryRule, raises, registerAccess, slash } from '../opencode/access.js';
+import { raises, registerAccess } from '../opencode/access.js';
+import { directoryRule, slash } from '../lib/opencode-permissions.js';
 import { PLUGIN_ROOT, resolveHome } from '../lib/config.js';
 
 /** The package directory, as the entry point hands it over: with a trailing separator. */

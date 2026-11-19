@@ -941,6 +941,9 @@ describe('the server part and lib/', () => {
     // The plugin's options, a model's grammar, and the check against the
     // models Open Code can use: read where the doctor reads them.
     ['lib/opencode-models.js', []],
+    // The rules each agent is registered with, from its tools: built where
+    // the doctor builds them, to compare with the ones Open Code reports.
+    ['lib/opencode-permissions.js', []],
   ]);
 
   const serverModules = () => modules(join(ROOT, 'opencode'), 'opencode');
