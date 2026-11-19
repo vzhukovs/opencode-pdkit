@@ -8,7 +8,29 @@ one rule, learned the hard way after it fell three versions behind: **a row is
 removed by the same thing that puts one there — a journal entry, or an artefact
 you can point at.**
 
-## Verified against live upstream, with its evidence
+**Every row below was recorded with the Claude Code version, up to 0.15.0, and
+none of it is evidence about this plugin in Open Code.** The journal entries and
+artefacts are real, and so is the host that produced them: Claude Code — its
+session transcripts, `claude -p`, its `SessionStart` and `SubagentStop`, a
+`${CLAUDE_PLUGIN_ROOT}` it expanded itself. They are kept as that version's
+record. The code in `lib/` is the same code, but what most rows prove is that
+the host ran it — a hook fired, a skill loaded, an agent was dispatched — and
+the host is another one now. Until the plugin has been run live in Open Code,
+on the `quickfix` and `standard` routes and through `pr-sync` against real
+upstream, every row below is unverified for Open Code, those under "Verified"
+included. A row for Open Code is added the way one is added here: by a journal
+entry, or an artefact you can point at.
+
+What has been checked in Open Code so far is narrower, and none of it touches
+upstream. The test suite runs on Linux, macOS and Windows. The CI job
+`plugin-load` packs the plugin, loads it into a real Open Code — the minimum
+version and the latest — and checks that it is active and has registered its
+agents, commands and skills. The CI job `receipt-gate`, where the repository
+has a provider key, runs a real implementer on a real model with no receipt,
+and checks from the session records, the journal and `pdkit doctor` that the
+gate held it. Both jobs are in `.github/workflows/ci.yml`.
+
+## Verified against live upstream with the Claude Code version, with its evidence
 
 | What | Evidence |
 |---|---|
@@ -40,11 +62,14 @@ you can point at.**
 
 ## Never executed, in order of risk
 
+None of these has run in Open Code either. Two rows name Claude Code's own
+machinery, and say what stands in Open Code for it.
+
 | What | Why it is not a detail |
 |---|---|
-| **The plugin as installed from a catalog over the network.** It now loads from a marketplace entry in `settings.json` — but that entry's source is a local directory | Half the row closed on 18832: the manifest is found through `extraKnownMarketplaces` plus `enabledPlugins`, not only through `--plugin-dir`, and skills and agents resolve from it. What is still untested is the fetch: a marketplace pulled from a remote repository, which is the path every other user takes |
+| **The plugin as installed from a catalog over the network.** In Open Code the catalog is npm: `opencode plugin add opencode-pdkit` puts the package in the global config. It has not been published yet, so that path has never run; what runs is CI loading the packed tarball into a real Open Code (`plugin-load`) | In the Claude Code version it loaded from a marketplace entry in `settings.json` whose source was a local directory, and half the row closed on 18832: the manifest was found through `extraKnownMarketplaces` plus `enabledPlugins`, not only through `--plugin-dir`, and skills and agents resolved from it. What was still untested there is the same thing that is untested here: the fetch, which is the path every other user takes |
 | **Ten of the twenty-four skills**: `editor`, `open`, `knowledge`, `pr-status`, `reset`, `resume`, `review-pr`, and `package-map`, `upstream-rules`, `worktree-kit`, which trigger by meaning. Fourteen have been invoked through a session; the row above lists them | Each skill body is prose, and prose is the half of this plugin that is not covered by anything. A skill that names a flag `pdkit` no longer has fails at the moment somebody is depending on it, and two of these were caught doing it: `/pd:preflight`, which ran, advised standing on a branch the graph had invented; `/pd:pr`, which did not run but was read and followed, documented a base `pr create` could not open against. **Not invoked is not the same as not exercised**, and the ten divide on it. `close --finish` finished 18248 and 18832, the `quickfix` route ran three times, `review fetch` and `review render` produced two reports, `pr list` and `drift` are routine — all through `pdkit` in a terminal, with the skill that wraps them never loaded (`close` and `quickfix` have since run as skills too). What is untested there is the prose: the part that says what to do with the output, in what order, and when to stop and ask |
-| **Three of the ten hook events.** `pre-bash` has genuine firings in the journal, `subagent-stop` has host firings recorded as `agent-done` and watched by `pdkit doctor`, `session-start` has host firings in session transcripts (the row above), and `pre-write` is exercised by `owns:selftest` through the manifest | The self-test spawns the handler the way the host does, which proves the handler works and not that the host calls it. `post-write`, `post-bash`, `post-read`, `post-claim`, `pre-compact` and `prompt-submit` have never been seen fired by the host; `prompt-submit` shipped in 0.6.0, `post-bash`, `post-read` and `post-claim` after 0.12.0. The receipt handler shows what that costs: it passed every test for four months while registered on `TaskCompleted`, an event subagents never raise. On 18832 a session *did* write plan and task files through the host's `Write` tool, so `post-write` was almost certainly called — and left no trace either way, because a handler that passes silently is indistinguishable from one that was never wired up. That is the same shape as the flake verdict below, and it is why this row needs an artefact rather than an absence of complaints |
+| **Three of the ten hook events**, in the Claude Code version. `pre-bash` has genuine firings in the journal, `subagent-stop` has host firings recorded as `agent-done` and watched by `pdkit doctor`, `session-start` has host firings in session transcripts (the row above), and `pre-write` is exercised by `owns:selftest` through the manifest. In Open Code none of the ten has yet fired on live work: `subagent-stop` is called by a real Open Code in the CI job `receipt-gate`, and `pdkit doctor` sends `pre-bash` and `pre-write` their probes through the bridge's own runner rather than through the host | The self-test spawns the handler the way the host does, which proves the handler works and not that the host calls it. `post-write`, `post-bash`, `post-read`, `post-claim`, `pre-compact` and `prompt-submit` have never been seen fired by the host; `prompt-submit` shipped in 0.6.0, `post-bash`, `post-read` and `post-claim` after 0.12.0. The receipt handler shows what that costs: it passed every test for four months while registered on `TaskCompleted`, an event subagents never raise. On 18832 a session *did* write plan and task files through the host's `Write` tool, so `post-write` was almost certainly called — and left no trace either way, because a handler that passes silently is indistinguishable from one that was never wired up. That is the same shape as the flake verdict below, and it is why this row needs an artefact rather than an absence of complaints |
 | **`cascade`, and rebasing dependents.** Two slices with a stacked base ran end to end on 18967 — cut, verified, materialized, preflighted from the predecessor's branch, published — so that half of the row is closed. `cascade` itself has now run once, on 18967 on 2026-10-16, and stopped: `slice-regressed from #1: rebased none; conflicts on #2`. #19002 was then withdrawn by amendment A7 and closed unmerged, so no dependent has yet been carried through a rebase, and there is still no `slice-cascade` event | What the run found is in [the section above](04-contracts/pr.md#pdpr--the-only-place-that-writes-to-github): the graph carried a base the publish route could not express, and nothing between `slice set` and `gh` compared the two. Both ends now do. What remains untested is a review fix landing in a slice something else is stacked on, which is what `cascade` is for, and it needs a reviewer rather than a fixture |
 | **`replyToThread` with both GraphQL mutations.** `pr-sync` itself has now run against real threads | Narrower than it was and no easier. On #18889 `pr threads` read four threads from two reviewers, `pd-thread-resolver` produced fixes for two of them, and two became approved amendments — everything up to the reply. The replies themselves were posted by the human, by choice, so `addPullRequestReviewThreadReply` and the resolve mutation are still unexecuted. That last step is the one that writes into somebody else's pull request, which is exactly why it will not be closed with synthetic material |
 | **The `redo` route carried through to code** | The facts of a previous attempt are now collected correctly and `archaeology.json` is written by a real query, but no redo has reached a diff: that is a separate issue, not a separate task |
@@ -149,28 +174,40 @@ nothing.
 
 `pdkit cost` (`lib/cost.js`) measures tokens spent per issue against the size of
 the work, so that a cycle that got cheaper can be told from a cycle that was
-smaller. Sources: Claude Code's transcripts (`~/.claude/projects/<slug>/`,
-subagents under `<session>/subagents/`), the journal, and each issue's records
-read through the modules that own them. A call belongs to the issue of the
-nearest earlier journal entry within six hours; the phase is set by that issue's
-last state transition. The scale is cost units, `input + 0.1·cache-read +
-1.25·cache-write + 5·output`, ×5 on Opus: list-price ratios rather than dollars,
-so a price change does not read as progress. Issues are grouped by route and
-never compared across routes. `--snapshot` writes `$PDKIT_HOME/cost/<date>.json`,
-and `--compare <date>` sets that snapshot against the issues journaled after it.
+smaller. Sources: Open Code's session database, read-only (one call per step of
+the model, a subagent's calls in its child session), the journal, and each
+issue's records read through the modules that own them. A call belongs to the
+issue of the nearest earlier journal entry within six hours; the phase is set by
+that issue's last state transition. The scale is cost units, `input +
+0.1·cache-read + 1.25·cache-write + 5·output`, ×5 on Opus: list-price ratios
+rather than dollars, so a price change does not read as progress. A model of
+another provider weighs as Sonnet, and the report prints each model's tokens
+beside the units for whoever prices them otherwise. Issues are grouped by route
+and never compared across routes. `--snapshot` writes
+`$PDKIT_HOME/cost/<date>.json`, and `--compare <date>` sets that snapshot
+against the issues journaled after it.
 
-Two properties of the transcripts decide whether the numbers are right, and the
-first analysis missed both. **One API response is written as one line per
-content block**, each with the same `message.usage`, so summing lines counted
-most calls twice; calls are keyed by `message.id`. **Subagent calls are in their
-own files**, not in the session's, and `isSidechain` is absent from a third of
-the parent's lines; the split is by file.
+The Claude Code version read Claude Code's transcripts instead, and measuring
+in Open Code starts where they end: work journaled before the newest snapshot
+taken from them is printed as outside Open Code's data, not measured, and a
+comparison across the two sources says the scales differ
+([section 2.2](02-plugin-structure.md#22-state-outside-the-repository)). What
+the totals leave out is said every time: a compaction's tokens are printed
+beside them, not in them, and title calls are not counted.
 
-The baseline (2026-10-16, six `standard` issues, 4332 calls) is 13.3 M units per
-task and 160 k per changed line, with 12% of calls attributed to no issue. The
-dearest phases are `pr` and `pr-sync`, at 33–60% of a cycle, and 82% of the
-dearest cycle is cache reads. Like `stats`, the command recommends
-nothing; it prints the unattributed share and its caveats every time.
+Two properties of Claude Code's transcripts decided whether its numbers were
+right, and the first analysis missed both. **One API response is written as one
+line per content block**, each with the same `message.usage`, so summing lines
+counted most calls twice; calls are keyed by `message.id`. **Subagent calls are
+in their own files**, not in the session's, and `isSidechain` is absent from a
+third of the parent's lines; the split is by file.
+
+The baseline, measured from those transcripts (2026-10-16, six `standard`
+issues, 4332 calls), is 13.3 M units per task and 160 k per changed line, with
+12% of calls attributed to no issue. The dearest phases are `pr` and `pr-sync`,
+at 33–60% of a cycle, and 82% of the dearest cycle is cache reads. Like `stats`,
+the command recommends nothing; it prints the unattributed share and its caveats
+every time.
 
 ---
 
