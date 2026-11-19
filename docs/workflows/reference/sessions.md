@@ -29,10 +29,11 @@ What makes a restart cheap rather than merely possible:
 pdkit next 12345              # one line: the command to run now
 ```
 
-and the summary `SessionStart` prints when a session opens in the issue's
-worktree — the issue, state, route, the running task and its files if there is
-one, failed captures, the command to run, the phase's turn budget and the last
-few journal entries:
+and the summary the `session-start` hook gives a new session with its first
+prompt in the issue's worktree — the issue, state, route, the running task and
+its files if there is one, failed captures, the command to run, the phase's
+turn budget and the last few journal entries. It goes into the session's
+instructions, which the model reads with every request:
 
 ```
 pdkit: issue 12345 — plan-approved, standard
@@ -58,116 +59,113 @@ work from.
 
 ## Which session, which model
 
-### The model switches in one cycle
+### The command sets the model
 
-A skill's `model:` holds for its first turn only. After that the session's model
-runs the phase, and **that model survives `/clear`**. So the model the phase is
-routed to is the one you type, at the start of the session, before the command:
-
-```
-cd <fork> && claude          ──► sonnet, the fork's default
-
-/model opus    before /pd:triage       holds through /pd:plan and /pd:plan-review
-/model sonnet  before /pd:exec         holds through validate, audit, slice, preflight, pr, pr-status
-/model opus    before /pd:pr-sync      holds through every review round
-/model sonnet  before /pd:resume, /pd:slice, /pd:pr or /pd:close after a review round
-```
-
-Three phases outside that line run on opus as well: `/pd:review-pr`,
-`/pd:knowledge`, and `/pd:plan` again after a [rework](../09-approach-rejected.md).
-
-`pdkit next <n>` prints the `/model` line above the command, so copying its
-output top to bottom switches before the skill starts. It does not name
-`/pd:pr-sync`: from `pr-open` it points at `/pd:pr-status`, and going to a review
-round is your call. When the session is on the wrong model anyway, the
-`UserPromptSubmit` hook says so in a line addressed to you and carries on:
+Each command switches the session to its own model before its instructions
+reach the model, and the session stays on it for the phase — every later
+message, until you pick another in `/models` or run the next command. There is
+no `/model` to type before a command, and nothing reminds you of one. With the
+defaults, one cycle runs like this:
 
 ```
-pdkit: /pd:exec runs on sonnet, and this session is on opus — type /model sonnet now.
-A skill's model lasts its first turn; /model lasts the session.
+cd <fork> && opencode          ──► the model you chose, until the first command
+
+/pd:triage, /pd:plan, /pd:plan-review      opus#high
+/pd:exec, validate, slice, preflight, pr   sonnet#medium
+/pd:audit                                  sonnet#high
+/pd:pr-sync                                opus#high, every review round
 ```
 
-It cannot switch the model itself: `/model` is typed by a person. A hook is not
-given the model either, so it works it out, in this order, and says nothing when
-none of them answers:
+and `/pd:review-pr` and `/pd:knowledge` on `opus#medium`. Here and in every
+table of these pages, `opus`, `sonnet` and `haiku` are short for
+`claude-agent/opus`, `claude-agent/sonnet` and `claude-agent/haiku`, the
+defaults the commands and agents name in their frontmatter. A model you map to
+a command in the plugin's `options.models` takes the default's place, and the
+command switches the session to yours. A model Open Code cannot use is refused,
+not replaced: the command does not start, and says which model it was and where
+it came from. Where a model comes from, the map, the variants, and what
+`/models`, `/new` and `/clear` do to the model of a phase:
+[5 · Model selection](../../configuration/05-models.md#how-long-a-commands-model-holds).
 
-- **the session's transcript** — the last answer's model, or the last `/model`
-  typed. That is why `/model sonnet` typed before `/pd:exec` already counts;
-- **the transcript the same `claude` process had before `/clear`.** `/clear`
-  opens an empty transcript while the model carries over, and `CLAUDE_PID` is
-  the one identifier that survives it;
-- **the fork's default**, on the first command of a fresh process: the `model`
-  in `<fork>/.claude/settings.local.json`, counted out of the skills'
-  frontmatter. The notice then says the session *most likely started on* it.
-  `pdkit doctor` warns when the written default no longer matches the count.
+Outside the commands — before the first one, in a conversation of your own, and
+in `package-map`, `upstream-rules` and `worktree-kit`, which name no model — the
+session runs on the model you chose.
 
-**Effort** is set beside the model in the same frontmatter, and nothing reminds
-you of it:
+`pdkit next <n>` prints the command alone. It does not name `/pd:pr-sync`: from
+`pr-open` it points at `/pd:pr-status`, and going to a review round is your
+call.
 
-```
-/effort high     /pd:triage, /pd:plan, /pd:plan-review, /pd:audit, /pd:pr-sync
-/effort medium   every other phase
-```
-
-`/pd:audit` is the one sonnet session at high effort. Its verdict is
-`pd-auditor`'s, on opus in its own context, and the session only hands it the
-diff — so switching the session to opus there would buy nothing and carry opus
-into the slicing after it.
+**The effort** is the variant, part of the same default — `#high`, `#medium`,
+`#low` — and the command sets it with the model. `/effort`, Open Code's
+`/variants`, changes the session's, never a subagent's. `/pd:audit` is the one
+sonnet phase at `high`. Its verdict is `pd-auditor`'s, on `opus#high` in its
+own context, and the session only hands it the diff — so a stronger model for
+the session there would buy nothing.
 
 ### The columns
 
 Every **Sessions and models** table in these pages uses the same four columns.
 
-**Session.** **new** means a fresh session for this step: `/clear`, or close
-`claude` and start it again — `SessionStart` fires on both. Where it is opened is
-the second half:
+**Session.** **new** means a fresh session for this step: `/new` or `/clear`
+in the TUI, or quit Open Code and start `opencode` again — the `session-start`
+hook gives a new session the summary above with its first prompt. A session you
+reopen, from `/sessions` or with `--continue`, is not a new one and gets no new
+summary ([6 · Where Open Code differs](../../specification/06-hooks.md#where-open-code-differs-and-what-stands-in)).
+Where it is opened is the second half:
 
 | Where | What it is |
 |---|---|
-| **main checkout** | the podman-desktop fork itself, standing on the base branch. `claude` is started here, and triage, planning and reviews of other people's work run here: nothing in them writes code |
-| **issue tree** | `DESKTOP-<n>`, beside the fork, made by `/pd:exec` or `pdkit worktree create`. Every phase from validation on runs here. You do not `cd` into it: on `/pd:<skill> <n>` the `UserPromptSubmit` hook has the session move there with `EnterWorktree`, and the `SessionStart` summary is printed when a session opens here |
-| **terminal** | a plain `pdkit` command: no model is involved. A shell, or `! pdkit …` in whichever session is open |
+| **main checkout** | the podman-desktop fork itself, standing on the base branch. `opencode` is started here, and triage, planning and reviews of other people's work run here: nothing in them writes code |
+| **issue tree** | `DESKTOP-<n>`, beside the fork, made by `/pd:exec` or `pdkit worktree create`. Every phase from validation on runs here. You do not `cd` into it: on `/pd:<skill> <n>` the `prompt-submit` hook has the model move the session there with Open Code's `session_move`, and a session started here gets the summary of the issue |
+| **terminal** | a plain `pdkit` command: no model is involved. `!pdkit …` in whichever Open Code session is open, where the plugin puts `pdkit` on PATH, or a shell of your own with `bin/pdkit` of a clone at the plugin's version ([README · Commands](../../../README.md#commands)) |
 
-One `claude` process works one issue. To change issue, quit and start `claude`
-in the fork again; the hook moves the new session into the other tree. How the
-move works, and what to do when it does not happen:
+One session works one issue. To change issue, quit and start `opencode` in the
+fork again; the hook moves the new session into the other tree. How the move
+works, and what to do when it does not happen:
 [Where a session works](trees.md).
 
-**`/model`.** The model to type before the command, as above. A dash means the
-step involves no model.
+**Default model.** The model the command switches the session to, as its
+frontmatter names it: `opus#high` is `claude-agent/opus#high`. A command your
+`options.models` maps runs on yours instead. A dash means the step involves no
+model.
 
-**Subagents.** Their model is fixed in `agents/*.md` and does not follow the
-session's: `pd-auditor` is opus under a sonnet `/pd:audit`, and the review axes
-are sonnet under an opus `/pd:review-pr`.
+**Subagents.** Each runs on its own model, variant included — its frontmatter's,
+or the one your map or Open Code's `agents.<id>.model` gives it — and never on
+the session's: `pd-auditor` is `opus#high` under a `sonnet#high` `/pd:audit`,
+and the review axes are `sonnet#medium` under an `opus#medium` `/pd:review-pr`.
 
 ### Every command
 
-From the `model:` and `effort:` frontmatter of `skills/*/SKILL.md` and
-`agents/*.md`, which is the single source of truth. The turn budget is
-`budget.turns.*` in the config: a guide for when to stop and restart, not a limit.
+From the `model:` frontmatter of `skills/*/SKILL.md` and `agents/*.md`, where
+the defaults are set. What each one runs on with your map applied is the
+`models` line of `pdkit doctor`
+([What the doctor shows](../../configuration/05-models.md#what-the-doctor-shows)).
+The turn budget is `budget.turns.*` in the config: a guide for when to stop and
+restart, not a limit.
 
-| Command | Session | `/model` | `/effort` | Subagents | Budget, turns |
-|---|---|---|---|---|---|
-| `/pd:doctor` | new · anywhere in the fork | sonnet | medium | — | — |
-| `/pd:sync` | new · main checkout | sonnet | medium | — | — |
-| `/pd:editor`, `/pd:open` | anywhere | haiku | low | — | — |
-| `/pd:triage` | new · main checkout | **opus** | high | `pd-scout` · sonnet, `pd-archaeologist` · sonnet on `redo` | 40 |
-| `/pd:plan` | new · main checkout | **opus** | high | `pd-scout` · sonnet | 60 |
-| `/pd:plan-review` | new · main checkout | **opus** | high | `pd-plan-critic` · opus | — |
-| `/pd:exec` | new · main checkout or the issue tree; it moves itself into the tree | sonnet | medium | `pd-implementer` · sonnet, one per task | 80 per task |
-| `/pd:quickfix` | new · the checkout that will carry the branch | sonnet | medium | — | — |
-| `/pd:validate` | new · issue tree | sonnet | medium | `pd-validator` · sonnet | 80 |
-| `/pd:audit` | new · issue tree | sonnet | high | `pd-auditor` · opus | 40 |
-| `/pd:slice` | new · issue tree | sonnet | medium | `pd-slicer` · sonnet | 60 |
-| `/pd:preflight` | new · issue tree | sonnet | medium | — | — |
-| `/pd:pr` | new · issue tree, one per slice | sonnet | medium | — | 50 |
-| `/pd:pr-status` | new · anywhere in the fork | sonnet | medium | — | — |
-| `/pd:pr-sync` | new · issue tree, one per review round | **opus** | high | `pd-thread-resolver` · sonnet; first round of an adopted issue: the four `pd-review-*` · sonnet, `pd-review-synth` · opus | 60 |
-| `/pd:resume` | new · issue tree | sonnet | medium | `pd-conflict-analyst` · opus | — |
-| `/pd:close` | new · issue tree; it leaves the tree before removing it | sonnet | medium | — | — |
-| `/pd:reset` | new · main checkout | sonnet | medium | — | — |
-| `/pd:review-pr` | new · main checkout, one per pull request | **opus** | medium | the four `pd-review-*` · sonnet, `pd-review-synth` · opus | — |
-| `/pd:knowledge` | new · anywhere in the fork | **opus** | medium | — | — |
+| Command | Session | Default model | Subagents | Budget, turns |
+|---|---|---|---|---|
+| `/pd:doctor` | new · anywhere in the fork | `sonnet#medium` | — | — |
+| `/pd:sync` | new · main checkout | `sonnet#medium` | — | — |
+| `/pd:editor`, `/pd:open` | anywhere | `haiku#low` | — | — |
+| `/pd:triage` | new · main checkout | **`opus#high`** | `pd-scout` · `sonnet#high`, `pd-archaeologist` · `sonnet#high` on `redo` | 40 |
+| `/pd:plan` | new · main checkout | **`opus#high`** | `pd-scout` · `sonnet#high` | 60 |
+| `/pd:plan-review` | new · main checkout | **`opus#high`** | `pd-plan-critic` · `opus#high` | — |
+| `/pd:exec` | new · main checkout or the issue tree; it moves itself into the tree | `sonnet#medium` | `pd-implementer` · `sonnet#medium`, one per task | 80 per task |
+| `/pd:quickfix` | new · the checkout that will carry the branch | `sonnet#medium` | — | — |
+| `/pd:validate` | new · issue tree | `sonnet#medium` | `pd-validator` · `sonnet#medium` | 80 |
+| `/pd:audit` | new · issue tree | `sonnet#high` | `pd-auditor` · `opus#high` | 40 |
+| `/pd:slice` | new · issue tree | `sonnet#medium` | `pd-slicer` · `sonnet#medium` | 60 |
+| `/pd:preflight` | new · issue tree | `sonnet#medium` | — | — |
+| `/pd:pr` | new · issue tree, one per slice | `sonnet#medium` | — | 50 |
+| `/pd:pr-status` | new · anywhere in the fork | `sonnet#medium` | — | — |
+| `/pd:pr-sync` | new · issue tree, one per review round | **`opus#high`** | `pd-thread-resolver` · `sonnet#high`; first round of an adopted issue: the four `pd-review-*` · `sonnet#medium`, `pd-review-synth` · `opus#medium` | 60 |
+| `/pd:resume` | new · issue tree | `sonnet#medium` | `pd-conflict-analyst` · `opus#medium` | — |
+| `/pd:close` | new · issue tree; it leaves the tree before removing it | `sonnet#medium` | — | — |
+| `/pd:reset` | new · main checkout | `sonnet#medium` | — | — |
+| `/pd:review-pr` | new · main checkout, one per pull request | **`opus#medium`** | the four `pd-review-*` · `sonnet#medium`, `pd-review-synth` · `opus#medium` | — |
+| `/pd:knowledge` | new · anywhere in the fork | **`opus#medium`** | — | — |
+| `/pd:package-map`, `/pd:upstream-rules`, `/pd:worktree-kit` | anywhere | none: the session's | — | — |
 
 ### Where the decisions are taken
 
