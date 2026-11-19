@@ -10,11 +10,11 @@ pd-worktrees/verify-DESKTOP-<n>/                               slice verificatio
 
 **The fork stays on the base branch.** It is the template the trees are made
 from, and it is never an issue's tree — not even on that issue's branch. Start
-`claude` there. You do not `cd` into an issue's tree: the session is moved.
+`opencode` there. You do not `cd` into an issue's tree: the session is moved.
 
 ## What happens on `/pd:<skill> <n>`
 
-The `UserPromptSubmit` hook reads the number in the command and the tree the
+The `prompt-submit` hook reads the number in the command and the tree the
 session stands in. For a skill that takes a pull request number — `/pd:pr-sync`
 — it finds the issue through `prs.json`; a pull request no issue of ours knows,
 such as one passed to `/pd:review-pr`, is not looked at.
@@ -22,11 +22,11 @@ such as one passed to `/pd:review-pr`, is not looked at.
 | Where the issue's work is | What the hook does |
 |---|---|
 | the session is already in the issue's tree | nothing |
-| the session is in the issue's tree, and the tree is not on its open pull request's branch | shows `git -C <tree> switch <the pull request's branch>`, to run once you agree after `git status` there shows nothing uncommitted. If another tree already has that branch, says to start `claude` in the fork again: the next command moves the session there |
-| the issue has a tree on another branch than its open pull request, and the session is elsewhere | the same switch first, then `EnterWorktree` |
+| the session is in the issue's tree, and the tree is not on its open pull request's branch | shows `git -C <tree> switch <the pull request's branch>`, to run once you agree after `git status` there shows nothing uncommitted. If another tree already has that branch, says to start `opencode` in the fork again: the next command moves the session there |
+| the issue has a tree on another branch than its open pull request, and the session is elsewhere | the same switch first, then the move |
 | nothing names the issue yet — no tree, no `DESKTOP-<n>/…` branch | nothing: it is the start of the work, and triage and planning run where you stand. **Except `/pd:exec`**, which writes code: it is told to create the tree with `pdkit worktree create --issue <n> --slug <…>` and move into it |
-| the issue has a tree, and the session is elsewhere | tells Claude to call `EnterWorktree` with the tree's path, before anything else |
-| the issue's branch is checked out in the fork | shows two commands, to run once you agree — `git -C <fork> switch main` and `pdkit worktree create --issue <n> --branch <b>` — then `EnterWorktree` |
+| the issue has a tree, and the session is elsewhere | tells the model to move the session into the tree with Open Code's `session_move`, before anything else |
+| the issue's branch is checked out in the fork | shows two commands, to run once you agree — `git -C <fork> switch main` and `pdkit worktree create --issue <n> --branch <b>` — then the move |
 | the issue's branch exists and is checked out nowhere | the same without the `git switch` |
 
 "The issue's branch" is the branch of its open pull request when one is
@@ -43,21 +43,34 @@ pdkit: /pd:pr-sync is about issue 18915 — pr-open, standard, and this tree is 
   here    : …/podman-desktop on main — the main checkout
   18915   : …/pd-worktrees/DESKTOP-18915 on DESKTOP-18915/1-quit-and-install-race
   Before anything else, move this session into the issue's tree. Do not cd, and do not run the command here.
-  Call the EnterWorktree tool with path: …/pd-worktrees/DESKTOP-18915
+  Call the execute tool with tools.opencode.session_move({ directory: "…/pd-worktrees/DESKTOP-18915" })
   Subagents started after the switch work there too. Then carry on with the command as typed.
 ```
 
-`EnterWorktree` rather than `cd`, because a `cd` moves one shell, while
-`EnterWorktree` moves the session and every subagent started after it — and
-subagents edit files wherever the session is. Claude Code may ask permission
-for the tool; that is expected. Before agreeing to a `git switch` in the fork,
-look at `git status` there: uncommitted changes are either carried along or
-refused.
+`session_move` rather than `cd`, because a `cd` moves one shell, while
+`session_move` moves the session and every subagent started after it — and
+subagents edit files wherever the session is. The model calls it through Open
+Code's `execute` tool, and the move takes effect when the step it was called in
+ends: the command carries on from the tree. Open Code asks before the move only
+when your config asks about directories outside the project
+(`external_directory`) and the tree is not yet one it knows as the project's;
+that is expected. Before agreeing to a `git switch` in the fork, look at
+`git status` there: uncommitted changes are either carried along or refused.
 
-**One `claude` process works one issue.** `EnterWorktree` moves a session from
-where it was started into a tree; between two issue trees it is not offered. To
-change issue, quit and start `claude` in the fork again. Inside one issue,
-`/clear` between phases as usual.
+**The hooks follow the session because the plugin is global.** Open Code loads
+a plugin per directory, and an issue's tree is a directory of its own, beside
+the fork. Installed with `opencode plugin add`, the plugin is in your global
+config and loads in every tree; added only to an `opencode.json` in the fork, it
+would not load in the tree, and a session moved there would have no gate.
+`pdkit doctor` says on its `plugin` line whether Open Code loads it for the
+directory it runs in.
+
+**One session works one issue.** Open Code would move a session from one
+issue's tree straight into another's — the hook asks for that move when a
+command names an issue with a tree of its own — but the session would carry the
+first issue into every turn of the second ([14](../14-two-issues.md)). To change
+issue, quit and start `opencode` in the fork again. Inside one issue, `/clear`
+between phases as usual.
 
 ## When the session did not move
 
@@ -112,9 +125,9 @@ git -C pd-worktrees/DESKTOP-<n> switch <the pull request's branch>
 
 | You see | It means |
 |---|---|
-| the hook asks for `EnterWorktree` again in the same session | the session did not move, or the hook was given the old directory — report it |
-| `pdkit: /pd:<skill> runs on X, and this session is on Y` | type `/model X`: a skill's model holds one turn — [Which session, which model](sessions.md#which-session-which-model) |
-| a command refuses with `this tree is not DESKTOP-<n>'s` | Claude did not follow the hook; paste the line it printed |
+| the hook asks for `session_move` again in the same session | the session did not move, or the hook was given the old directory — report it |
+| `pdkit: /pd:<skill> is set to <model> (<where>), which this Open Code cannot use` | the command did not start, and the session stays on its model: map another to the command in `options.models`, or make that model available — [Which session, which model](sessions.md#which-session-which-model) |
+| a command refuses with `this tree is not DESKTOP-<n>'s` | the model did not follow the hook; paste the line it printed |
 | `pdkit pr diff` shows `outside slice #<i> after the push` | the pull request would carry files you did not approve — back to the decision table ([§7](../07-stale-pr.md#reading-pdkit-pr-diff)) |
 | `git -C <fork> status` shows a `DESKTOP-…` branch | the fork has become a place to work again — [a branch in two places](#a-branch-in-two-places), or let the hook move it |
 
