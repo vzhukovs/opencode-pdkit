@@ -37,7 +37,8 @@ Stated here rather than discovered later.
    TTL means consent cannot be accumulated.
 
 7. **State outside the repository can be lost.** `$PDKIT_HOME` should be its own
-   git repository; `pdkit` commits after each transition.
+   git repository, and committing to it is its owner's job: `pdkit` writes the
+   files and commits nothing.
 
 8. **`Patch comes off` is a textual check, and is named for what it measures.**
    Whether the build survives a revert costs +100% per slice (+26% narrowed to
@@ -82,10 +83,11 @@ Stated here rather than discovered later.
     the tree (`suggest`, `set`, `join`, `materialize`, `cascade`) refuse to run in
     another issue's tree and print the line that would run them in the right
     one. `publish`, `pr reply`, `defer` and `amendment` do not check: for them
-    the `UserPromptSubmit` hook, which tells the session to move before the
-    skill starts, is the only guard — and a hook that instructs is a prompt,
-    not a gate. The way it would show is a reply or a deferral sent for the
-    right issue from the wrong tree.
+    the `prompt-submit` hook is the only guard. When a `/pd:` command sends its
+    prompt from another issue's tree, the hook attaches to that prompt where
+    the issue's work is and tells the session to move before the skill starts
+    — and a hook that instructs is a prompt, not a gate. The way it would show
+    is a reply or a deferral sent for the right issue from the wrong tree.
 
 12. **Materializing a slice moves the tree the session stands in.**
     `slice materialize` checks the slice's branch out in the issue's tree, and
