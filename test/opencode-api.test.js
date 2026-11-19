@@ -34,7 +34,11 @@ import {
   askRunning,
   catalog,
   commands,
+  configDirectories,
+  configRules,
   configuredAgents,
+  decision,
+  expandHome,
   get,
   mcpServers,
   mcpStatuses,
@@ -361,6 +365,82 @@ describe('Open Code’s names and rules', () => {
     assert.equal(takenBy('playwright_browser_navigate', [denyAll, allow, denyServer, allow]), undefined);
     assert.equal(takenBy('playwright_browser_navigate', [allow, { action: 'playwright_*', resource: '/x/*', effect: 'deny' }]), undefined);
     assert.equal(takenBy('playwright_browser_navigate', []), undefined);
+  });
+
+  // evaluate in Open Code 2.3.0 (F341).
+  test('a call is decided by the last rule whose action and resource both fit; with none, it is asked', () => {
+    const rules = [
+      { action: '*', resource: '*', effect: 'deny' },
+      { action: 'shell', resource: '*', effect: 'allow' },
+      { action: 'shell', resource: 'git push *', effect: 'deny' },
+      { action: 'edit', resource: '/x/*', effect: 'ask' },
+    ];
+
+    assert.deepEqual(decision(rules, 'shell', 'git status'), { effect: 'allow', index: 1 });
+    assert.deepEqual(decision(rules, 'shell', 'git push origin'), { effect: 'deny', index: 2 });
+    assert.deepEqual(decision(rules, 'edit', '/x/a.ts'), { effect: 'ask', index: 3 });
+    assert.deepEqual(decision(rules, 'edit', '/y/a.ts'), { effect: 'deny', index: 0 });
+    assert.deepEqual(decision(rules.slice(1), 'read', '/x'), { effect: 'ask', index: -1 });
+  });
+
+  // expandHome in Open Code 2.3.0 (F339): only the actions on a path.
+  test('`~` and `$HOME` are spelled out in the rules of a path, and nowhere else', () => {
+    const rule = (action, resource) => ({ action, resource, effect: 'allow' });
+
+    assert.deepEqual(expandHome(rule('read', '~/x/*'), '/home/u'), rule('read', '/home/u/x/*'));
+    assert.deepEqual(expandHome(rule('edit', '$HOME/x'), '/home/u'), rule('edit', '/home/u/x'));
+    assert.deepEqual(expandHome(rule('external_directory', '~'), '/home/u'), rule('external_directory', '/home/u'));
+    assert.deepEqual(expandHome(rule('read', '~/x'), 'C:\\Users\\u'), rule('read', 'C:\\Users\\u\\x'));
+    assert.deepEqual(expandHome(rule('shell', '~/x'), '/home/u'), rule('shell', '~/x'));
+    assert.deepEqual(expandHome(rule('read', '/a/~/x'), '/home/u'), rule('read', '/a/~/x'));
+  });
+});
+
+// GET /api/config, as Open Code 2.3.0 answered it (research/T7.20-raw): the
+// rules of the documents, as written, and the config directories, with
+// nothing of the agent files in them (F339).
+describe('the rules the config documents add to an agent', () => {
+  const rule = (action, resource, effect) => ({ action, resource, effect });
+  const DOCUMENTS = [
+    {
+      type: 'document',
+      path: '/h/.config/opencode/opencode.json',
+      info: {
+        permissions: [rule('shell', 'g-top', 'allow'), rule('read', '~/x/*', 'allow')],
+        agents: { 'pd-auditor': { permissions: [rule('shell', 'g-agent', 'allow')] }, 'pd-scout': { model: { providerID: 'p', model: 'm' } } },
+      },
+    },
+    { type: 'directory', path: '/h/.config/opencode', info: {} },
+    {
+      type: 'document',
+      path: '/fork/opencode.json',
+      info: { permissions: [rule('shell', 'p-top', 'allow'), { action: 'shell' }], agents: { 'pd-auditor': { permissions: [rule('shell', 'p-agent', 'allow')] } } },
+    },
+    { type: 'directory', path: '/fork/.opencode', info: {} },
+  ];
+
+  test('are every document’s top-level permissions, then each one’s for the agent, in the order Open Code appends them', () => {
+    assert.deepEqual(configRules(DOCUMENTS, 'pd-auditor', '/h'), [
+      { rule: rule('shell', 'g-top', 'allow'), document: '/h/.config/opencode/opencode.json', key: 'permissions' },
+      { rule: rule('read', '/h/x/*', 'allow'), document: '/h/.config/opencode/opencode.json', key: 'permissions' },
+      { rule: rule('shell', 'p-top', 'allow'), document: '/fork/opencode.json', key: 'permissions' },
+      { rule: rule('shell', 'g-agent', 'allow'), document: '/h/.config/opencode/opencode.json', key: 'agents.pd-auditor.permissions' },
+      { rule: rule('shell', 'p-agent', 'allow'), document: '/fork/opencode.json', key: 'agents.pd-auditor.permissions' },
+    ]);
+  });
+
+  test('an agent no document names gets the top-level ones alone; an answer that is not a list, none', () => {
+    assert.deepEqual(
+      configRules(DOCUMENTS, 'pd-scout', '/h').map((entry) => entry.key),
+      ['permissions', 'permissions', 'permissions'],
+    );
+    assert.deepEqual(configRules(DOCUMENTS, 'constructor', '/h').length, 3);
+    assert.deepEqual(configRules({ status: 500 }, 'pd-scout', '/h'), []);
+  });
+
+  test('the config directories are named, in order', () => {
+    assert.deepEqual(configDirectories(DOCUMENTS), ['/h/.config/opencode', '/fork/.opencode']);
+    assert.deepEqual(configDirectories(undefined), []);
   });
 });
 

@@ -34,7 +34,9 @@
 //                  checks it by, after a first rule that denies everything:
 //                  what the agent was not given, it does not see. To read the
 //                  plugin's files and the plans under $PDKIT_HOME, every agent
-//                  gets those two directories too (opencode/access.js). An
+//                  gets those two directories too (opencode/access.js). The
+//                  rules are built in lib/opencode-permissions.js, where the
+//                  doctor builds them again to compare with Open Code's. An
 //                  action can show a tool of Open Code's own besides the ones
 //                  it stands for (EXTRA_TOOLS); such a tool is taken out of
 //                  every request of the agent's sessions instead;
@@ -60,23 +62,10 @@ import { readdir, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import { resolveHome } from '../lib/config.js';
-import { directoryRule } from './access.js';
 import { PREFIX } from './commands.js';
 import { modelRef } from '../lib/opencode-models.js';
+import { permissionsFor, toolList } from '../lib/opencode-permissions.js';
 import { readPrompt, spellRoot } from './prompts.js';
-
-/**
- * Claude Code's tools, by the action Open Code checks each one by. `edit`
- * covers every tool that writes a file: write, edit and patch.
- */
-export const ACTIONS = Object.freeze({
-  Read: 'read',
-  Grep: 'grep',
-  Glob: 'glob',
-  Bash: 'shell',
-  Write: 'edit',
-  Edit: 'edit',
-});
 
 /**
  * Open Code's own tools an action shows an agent besides the tools of Claude
@@ -104,9 +93,6 @@ export const EXTRA_TOOLS = Object.freeze({
  */
 export const REQUESTS = Object.freeze(['context', 'compaction', 'generate']);
 
-/** Claude Code's name for a tool of an MCP server: mcp__<server>__<tool>. */
-const MCP = /^mcp__(.+?)__(.+)$/;
-
 /**
  * @param {unknown} error
  * @returns {string}
@@ -114,62 +100,10 @@ const MCP = /^mcp__(.+?)__(.+)$/;
 const reason = (error) => (error instanceof Error ? error.message : String(error));
 
 /**
- * The action Open Code checks a Claude Code tool by, or undefined for a tool
- * it has no counterpart of. An MCP tool is `<server>_<tool>`, each part with
- * every character but letters, digits, `_` and `-` made `_`, as Open Code
- * names it.
- *
- * @param {string} tool
- * @returns {string|undefined}
- */
-export function actionOf(tool) {
-  if (Object.hasOwn(ACTIONS, tool)) return ACTIONS[tool];
-  const mcp = MCP.exec(tool);
-  if (!mcp) return undefined;
-  const clean = (part) => part.replace(/[^A-Za-z0-9_-]/g, '_');
-  return `${clean(mcp[1])}_${clean(mcp[2])}`;
-}
-
-/**
- * @typedef {{action: string, resource: string, effect: 'allow'|'deny'}} Rule
- */
-
-/**
- * An agent's permissions: everything denied, then each of its tools allowed,
- * then each directory outside the project it may read. Open Code takes the
- * last rule that matches, so the order is the point.
- *
- * @param {readonly string[]} tools Claude Code's names
- * @param {readonly string[]} directories absolute
- * @returns {{rules: Rule[], unknown: string[]}} unknown: tools with no action, left denied
- */
-export function permissionsFor(tools, directories) {
-  const rules = [{ action: '*', resource: '*', effect: /** @type {const} */ ('deny') }];
-  const unknown = [];
-  const allowed = new Set();
-  for (const tool of tools) {
-    const action = actionOf(tool);
-    if (action === undefined) unknown.push(tool);
-    else if (!allowed.has(action)) {
-      allowed.add(action);
-      rules.push({ action, resource: '*', effect: 'allow' });
-    }
-  }
-  const seen = new Set();
-  for (const directory of directories) {
-    const rule = directoryRule(directory);
-    if (seen.has(rule.resource)) continue;
-    seen.add(rule.resource);
-    rules.push(rule);
-  }
-  return { rules, unknown };
-}
-
-/**
  * The tools of EXTRA_TOOLS an agent's rules show it: those of every action
  * the rules allow.
  *
- * @param {readonly Rule[]} rules
+ * @param {readonly import('../lib/opencode-permissions.js').Rule[]} rules
  * @returns {string[]}
  */
 export function extraTools(rules) {
@@ -207,16 +141,6 @@ export function hideTools(event, hidden) {
  * @property {string[]} tools
  * @property {string} body
  */
-
-/**
- * @param {unknown} tools `tools:` as YAML read it
- * @returns {string[]|undefined}
- */
-function toolList(tools) {
-  if (Array.isArray(tools)) return tools.map(String).map((tool) => tool.trim()).filter(Boolean);
-  if (typeof tools === 'string') return tools.split(',').map((tool) => tool.trim()).filter(Boolean);
-  return undefined;
-}
 
 /**
  * Every agents/*.md, in file order. A file that cannot be read is left out and
@@ -316,7 +240,7 @@ export function agentModels(agents, map) {
  * @property {string} id
  * @property {string|undefined} description
  * @property {string} system
- * @property {Rule[]} permissions
+ * @property {import('../lib/opencode-permissions.js').Rule[]} permissions
  * @property {import('../lib/opencode-models.js').ModelRef|undefined} model
  * @property {readonly string[]} hidden the tools of EXTRA_TOOLS taken out of its requests
  */

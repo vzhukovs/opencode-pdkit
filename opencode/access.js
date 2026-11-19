@@ -27,15 +27,16 @@
 // files without asking, and kept them readable even where a person had blocked
 // reads outside the working directories.
 //
-// So there are two pieces here:
+// So there are two pieces:
 //
 //   - directoryRule(), the rule that lets an agent into one directory. The
 //     agents get one for the plugin's root and one for $PDKIT_HOME, where the
-//     plan a critic reviews lives (opencode/agents.js);
-//   - registerAccess(), which keeps the plugin's own files readable when a
-//     person's config asks before every directory outside the project: a rule
-//     there comes after the agent's and wins, so the plugin settles that one
-//     question itself, for any agent, the main session's included — skills
+//     plan a critic reviews lives (lib/opencode-permissions.js, where the
+//     doctor builds them too);
+//   - registerAccess(), here, which keeps the plugin's own files readable
+//     when a person's config asks before every directory outside the project:
+//     a rule there comes after the agent's and wins, so the plugin settles that
+//     one question itself, for any agent, the main session's included — skills
 //     name these files too. Only `ask` is raised, and only when every
 //     directory asked about is under the root. A `deny` in a person's config
 //     never reaches this hook and stands, and $PDKIT_HOME is left to the
@@ -47,25 +48,7 @@
 
 import { resolve } from 'node:path';
 
-/**
- * A path in the form Open Code's rules match: forward slashes. A rule's `*`
- * stands for anything, slashes included, so one rule covers every
- * subdirectory.
- *
- * @param {string} path
- * @returns {string}
- */
-export const slash = (path) => path.replaceAll('\\', '/');
-
-/**
- * The rule that lets an agent read in a directory outside the project.
- *
- * @param {string} directory absolute
- * @returns {{action: 'external_directory', resource: string, effect: 'allow'}}
- */
-export function directoryRule(directory) {
-  return { action: 'external_directory', resource: `${slash(resolve(directory))}/*`, effect: 'allow' };
-}
+import { slash } from '../lib/opencode-permissions.js';
 
 /**
  * Whether a resource Open Code asks about lies under `root`. Windows paths

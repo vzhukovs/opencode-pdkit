@@ -57,6 +57,21 @@ fixes — see [RELEASING.md](RELEASING.md).
   never prints a provider's settings, and without a server to ask it says it
   cannot tell. It takes the place of `settings:model`; `pdkit init`'s
   `models` line points at it.
+- **`pdkit doctor` compares the rules each agent ends up with to the ones the
+  plugin gives it** (`permissions`), in a table under the line. Open Code adds
+  every config document's top-level `permissions` to every agent's rules, the
+  plugin's included, then `agents.<id>.permissions` and the `permissions` of
+  an agent file `<id>.md` in a config directory — all after the plugin's, and
+  without a word: `shell * allow` there gives the shell to the reviewers that
+  only read, `external_directory * allow` lets every agent in anywhere outside
+  the project, `playwright_* deny` takes the validator's tools. Claude Code's
+  settings never gave a subagent more than its `tools:`. Each rule that lets
+  an agent do more than its `tools:` give, or keeps from it what they give, is
+  a row: the agent, the rule, the config document it is in — for a rule in
+  none, the agent's file, when there is one — and what it changes. Open Code
+  asking before the plugin's own files is not one: the plugin answers that
+  itself. The line says what the gate holds whatever an agent may do. A
+  warning, not a failure; without a server to ask it says it cannot tell.
 - **`pdkit doctor` finds a `/pd:` command or a `pd:` skill that is not the
   plugin's** (`commands`). Open Code keeps one command per name and one skill
   per ID, and the last to add one wins without a word: a markdown command
@@ -193,8 +208,8 @@ fixes — see [RELEASING.md](RELEASING.md).
   Playwright tools.** A top-level `permissions` rule in an Open Code config —
   `playwright_* deny`, say, meant for the main session — is added to every
   agent's rules after the plugin's own and takes them away without a word;
-  validation then produces a checklist. The line names the tools and the
-  rule.
+  validation then produces a checklist. The line names the tools; the
+  `permissions` line, the rule and the document it is in.
 - **`pdkit doctor` checks that Open Code runs the plugin at all** (`plugin`,
   required). Open Code says nothing when a config turns a plugin off — and
   without the plugin there is no gate on writes upstream. From a session the
