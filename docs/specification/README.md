@@ -1,4 +1,4 @@
-# podman-desktop-kit — design specification
+# Podman Desktop Kit for OpenCode — design specification
 
 The design behind the plugin: what it is for, what each piece guarantees, and
 why the guarantees are drawn where they are. It is a design document rather
