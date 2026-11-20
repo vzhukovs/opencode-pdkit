@@ -319,7 +319,7 @@ spelled command is not a fix.
 
 ## What preflight will ask of you
 
-Twenty-three checks. Every one blocks except the four marked `warn`.
+Twenty-four checks. Every one blocks except the three marked `warn`.
 
 | Check | | What satisfies it |
 |---|---|---|
@@ -386,6 +386,8 @@ checkpoints/<n>/      what pdkit rollback goes back to
 archive/<n>/          what pdkit reset moved out of the way
 cost/YYYY-MM-DD.json  pdkit cost --snapshot, the baseline a later run compares to
 cost/planning/        pdkit cost --planning --snapshot: rounds, their cost, and the counts after approval
+cost/[planning/]YYYY-MM-DD.opencode.json
+                      one taken in Open Code on the day of a Claude Code one: beside it, not over it
 reviews/<k>.md        reviews of other people's pull requests
 issues/<n>/
   state.json          the machine: state, route, who approved what. Only pdkit writes it
@@ -455,5 +457,5 @@ scope is a note rather than a failure, because commitlint does not require it.
 
 ---
 
-<sub>Part of [podman-desktop-kit](README.md). If a command here disagrees with
-`pdkit --help`, the CLI is right and this file is a bug.</sub>
+<sub>Part of [Podman Desktop Kit for OpenCode](README.md). If a command here
+disagrees with `pdkit --help`, the CLI is right and this file is a bug.</sub>
