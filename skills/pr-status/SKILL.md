@@ -2,7 +2,7 @@
 name: pr-status
 description: "Dashboard across all open pull requests: CI, review threads, staleness."
 disable-model-invocation: true
-model: claude-agent/sonnet#medium
+model: deepseek/deepseek-flash#low
 ---
 
 Read-only. Nothing here moves state, opens a token, or writes to GitHub.

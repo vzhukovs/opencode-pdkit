@@ -3,7 +3,7 @@ name: close
 description: "Close out a merged issue: harvest what was learned, clean up worktrees."
 argument-hint: "<issue-number>"
 disable-model-invocation: true
-model: claude-agent/sonnet#medium
+model: deepseek/deepseek-flash#low
 ---
 
 ## Steps

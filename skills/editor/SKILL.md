@@ -4,7 +4,7 @@ description: "Open an issue's worktree in the IDE configured as editor.path."
 disable-model-invocation: true
 argument-hint: "[<issue>]"
 allowed-tools: Bash(pdkit editor), Bash(pdkit editor:*)
-model: claude-agent/haiku#low
+model: deepseek/deepseek-flash#none
 ---
 
 Arguments: `$ARGUMENTS`

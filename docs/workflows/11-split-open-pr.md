@@ -29,7 +29,7 @@ What you type, session by session — `/clear` starts the next one:
 
 | Step | Session | Default model | Subagents |
 |---|---|---|---|
-| the split: `slice suggest --from-pr`, `set`, `verify` | **new** · issue tree running `/pd:slice 17221`, or **terminal** | `sonnet#medium` | `pd-slicer` · `sonnet#medium` |
+| the split: `slice suggest --from-pr`, `set`, `verify` | **new** · issue tree running `/pd:slice 17221`, or **terminal** | `opus#high` | `pd-slicer` · `opus#high` |
 | `pdkit pr threads 17577` | **terminal** | — | — |
 | the new pull requests: `/pd:pr 17221` | **new** · issue tree, one per slice | `sonnet#medium` | — |
 

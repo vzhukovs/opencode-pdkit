@@ -1,7 +1,7 @@
 ---
 name: pd-review-tests
 description: "Reviews a pull request, someone else's or our own before it is published, for test coverage and quality."
-model: claude-agent/sonnet#medium
+model: openai/gpt-6.1-sol#high
 tools: Read, Grep, Glob
 ---
 

@@ -58,7 +58,7 @@ pdkit close --issue 12345 --finish --confirmed "@reporter, 2026-08-09"
 
 | Step | Session | Default model | Subagents |
 |---|---|---|---|
-| `/pd:validate 12345` | **new** · the checkout the reproduction is built in | `sonnet#medium` | `pd-validator` · `sonnet#medium` |
+| `/pd:validate 12345` | **new** · the checkout the reproduction is built in | `terra#medium` | `pd-validator` · `terra#medium` |
 | `pdkit findings new`, `pdkit state --to answered` | **terminal**, or the validate session | — | — |
 | `pdkit close … --confirmed`, when the reporter answers | **terminal** | — | — |
 

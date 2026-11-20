@@ -44,7 +44,9 @@ a phase costs. [Part 3](03-keys.md) is a reference to open when a key comes up.
 | drive a packaged application rather than the development build | [3 · Validation](03-keys.md#validation) |
 | change the quickfix thresholds or the attempt ceiling | [3 · Triage, quickfix and the gate](03-keys.md#triage-quickfix-and-the-gate), [3 · Preflight and execution](03-keys.md#preflight-and-execution) |
 | come over from the Claude Code version, or go back to it | [2 · Shared with the Claude Code version](02-pdkit-home.md#shared-with-the-claude-code-version) |
-| put a phase or an agent on another model, another provider's included | [5 · The map](05-models.md#the-map), [5 · Where the strongest model goes](05-models.md#where-the-strongest-model-goes) |
+| put a phase or an agent on another model, another provider's included | [5 · The map](05-models.md#the-map), [5 · What the defaults are](05-models.md#what-the-defaults-are) |
+| try another model on one phase or one agent, and go back | [5 · Trying another model](05-models.md#trying-another-model) |
+| run the kit with one provider, a Claude subscription alone included | [5 · One provider only](05-models.md#one-provider-only) |
 | know which model a phase runs on | [5 · Model selection](05-models.md), [workflows · Which session, which model](../workflows/reference/sessions.md#which-session-which-model) |
 | make `/pd:validate` record evidence | [6 · MCP servers](06-mcp-servers.md) |
 | know what `doctor` means by `config:arrays`, `config:gates`, `models`, `validate:app` | [1](01-layers.md), [8](08-retired-keys.md), [5](05-models.md#what-the-doctor-shows), [6](06-mcp-servers.md) |

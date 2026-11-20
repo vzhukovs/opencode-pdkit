@@ -70,16 +70,26 @@ defaults, one cycle runs like this:
 ```
 cd <fork> && opencode          ──► the model you chose, until the first command
 
-/pd:triage, /pd:plan, /pd:plan-review      opus#high
-/pd:exec, validate, slice, preflight, pr   sonnet#medium
-/pd:audit                                  sonnet#high
+/pd:triage                                 sol#high
+/pd:plan                                   astra#high
+/pd:plan-review                            opus#high
+/pd:exec                                   sonnet#high
+/pd:validate                               terra#medium
+/pd:audit, /pd:slice                       opus#high
+/pd:preflight                              flash#low
+/pd:pr                                     sonnet#medium
 /pd:pr-sync                                opus#high, every review round
 ```
 
-and `/pd:review-pr` and `/pd:knowledge` on `opus#medium`. Here and in every
-table of these pages, `opus`, `sonnet` and `haiku` are short for
-`claude-agent/opus`, `claude-agent/sonnet` and `claude-agent/haiku`, the
-defaults the commands and agents name in their frontmatter. A model you map to
+with `/pd:review-pr` on `opus#high` and `/pd:knowledge` on `opus#medium`. Here
+and in every table of these pages the defaults the commands and agents name in
+their frontmatter are written short: `opus` and `sonnet` are
+`claude-agent/opus` and `claude-agent/sonnet`; `astra`, `sol` and `terra`,
+`openai/gpt-6-astra`, `openai/gpt-6.1-sol` and `openai/gpt-6.1-terra`; `flash`,
+`deepseek/deepseek-flash`. They use three providers, and all three have to be
+connected for a cycle to run as shipped
+([One provider only](../../configuration/05-models.md#one-provider-only)). A
+model you map to
 a command in the plugin's `options.models` takes the default's place, and the
 command switches the session to yours. A model Open Code cannot use is refused,
 not replaced: the command does not start, and says which model it was and where
@@ -96,11 +106,10 @@ session runs on the model you chose.
 call.
 
 **The effort** is the variant, part of the same default — `#high`, `#medium`,
-`#low` — and the command sets it with the model. `/effort`, Open Code's
-`/variants`, changes the session's, never a subagent's. `/pd:audit` is the one
-sonnet phase at `high`. Its verdict is `pd-auditor`'s, on `opus#high` in its
-own context, and the session only hands it the diff — so a stronger model for
-the session there would buy nothing.
+`#low`, `#none` — and the command sets it with the model. `/effort`, Open
+Code's `/variants`, changes the session's, never a subagent's. The verdict of
+`/pd:audit` is `pd-auditor`'s, on `sol#high` in its own context: the session
+runs `pdkit audit` and hands the agent the diff.
 
 ### The columns
 
@@ -131,8 +140,8 @@ model.
 
 **Subagents.** Each runs on its own model, variant included — its frontmatter's,
 or the one your map or Open Code's `agents.<id>.model` gives it — and never on
-the session's: `pd-auditor` is `opus#high` under a `sonnet#high` `/pd:audit`,
-and the review axes are `sonnet#medium` under an `opus#medium` `/pd:review-pr`.
+the session's: `pd-auditor` is `sol#high` under an `opus#high` `/pd:audit`,
+and `pd-review-synth` is `opus#medium` under an `opus#high` `/pd:review-pr`.
 
 ### Every command
 
@@ -145,26 +154,26 @@ restart, not a limit.
 
 | Command | Session | Default model | Subagents | Budget, turns |
 |---|---|---|---|---|
-| `/pd:doctor` | new · anywhere in the fork | `sonnet#medium` | — | — |
-| `/pd:sync` | new · main checkout | `sonnet#medium` | — | — |
-| `/pd:editor`, `/pd:open` | anywhere | `haiku#low` | — | — |
-| `/pd:triage` | new · main checkout | **`opus#high`** | `pd-scout` · `sonnet#high`, `pd-archaeologist` · `sonnet#high` on `redo` | 40 |
-| `/pd:plan` | new · main checkout | **`opus#high`** | `pd-scout` · `sonnet#high` | 60 |
-| `/pd:plan-review` | new · main checkout | **`opus#high`** | `pd-plan-critic` · `opus#high` | — |
-| `/pd:exec` | new · main checkout or the issue tree; it moves itself into the tree | `sonnet#medium` | `pd-implementer` · `sonnet#medium`, one per task | 80 per task |
-| `/pd:quickfix` | new · the checkout that will carry the branch | `sonnet#medium` | — | — |
-| `/pd:validate` | new · issue tree | `sonnet#medium` | `pd-validator` · `sonnet#medium` | 80 |
-| `/pd:audit` | new · issue tree | `sonnet#high` | `pd-auditor` · `opus#high` | 40 |
-| `/pd:slice` | new · issue tree | `sonnet#medium` | `pd-slicer` · `sonnet#medium` | 60 |
-| `/pd:preflight` | new · issue tree | `sonnet#medium` | — | — |
+| `/pd:doctor` | new · anywhere in the fork | `flash#low` | — | — |
+| `/pd:sync` | new · main checkout | `flash#low` | — | — |
+| `/pd:editor`, `/pd:open` | anywhere | `flash#none` | — | — |
+| `/pd:triage` | new · main checkout | `sol#high` | `pd-scout` · `sonnet#high`, `pd-archaeologist` · `sol#high` on `redo` | 40 |
+| `/pd:plan` | new · main checkout | `astra#high` | `pd-scout` · `sonnet#high` | 60 |
+| `/pd:plan-review` | new · main checkout | `opus#high` | `pd-plan-critic` · `opus#high` | — |
+| `/pd:exec` | new · main checkout or the issue tree; it moves itself into the tree | `sonnet#high` | `pd-implementer` · `sonnet#high`, one per task | 80 per task |
+| `/pd:quickfix` | new · the checkout that will carry the branch | `sonnet#high` | — | — |
+| `/pd:validate` | new · issue tree | `terra#medium` | `pd-validator` · `terra#medium` | 80 |
+| `/pd:audit` | new · issue tree | `opus#high` | `pd-auditor` · `sol#high` | 40 |
+| `/pd:slice` | new · issue tree | `opus#high` | `pd-slicer` · `opus#high` | 60 |
+| `/pd:preflight` | new · issue tree | `flash#low` | — | — |
 | `/pd:pr` | new · issue tree, one per slice | `sonnet#medium` | — | 50 |
-| `/pd:pr-status` | new · anywhere in the fork | `sonnet#medium` | — | — |
-| `/pd:pr-sync` | new · issue tree, one per review round | **`opus#high`** | `pd-thread-resolver` · `sonnet#high`; first round of an adopted issue: the four `pd-review-*` · `sonnet#medium`, `pd-review-synth` · `opus#medium` | 60 |
-| `/pd:resume` | new · issue tree | `sonnet#medium` | `pd-conflict-analyst` · `opus#medium` | — |
-| `/pd:close` | new · issue tree; it leaves the tree before removing it | `sonnet#medium` | — | — |
-| `/pd:reset` | new · main checkout | `sonnet#medium` | — | — |
-| `/pd:review-pr` | new · main checkout, one per pull request | **`opus#medium`** | the four `pd-review-*` · `sonnet#medium`, `pd-review-synth` · `opus#medium` | — |
-| `/pd:knowledge` | new · anywhere in the fork | **`opus#medium`** | — | — |
+| `/pd:pr-status` | new · anywhere in the fork | `flash#low` | — | — |
+| `/pd:pr-sync` | new · issue tree, one per review round | `opus#high` | `pd-thread-resolver` · `sonnet#high`; first round of an adopted issue: the four `pd-review-*` · `sol#high` for architecture and tests, `opus#high` for api-compat, `sonnet#high` for product, `pd-review-synth` · `opus#medium` | 60 |
+| `/pd:resume` | new · issue tree | `opus#high` | `pd-conflict-analyst` · `opus#high` | — |
+| `/pd:close` | new · issue tree; it leaves the tree before removing it | `flash#low` | — | — |
+| `/pd:reset` | new · main checkout | `flash#low` | — | — |
+| `/pd:review-pr` | new · main checkout, one per pull request | `opus#high` | the four `pd-review-*` · `sol#high` for architecture and tests, `opus#high` for api-compat, `sonnet#high` for product, `pd-review-synth` · `opus#medium` | — |
+| `/pd:knowledge` | new · anywhere in the fork | `opus#medium` | — | — |
 | `/pd:package-map`, `/pd:upstream-rules`, `/pd:worktree-kit` | anywhere | none: the session's | — | — |
 
 ### Where the decisions are taken

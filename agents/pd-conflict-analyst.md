@@ -1,7 +1,7 @@
 ---
 name: pd-conflict-analyst
 description: "Classifies rebase conflicts as mechanical or semantic."
-model: claude-agent/opus#medium
+model: claude-agent/opus#high
 tools: Read, Grep, Glob, Bash
 ---
 

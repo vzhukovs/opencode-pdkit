@@ -207,18 +207,30 @@ decided.
 
 Each command and each agent runs on a model of its own, named the way Open Code
 names models: `provider/model#variant`, the variant being the effort. Out of the
-box they name Open Code's Claude Agent provider:
+box they name models of three providers — Open Code's Claude Agent provider,
+OpenAI and DeepSeek:
 
 | Default | Commands | Agents |
 |---|---|---|
-| `claude-agent/opus#high` | `pd:triage`, `pd:plan`, `pd:plan-review`, `pd:pr-sync` | `pd-auditor`, `pd-plan-critic` |
-| `claude-agent/opus#medium` | `pd:knowledge`, `pd:review-pr` | `pd-conflict-analyst`, `pd-review-synth` |
-| `claude-agent/sonnet#high` | `pd:audit` | `pd-archaeologist`, `pd-scout`, `pd-thread-resolver` |
-| `claude-agent/sonnet#medium` | the other twelve | `pd-implementer`, `pd-slicer`, `pd-validator`, `pd-review-api-compat`, `pd-review-architecture`, `pd-review-product`, `pd-review-tests` |
-| `claude-agent/haiku#low` | `pd:editor`, `pd:open` | — |
+| `openai/gpt-6-astra#high` | `pd:plan` | — |
+| `openai/gpt-6.1-sol#high` | `pd:triage` | `pd-archaeologist`, `pd-auditor`, `pd-review-architecture`, `pd-review-tests` |
+| `openai/gpt-6.1-terra#medium` | `pd:validate` | `pd-validator` |
+| `claude-agent/opus#high` | `pd:plan-review`, `pd:pr-sync`, `pd:review-pr`, `pd:audit`, `pd:slice`, `pd:resume` | `pd-plan-critic`, `pd-conflict-analyst`, `pd-slicer`, `pd-review-api-compat` |
+| `claude-agent/opus#medium` | `pd:knowledge` | `pd-review-synth` |
+| `claude-agent/sonnet#high` | `pd:exec`, `pd:quickfix` | `pd-implementer`, `pd-scout`, `pd-thread-resolver`, `pd-review-product` |
+| `claude-agent/sonnet#medium` | `pd:pr` | — |
+| `deepseek/deepseek-flash#low` | `pd:preflight`, `pd:doctor`, `pd:sync`, `pd:pr-status`, `pd:close`, `pd:reset` | — |
+| `deepseek/deepseek-flash#none` | `pd:editor`, `pd:open` | — |
 
 `package-map`, `upstream-rules` and `worktree-kit` name no model, and run on the
 session's.
+
+So the defaults need all three providers connected in Open Code
+(`opencode auth login`). A command whose model Open Code cannot use refuses to
+start, and an agent on one fails when it is called; `pdkit doctor` lists each
+such model before you find out that way. With fewer providers, map the rest to
+the ones you have:
+[One provider only](docs/configuration/05-models.md#one-provider-only).
 
 To put any of them on another model, another provider's included, give the
 plugin's entry a map. `opencode plugin add` wrote the entry as a string; write it
@@ -259,7 +271,8 @@ session stays on its model. An agent on such a model fails when it is called.
 `opencode models` lists what your providers offer, and the `models` line of
 `pdkit doctor` lists all 35 agents and commands with the model each one runs on,
 where that came from, and whether Open Code can use it — and every key it
-dropped.
+dropped. To try another model on one phase or one agent, and go back:
+[Trying another model](docs/configuration/05-models.md#trying-another-model).
 
 A command switches the session to its model and leaves it there for the phase:
 until you pick another with `/models`, or run the next command. Outside the
@@ -385,8 +398,9 @@ The last two do not block a change yet.
 
 Never executed in Open Code: an issue worked in it. Not the `quickfix` route, not
 `standard`, not `pr-sync` against a real review thread, not a run with planning
-and implementation on models of different providers, and not the gate or the
-ownership hook in a live session in the fork. Until they have run, what follows
+and implementation on models of different providers — which is what the
+defaults now name — and not the gate or the ownership hook in a live session in
+the fork. Until they have run, what follows
 is the Claude Code version's, and none of it is evidence for this one.
 
 The receipt gate rests on a hook Open Code calls experimental,

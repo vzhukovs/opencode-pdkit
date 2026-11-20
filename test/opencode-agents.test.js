@@ -46,27 +46,27 @@ const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const READS = ['read', 'grep', 'glob'];
 
 /**
- * Each agent as Claude Code ran it (§1.3 of the migration plan): the Open Code
- * actions its `tools:` amount to, and its model. That is the default its
- * frontmatter names as provider/model#variant (the class it had under Claude
- * Code, at the effort of the command that calls it).
+ * Each agent as it ships: the Open Code actions its `tools:` amount to, as
+ * Claude Code ran it (§1.3 of the migration plan), and its model — the default
+ * its frontmatter names as provider/model#variant. The defaults span three
+ * providers (docs/configuration/05-models.md).
  */
 const EXPECTED = {
-  'pd-archaeologist': { model: { providerID: 'claude-agent', id: 'sonnet', variant: 'high' }, actions: [...READS, 'shell'] },
-  'pd-auditor': { model: { providerID: 'claude-agent', id: 'opus', variant: 'high' }, actions: [...READS, 'shell'] },
-  'pd-conflict-analyst': { model: { providerID: 'claude-agent', id: 'opus', variant: 'medium' }, actions: [...READS, 'shell'] },
-  'pd-implementer': { model: { providerID: 'claude-agent', id: 'sonnet', variant: 'medium' }, actions: ['read', 'edit', 'grep', 'glob', 'shell'] },
+  'pd-archaeologist': { model: { providerID: 'openai', id: 'gpt-6.1-sol', variant: 'high' }, actions: [...READS, 'shell'] },
+  'pd-auditor': { model: { providerID: 'openai', id: 'gpt-6.1-sol', variant: 'high' }, actions: [...READS, 'shell'] },
+  'pd-conflict-analyst': { model: { providerID: 'claude-agent', id: 'opus', variant: 'high' }, actions: [...READS, 'shell'] },
+  'pd-implementer': { model: { providerID: 'claude-agent', id: 'sonnet', variant: 'high' }, actions: ['read', 'edit', 'grep', 'glob', 'shell'] },
   'pd-plan-critic': { model: { providerID: 'claude-agent', id: 'opus', variant: 'high' }, actions: READS },
-  'pd-review-api-compat': { model: { providerID: 'claude-agent', id: 'sonnet', variant: 'medium' }, actions: READS },
-  'pd-review-architecture': { model: { providerID: 'claude-agent', id: 'sonnet', variant: 'medium' }, actions: READS },
-  'pd-review-product': { model: { providerID: 'claude-agent', id: 'sonnet', variant: 'medium' }, actions: READS },
+  'pd-review-api-compat': { model: { providerID: 'claude-agent', id: 'opus', variant: 'high' }, actions: READS },
+  'pd-review-architecture': { model: { providerID: 'openai', id: 'gpt-6.1-sol', variant: 'high' }, actions: READS },
+  'pd-review-product': { model: { providerID: 'claude-agent', id: 'sonnet', variant: 'high' }, actions: READS },
   'pd-review-synth': { model: { providerID: 'claude-agent', id: 'opus', variant: 'medium' }, actions: ['read'] },
-  'pd-review-tests': { model: { providerID: 'claude-agent', id: 'sonnet', variant: 'medium' }, actions: READS },
+  'pd-review-tests': { model: { providerID: 'openai', id: 'gpt-6.1-sol', variant: 'high' }, actions: READS },
   'pd-scout': { model: { providerID: 'claude-agent', id: 'sonnet', variant: 'high' }, actions: [...READS, 'shell'] },
-  'pd-slicer': { model: { providerID: 'claude-agent', id: 'sonnet', variant: 'medium' }, actions: [...READS, 'shell'] },
+  'pd-slicer': { model: { providerID: 'claude-agent', id: 'opus', variant: 'high' }, actions: [...READS, 'shell'] },
   'pd-thread-resolver': { model: { providerID: 'claude-agent', id: 'sonnet', variant: 'high' }, actions: ['read', 'edit', 'grep', 'glob', 'shell'] },
   'pd-validator': {
-    model: { providerID: 'claude-agent', id: 'sonnet', variant: 'medium' },
+    model: { providerID: 'openai', id: 'gpt-6.1-terra', variant: 'medium' },
     actions: [
       'read',
       'shell',

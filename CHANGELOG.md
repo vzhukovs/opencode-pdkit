@@ -55,9 +55,13 @@ it is the same kit for another harness, installed into Open Code.
 4. Connect Playwright, for `/pd:validate`, in Open Code's global config; the
    `mcp:playwright` line of `pdkit doctor` prints the command
    ([Optional MCP servers](README.md#optional-mcp-servers)).
-5. Nothing to choose for models. Each command and agent names its own, of the
-   class it had, through Open Code's `claude-agent` provider — a Claude
-   subscription. For other models, give the plugin's entry a `models` map
+5. Connect the providers the defaults name (`opencode auth login`): a Claude
+   subscription, through Open Code's `claude-agent` provider, OpenAI and
+   DeepSeek. Or map the commands and agents to the models you have, in the
+   `models` map of the plugin's entry: with a Claude subscription alone,
+   sixteen entries put each on the class it had
+   ([One provider only](docs/configuration/05-models.md#one-provider-only)).
+   `!pdkit doctor` lists every model Open Code cannot use here
    ([Models](README.md#models)).
 6. Work an issue in one harness at a time. A task begun in Claude Code is
    started again in Open Code: `/pd:exec` does it.
@@ -84,9 +88,18 @@ with what stands in for each, is also in [section 6 of
   shows your line and, under it, `◈ the instructions of /pd:exec`; Claude Code
   showed the line alone. A command you queue behind work under way
   (`<leader>return`) shows the whole skill as your message.
+- **The defaults are not all Claude's.** 0.15.0 ran every phase and every
+  agent on a Claude model. Here the defaults name models of three providers —
+  Claude through `claude-agent`, OpenAI and DeepSeek: the plan is written by an
+  OpenAI model and reviewed by a Claude one, the code is written by a Claude
+  model and audited by an OpenAI one, and the commands that only run `pdkit`
+  and report are on a DeepSeek one. A command whose provider is not connected
+  refuses to start, and an agent on one fails when it is called. With a Claude
+  subscription alone, sixteen entries of `options.models` put each back on the
+  class it had
+  ([One provider only](docs/configuration/05-models.md#one-provider-only)).
 - **`/effort` does not reach the agents.** An agent's effort is the variant in
-  its model — by default the effort of the command that calls it. Change it
-  in the plugin's `options.models`.
+  its model. Change it in the plugin's `options.models`.
 - **Without the plugin, no gate.** When Open Code runs a session without the
   plugin — a config turns it off, its first install had no network, or it
   failed to load — nothing checks a push. Claude Code had the same edge, with
@@ -254,59 +267,82 @@ with what stands in for each, is also in [section 6 of
 ### Changed
 
 - **Agents name their default model the way Open Code reads one,
-  `provider/model#variant`.** The class is the one each agent had under Claude
-  Code, through the `claude-agent` provider (a Claude subscription). The
-  variant is the effort of the command that calls the agent, or of most of
-  the commands that call it: a session's `/effort` does not reach an agent in
-  Open Code. To run an agent on another model, `anthropic/claude-sonnet-5-5`
-  with an API key or any other provider's, map its ID in the plugin's
-  `options.models`; Open Code's own `agents.<id>.model` wins over both.
+  `provider/model#variant`.** The defaults span three providers — Claude
+  through the `claude-agent` provider (a subscription), OpenAI and DeepSeek —
+  and are not all the class each agent had under Claude Code: the table has
+  both. The variant is the effort, and each agent carries its own: a session's
+  `/effort` does not reach an agent in Open Code, and under Claude Code an
+  agent ran at the session's. To run an agent on another model, map its ID in
+  the plugin's `options.models`; Open Code's own `agents.<id>.model` wins over
+  both.
 
-  | Agent | Default | Called by |
+  | Agent | Default | Under Claude Code |
   |---|---|---|
-  | `pd-archaeologist` | `claude-agent/sonnet#high` | `/pd:triage` (high) |
-  | `pd-auditor` | `claude-agent/opus#high` | `/pd:audit` (high) |
-  | `pd-conflict-analyst` | `claude-agent/opus#medium` | `/pd:resume` (medium) |
-  | `pd-implementer` | `claude-agent/sonnet#medium` | `/pd:exec` (medium) |
-  | `pd-plan-critic` | `claude-agent/opus#high` | `/pd:plan-review` (high) |
-  | `pd-review-api-compat` | `claude-agent/sonnet#medium` | `/pd:review-pr`, `/pd:pr` (medium); `/pd:pr-sync` (high) |
-  | `pd-review-architecture` | `claude-agent/sonnet#medium` | `/pd:review-pr`, `/pd:pr` (medium); `/pd:pr-sync` (high) |
-  | `pd-review-product` | `claude-agent/sonnet#medium` | `/pd:review-pr`, `/pd:pr` (medium); `/pd:pr-sync` (high) |
-  | `pd-review-synth` | `claude-agent/opus#medium` | `/pd:review-pr`, `/pd:pr` (medium); `/pd:pr-sync` (high) |
-  | `pd-review-tests` | `claude-agent/sonnet#medium` | `/pd:review-pr`, `/pd:pr` (medium); `/pd:pr-sync` (high) |
-  | `pd-scout` | `claude-agent/sonnet#high` | `/pd:plan`, `/pd:triage` (high) |
-  | `pd-slicer` | `claude-agent/sonnet#medium` | `/pd:slice` (medium) |
-  | `pd-thread-resolver` | `claude-agent/sonnet#high` | `/pd:pr-sync` (high) |
-  | `pd-validator` | `claude-agent/sonnet#medium` | `/pd:validate` (medium) |
+  | `pd-archaeologist` | `openai/gpt-6.1-sol#high` | `sonnet` |
+  | `pd-auditor` | `openai/gpt-6.1-sol#high` | `opus` |
+  | `pd-conflict-analyst` | `claude-agent/opus#high` | `opus` |
+  | `pd-implementer` | `claude-agent/sonnet#high` | `sonnet` |
+  | `pd-plan-critic` | `claude-agent/opus#high` | `opus` |
+  | `pd-review-api-compat` | `claude-agent/opus#high` | `sonnet` |
+  | `pd-review-architecture` | `openai/gpt-6.1-sol#high` | `sonnet` |
+  | `pd-review-product` | `claude-agent/sonnet#high` | `sonnet` |
+  | `pd-review-synth` | `claude-agent/opus#medium` | `opus` |
+  | `pd-review-tests` | `openai/gpt-6.1-sol#high` | `sonnet` |
+  | `pd-scout` | `claude-agent/sonnet#high` | `sonnet` |
+  | `pd-slicer` | `claude-agent/opus#high` | `sonnet` |
+  | `pd-thread-resolver` | `claude-agent/sonnet#high` | `sonnet` |
+  | `pd-validator` | `openai/gpt-6.1-terra#medium` | `sonnet` |
 
-- **Commands name their default model the same way.** Each keeps the class of
-  its skill's `model:` under Claude Code, through the `claude-agent` provider,
-  and its `effort:` becomes the variant — the key itself is gone. To run a
-  command on another model, map `pd:<skill>` in the plugin's `options.models`.
+- **Commands name their default model the same way.** A skill's `effort:` is
+  gone: the variant says it. To run a command on another model, map
+  `pd:<skill>` in the plugin's `options.models`.
 
   | Command | Default | Under Claude Code |
   |---|---|---|
-  | `/pd:audit` | `claude-agent/sonnet#high` | `sonnet`, effort `high` |
-  | `/pd:close` | `claude-agent/sonnet#medium` | `sonnet`, effort `medium` |
-  | `/pd:doctor` | `claude-agent/sonnet#medium` | `sonnet`, effort `medium` |
-  | `/pd:editor` | `claude-agent/haiku#low` | `haiku`, effort `low` |
-  | `/pd:exec` | `claude-agent/sonnet#medium` | `sonnet`, effort `medium` |
+  | `/pd:audit` | `claude-agent/opus#high` | `sonnet`, effort `high` |
+  | `/pd:close` | `deepseek/deepseek-flash#low` | `sonnet`, effort `medium` |
+  | `/pd:doctor` | `deepseek/deepseek-flash#low` | `sonnet`, effort `medium` |
+  | `/pd:editor` | `deepseek/deepseek-flash#none` | `haiku`, effort `low` |
+  | `/pd:exec` | `claude-agent/sonnet#high` | `sonnet`, effort `medium` |
   | `/pd:knowledge` | `claude-agent/opus#medium` | `opus`, effort `medium` |
-  | `/pd:open` | `claude-agent/haiku#low` | `haiku`, effort `low` |
-  | `/pd:plan` | `claude-agent/opus#high` | `opus`, effort `high` |
+  | `/pd:open` | `deepseek/deepseek-flash#none` | `haiku`, effort `low` |
+  | `/pd:plan` | `openai/gpt-6-astra#high` | `opus`, effort `high` |
   | `/pd:plan-review` | `claude-agent/opus#high` | `opus`, effort `high` |
   | `/pd:pr` | `claude-agent/sonnet#medium` | `sonnet`, effort `medium` |
-  | `/pd:pr-status` | `claude-agent/sonnet#medium` | `sonnet`, effort `medium` |
+  | `/pd:pr-status` | `deepseek/deepseek-flash#low` | `sonnet`, effort `medium` |
   | `/pd:pr-sync` | `claude-agent/opus#high` | `opus`, effort `high` |
-  | `/pd:preflight` | `claude-agent/sonnet#medium` | `sonnet`, effort `medium` |
-  | `/pd:quickfix` | `claude-agent/sonnet#medium` | `sonnet`, effort `medium` |
-  | `/pd:reset` | `claude-agent/sonnet#medium` | `sonnet`, effort `medium` |
-  | `/pd:resume` | `claude-agent/sonnet#medium` | `sonnet`, effort `medium` |
-  | `/pd:review-pr` | `claude-agent/opus#medium` | `opus`, effort `medium` |
-  | `/pd:slice` | `claude-agent/sonnet#medium` | `sonnet`, effort `medium` |
-  | `/pd:sync` | `claude-agent/sonnet#medium` | `sonnet`, effort `medium` |
-  | `/pd:triage` | `claude-agent/opus#high` | `opus`, effort `high` |
-  | `/pd:validate` | `claude-agent/sonnet#medium` | `sonnet`, effort `medium` |
+  | `/pd:preflight` | `deepseek/deepseek-flash#low` | `sonnet`, effort `medium` |
+  | `/pd:quickfix` | `claude-agent/sonnet#high` | `sonnet`, effort `medium` |
+  | `/pd:reset` | `deepseek/deepseek-flash#low` | `sonnet`, effort `medium` |
+  | `/pd:resume` | `claude-agent/opus#high` | `sonnet`, effort `medium` |
+  | `/pd:review-pr` | `claude-agent/opus#high` | `opus`, effort `medium` |
+  | `/pd:slice` | `claude-agent/opus#high` | `sonnet`, effort `medium` |
+  | `/pd:sync` | `deepseek/deepseek-flash#low` | `sonnet`, effort `medium` |
+  | `/pd:triage` | `openai/gpt-6.1-sol#high` | `opus`, effort `high` |
+  | `/pd:validate` | `openai/gpt-6.1-terra#medium` | `sonnet`, effort `medium` |
+
+- **Where a default went to a cheaper class or a smaller variant, this is
+  what a machine decides there, and what it does not.**
+  - `/pd:preflight`, `/pd:doctor`, `/pd:sync`, `/pd:pr-status`, `/pd:close`
+    and `/pd:reset`, from Sonnet at `medium` to DeepSeek Flash at `low`: each
+    runs `pdkit` and reports what it printed. The checks decide in preflight,
+    and `pdkit state --to preflight-green` reads their record, not the
+    session; `pdkit close --finish` refuses while a pull request is open;
+    `pdkit reset` removes nothing without `--confirm`; and what `/pd:close`
+    proposes for the knowledge base, a person approves.
+  - `/pd:editor` and `/pd:open`, from Haiku at `low` to DeepSeek Flash at
+    `none`: one `pdkit` command opens a directory.
+  - `/pd:validate` and `pd-validator`, from Sonnet to GPT-6.1 Terra: the
+    outcome of a step comes from the evidence attached to it, and
+    `pdkit validate attach` has no `--status`.
+  - `/pd:triage`, from Opus to GPT-6.1 Sol: the person agrees the requirement
+    set before it is allocated, and on the `redo` route `pdkit` refuses to
+    leave `triaged` without the archaeology. The route is the model's call,
+    and no machine re-checks it.
+  - `pd-auditor`, from Opus to GPT-6.1 Sol: `pdkit audit` settles ownership,
+    receipts and orphans before the agent reads the diff. What is left is the
+    agent's judgment, which no machine re-checks — now on a model of another
+    provider than the one that wrote the code.
 
 - **`pdkit cost` reads Open Code's session database**, not Claude Code's
   transcripts: one call per step, with its tokens; a subagent is a child

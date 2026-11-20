@@ -2,7 +2,7 @@
 name: doctor
 description: "Check the pdkit environment: required tools, optional MCP servers, hook wiring, and gate self-test."
 disable-model-invocation: true
-model: claude-agent/sonnet#medium
+model: deepseek/deepseek-flash#low
 ---
 
 Report what is present, what is missing, and what degrades as a result. Never

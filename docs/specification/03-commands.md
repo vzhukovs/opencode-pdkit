@@ -14,31 +14,34 @@ as a command a person types, and the model is never offered it.
 
 | Command | In | Out | State | Model | Gate |
 |---|---|---|---|---|---|
-| `/pd:doctor` | — | environment report | — | sonnet#medium | — |
-| `/pd:sync` | — | fork and worktree status | — | sonnet#medium | — |
-| `/pd:editor [<issue>]` | issue, or the current branch's | the issue's worktree opened in `editor.path` | — | haiku#low | — |
-| `/pd:open home\|issue\|tree [<issue>]` | target, issue | `$PDKIT_HOME`, `issues/<n>` or the worktree opened in the file manager | — | haiku#low | — |
-| `/pd:triage [<issue>]` | number/URL on the first line, any further lines as prior context; or nothing | with a number: `issue.md` including what came with the command, draft R-set, route. Without: a backlog shortlist, and nothing is written | `triaged` / — | opus#high | — |
-| `/pd:plan <issue>` | issue | `research.md`, `plan.md`, open questions | `planned` | opus#high + sonnet scouts | human: approval |
+| `/pd:doctor` | — | environment report | — | flash#low | — |
+| `/pd:sync` | — | fork and worktree status | — | flash#low | — |
+| `/pd:editor [<issue>]` | issue, or the current branch's | the issue's worktree opened in `editor.path` | — | flash#none | — |
+| `/pd:open home\|issue\|tree [<issue>]` | target, issue | `$PDKIT_HOME`, `issues/<n>` or the worktree opened in the file manager | — | flash#none | — |
+| `/pd:triage [<issue>]` | number/URL on the first line, any further lines as prior context; or nothing | with a number: `issue.md` including what came with the command, draft R-set, route. Without: a backlog shortlist, and nothing is written | `triaged` / — | sol#high | — |
+| `/pd:plan <issue>` | issue | `research.md`, `plan.md`, open questions | `planned` | astra#high + sonnet scouts | human: approval |
 | `/pd:plan-review <issue>` | issue | `plan-review.md` | — | opus#high, fresh | — |
-| `/pd:exec <issue> [T*]` | issue/task | code, commits, `receipts/*` | `implemented` | sonnet#medium + sonnet workers | — |
-| `/pd:validate <issue>` | issue | `validation.md` + artefacts | `validated` | sonnet#medium | — |
-| `/pd:audit <issue>` | issue | `audit.md` | `audited` | sonnet#high + opus auditor, fresh | — |
-| `/pd:slice <issue>` | issue | `slices.md` — the PR graph | `sliced` | sonnet#medium + sonnet slicer, fresh | human: approval |
-| `/pd:preflight <issue\|slice>` | issue/slice | pass/fail + output | `preflight-green` | sonnet#medium | — |
+| `/pd:exec <issue> [T*]` | issue/task | code, commits, `receipts/*` | `implemented` | sonnet#high + sonnet workers | — |
+| `/pd:validate <issue>` | issue | `validation.md` + artefacts | `validated` | terra#medium | — |
+| `/pd:audit <issue>` | issue | `audit.md` | `audited` | opus#high + sol auditor, fresh | — |
+| `/pd:slice <issue>` | issue | `slices.md` — the PR graph | `sliced` | opus#high + opus slicer, fresh | human: approval |
+| `/pd:preflight <issue\|slice>` | issue/slice | pass/fail + output | `preflight-green` | flash#low | — |
 | `/pd:pr <issue> [slice]` | issue | branches, PR bodies, open PRs | `pr-open` | sonnet#medium | **push gate** |
-| `/pd:pr-status` | — | dashboard across open PRs | — | sonnet#medium | — |
+| `/pd:pr-status` | — | dashboard across open PRs | — | flash#low | — |
 | `/pd:pr-sync <pr#>` | PR | decision table → plan amendment → fixes → `pr diff` → replies | — | opus#high + sonnet resolvers | human: the decisions, the amendment; **push gate** after the diff; replies |
-| `/pd:resume <issue>` | issue | drift analysis, rebase, amendment | — | sonnet#medium + opus conflict analyst | — |
-| `/pd:review-pr <pr#>` | PR | `reviews/<pr>.md` | — | opus#medium + 4 sonnet axes | — |
-| `/pd:quickfix <issue>` | issue | fix + PR | `pr-open` | sonnet#medium | **push gate** |
-| `/pd:close <issue>` | issue | knowledge harvest, worktree cleanup | `merged` | sonnet#medium | — |
-| `/pd:reset <issue>` | issue | what would go and what would stay; with `--confirm`, one issue forgotten | record removed, so `new` | sonnet#medium | human: `--confirm` |
+| `/pd:resume <issue>` | issue | drift analysis, rebase, amendment | — | opus#high + opus conflict analyst | — |
+| `/pd:review-pr <pr#>` | PR | `reviews/<pr>.md` | — | opus#high + 4 axes on sol, opus and sonnet | — |
+| `/pd:quickfix <issue>` | issue | fix + PR | `pr-open` | sonnet#high | **push gate** |
+| `/pd:close <issue>` | issue | knowledge harvest, worktree cleanup | `merged` | flash#low | — |
+| `/pd:reset <issue>` | issue | what would go and what would stay; with `--confirm`, one issue forgotten | record removed, so `new` | flash#low | human: `--confirm` |
 | `/pd:knowledge` | — | revision of `knowledge/` | — | opus#medium | — |
 
-The Model column is the command's default — `model:` in its `SKILL.md`, every one
-`claude-agent/…`, with the effort as the variant after `#` — and the class of the
-agents it calls, whose own defaults are in [section 5](05-agents.md). A command
+The Model column is the command's default — `model:` in its `SKILL.md`, in
+short, with the effort as the variant after `#` — and the model of the agents it
+calls, whose own defaults are in [section 5](05-agents.md). `opus` and `sonnet`
+are `claude-agent/opus` and `claude-agent/sonnet`; `astra`, `sol` and `terra`,
+`openai/gpt-6-astra`, `openai/gpt-6.1-sol` and `openai/gpt-6.1-terra`; `flash`,
+`deepseek/deepseek-flash`. A command
 checks its model against the ones Open Code can use and switches the session to
 it for the phase; `options.models` in the plugin's entry overrides it.
 

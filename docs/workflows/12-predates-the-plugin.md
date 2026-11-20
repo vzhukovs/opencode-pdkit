@@ -33,7 +33,7 @@ pdkit issue adopt 17577 --pr 17577 --branch … --reason "…"     no model: a t
 | Step | Session | Default model | Subagents |
 |---|---|---|---|
 | `pdkit issue adopt …` | **terminal**, or a `/pd:resume` session in the existing tree | — | — |
-| next: `/pd:pr-sync 17577` | **new** · the existing tree | `opus#high` | first round: the four `pd-review-*` · `sonnet#medium`, `pd-review-synth` · `opus#medium`, then `pd-thread-resolver` · `sonnet#high` |
+| next: `/pd:pr-sync 17577` | **new** · the existing tree | `opus#high` | first round: the four `pd-review-*` · `sol#high` for architecture and tests, `opus#high` for api-compat, `sonnet#high` for product, `pd-review-synth` · `opus#medium`, then `pd-thread-resolver` · `sonnet#high` |
 
 ---
 

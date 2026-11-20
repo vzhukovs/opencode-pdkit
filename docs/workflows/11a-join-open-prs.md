@@ -43,7 +43,7 @@ pdkit pr supersede 19829 --by <new> --body close.md
 
 | Step | Session | Default model | Subagents |
 |---|---|---|---|
-| `checkpoint` … `slice render` | **new** · issue tree running `/pd:slice 19818`, or **terminal** | `sonnet#medium` | `pd-slicer` · `sonnet#medium` |
+| `checkpoint` … `slice render` | **new** · issue tree running `/pd:slice 19818`, or **terminal** | `opus#high` | `pd-slicer` · `opus#high` |
 | `/pd:pr 19818` | **new** · issue tree | `sonnet#medium` | — |
 | `pdkit pr supersede`, `pdkit gate open --kind reply` | **terminal** | — | — |
 

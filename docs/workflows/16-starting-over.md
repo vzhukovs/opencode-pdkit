@@ -75,8 +75,8 @@ pdkit reset 12345 --confirm
 
 | Step | Session | Default model | Subagents |
 |---|---|---|---|
-| `pdkit reset 12345`, then `--confirm` | **terminal**, or **new** · main checkout running `/pd:reset 12345` on `sonnet#medium` | — | — |
-| `/pd:triage 12345` | **new** · main checkout | `opus#high` | `pd-scout` · `sonnet#high` |
+| `pdkit reset 12345`, then `--confirm` | **terminal**, or **new** · main checkout running `/pd:reset 12345` on `flash#low` | — | — |
+| `/pd:triage 12345` | **new** · main checkout | `sol#high` | `pd-scout` · `sonnet#high` |
 
 Not from inside the issue's tree when `--worktrees` is passed: the tree is what
 it removes.

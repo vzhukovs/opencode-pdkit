@@ -104,7 +104,7 @@ a `recommendation` field, that is the boundary being crossed.
 | an artefact's shape | `templates/*.md`, registered in `TEMPLATES` in `lib/render.js` | `test/render.test.js` |
 | what a skill does | `skills/<name>/SKILL.md` | `test/invariants.test.js` checks that every `pdkit` command and every `/pd:*` a skill names exists, and that plugin files are reached through `${CLAUDE_PLUGIN_ROOT}/`; `test/opencode-commands.test.js` for what the frontmatter registers |
 | what an agent does | `agents/pd-<name>.md` | the same `${CLAUDE_PLUGIN_ROOT}/` check; `test/opencode-agents.test.js` for its tools and its model |
-| a default model | `model:` of the skill or the agent | `DEFAULTS` in `test/opencode-commands.test.js`, `EXPECTED` in `test/opencode-agents.test.js`; and a line in the CHANGELOG — see below |
+| a default model | `model:` of the skill or the agent | `DEFAULTS` in `test/opencode-commands.test.js`, `EXPECTED` in `test/opencode-agents.test.js`; a model no default named before also goes into `SHIPPED`, the catalog both `test/opencode-commands.test.js` and `test/doctor.test.js` check the defaults against; and a line in the CHANGELOG — see below |
 | a check CI runs on a real Open Code | `scripts/`, which the package does not ship; the jobs in `.github/workflows/ci.yml` | `test/check-plugin-load.test.js`, `test/check-receipt-gate.test.js` |
 | the shipped knowledge base | `knowledge/*.md` | `pdkit knowledge check` |
 | the documentation | `docs/<area>/`, one file per section, part or scenario; the four root files | `test/invariants.test.js` checks every `/pd:*` named in `docs/` and `README.md` |

@@ -1,7 +1,7 @@
 ---
 name: pd-archaeologist
 description: "Reconstructs history: reverts, regressions, and why a previous attempt failed."
-model: claude-agent/sonnet#high
+model: openai/gpt-6.1-sol#high
 tools: Read, Grep, Glob, Bash
 ---
 

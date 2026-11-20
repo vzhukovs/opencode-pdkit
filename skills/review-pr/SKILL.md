@@ -3,7 +3,7 @@ name: review-pr
 description: "Review someone else's pull request along four parallel axes."
 argument-hint: "<pr-number>"
 disable-model-invocation: true
-model: claude-agent/opus#medium
+model: claude-agent/opus#high
 ---
 
 Outside the issue lifecycle entirely. Nothing here moves a state machine, and

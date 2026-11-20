@@ -2,7 +2,7 @@
 name: sync
 description: "Report fork status against upstream and the state of every worktree."
 disable-model-invocation: true
-model: claude-agent/sonnet#medium
+model: deepseek/deepseek-flash#low
 ---
 
 Read-only. Never rebase, never push, never reset from here — this command

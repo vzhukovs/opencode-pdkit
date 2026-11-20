@@ -68,44 +68,54 @@ const CATALOG = [
 ];
 
 /**
- * The models the shipped defaults name, as Open Code 2.3.0 lists them for a
- * Claude subscription: the three aliases, each with five variants.
+ * The models the shipped defaults name, as Open Code 2.3.0 lists them: two
+ * aliases of a Claude subscription, three of OpenAI's and one of DeepSeek's,
+ * each with the variants it has there.
  */
-const SUBSCRIPTION = ['opus', 'sonnet', 'haiku'].map((id) => ({
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+const SHIPPED = [
+  ['claude-agent', 'opus', EFFORTS],
+  ['claude-agent', 'sonnet', EFFORTS],
+  ['openai', 'gpt-6-astra', EFFORTS],
+  ['openai', 'gpt-6.1-sol', EFFORTS],
+  ['openai', 'gpt-6.1-terra', ['none', ...EFFORTS]],
+  ['deepseek', 'deepseek-flash', ['none', 'low', 'high', 'max']],
+].map(([providerID, id, variants]) => ({
   id,
   modelID: id,
-  providerID: 'claude-agent',
+  providerID,
   enabled: true,
-  variants: ['low', 'medium', 'high', 'xhigh', 'max'].map((variant) => ({ id: variant })),
+  variants: variants.map((variant) => ({ id: variant })),
 }));
 
 /**
- * The default of each command a person invokes (decisions/T5.B): the class of
- * its Claude Code `model:` through a Claude subscription, its `effort:` as the
- * variant.
+ * The default of each command a person invokes: the model its `model:` names,
+ * the effort as the variant. They span three providers, and a person with
+ * fewer maps the rest in `options.models`
+ * (docs/configuration/05-models.md).
  */
 const DEFAULTS = Object.freeze({
-  audit: 'claude-agent/sonnet#high',
-  close: 'claude-agent/sonnet#medium',
-  doctor: 'claude-agent/sonnet#medium',
-  editor: 'claude-agent/haiku#low',
-  exec: 'claude-agent/sonnet#medium',
+  audit: 'claude-agent/opus#high',
+  close: 'deepseek/deepseek-flash#low',
+  doctor: 'deepseek/deepseek-flash#low',
+  editor: 'deepseek/deepseek-flash#none',
+  exec: 'claude-agent/sonnet#high',
   knowledge: 'claude-agent/opus#medium',
-  open: 'claude-agent/haiku#low',
-  plan: 'claude-agent/opus#high',
+  open: 'deepseek/deepseek-flash#none',
+  plan: 'openai/gpt-6-astra#high',
   'plan-review': 'claude-agent/opus#high',
   pr: 'claude-agent/sonnet#medium',
-  'pr-status': 'claude-agent/sonnet#medium',
+  'pr-status': 'deepseek/deepseek-flash#low',
   'pr-sync': 'claude-agent/opus#high',
-  preflight: 'claude-agent/sonnet#medium',
-  quickfix: 'claude-agent/sonnet#medium',
-  reset: 'claude-agent/sonnet#medium',
-  resume: 'claude-agent/sonnet#medium',
-  'review-pr': 'claude-agent/opus#medium',
-  slice: 'claude-agent/sonnet#medium',
-  sync: 'claude-agent/sonnet#medium',
-  triage: 'claude-agent/opus#high',
-  validate: 'claude-agent/sonnet#medium',
+  preflight: 'deepseek/deepseek-flash#low',
+  quickfix: 'claude-agent/sonnet#high',
+  reset: 'deepseek/deepseek-flash#low',
+  resume: 'claude-agent/opus#high',
+  'review-pr': 'claude-agent/opus#high',
+  slice: 'claude-agent/opus#high',
+  sync: 'deepseek/deepseek-flash#low',
+  triage: 'openai/gpt-6.1-sol#high',
+  validate: 'openai/gpt-6.1-terra#medium',
 });
 
 /**
@@ -120,7 +130,7 @@ const DEFAULTS = Object.freeze({
  * `promptFails` makes the call reject after them. A synthetic message goes
  * through no hook (F79); `syntheticFails` makes its call reject.
  */
-async function register({ root = ROOT, models = {}, catalog = [...CATALOG, ...SUBSCRIPTION], listFails = false, refuse = [], fail = [], promptFails = false, syntheticFails = false } = {}) {
+async function register({ root = ROOT, models = {}, catalog = [...CATALOG, ...SHIPPED], listFails = false, refuse = [], fail = [], promptFails = false, syntheticFails = false } = {}) {
   const lines = [];
   const calls = [];
   const transforms = { command: [], skill: [] };
