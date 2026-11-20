@@ -183,6 +183,9 @@ with what stands in for each, is also in [section 6 of
   as `git reset --soft <base> && git commit`, is the model's to put in
   PowerShell's.
 - **On Windows, a schema file gets its reminder.** Under Fixed.
+- **On Windows, `pdkit doctor` finds the pnpm that corepack or npm puts on
+  PATH.** Under Fixed. git and gh are still found as the Claude Code version
+  found them.
 
 ### Added
 
@@ -526,6 +529,19 @@ with what stands in for each, is also in [section 6 of
 
 ### Fixed
 
+- On Windows, `pdkit doctor` did not find what npm installs: Open Code from
+  `npm install -g @opencode/cli`, and pnpm from corepack (`pnpm.CMD` beside
+  `node.exe`) or npm, are on PATH as a `.cmd`, which Node does not start
+  without a shell. The `pnpm` line said `pnpm: not found`, a failure, while
+  preflight ran the same pnpm; `opencode` from a terminal said `opencode: not
+  found`, and `models`, `commands`, `permissions` and `mcp` could not tell. Both
+  are now looked for as the shell looks for them — the directories of PATH in
+  order, and in each the extensions of PATHEXT — and the `.cmd` that npm, pnpm
+  or corepack writes is read for the program it starts, which is started
+  directly: a path with `&`, `%` or `^` in it reaches Open Code as it is. A
+  `.cmd` written any other way is not run, and its line says it cannot tell,
+  with the file. The working directory, which is a repository, is no longer
+  looked in first for either.
 - On Windows, writing a file under `schemas/` (or a `*.schema.*` file) never
   got the reminder to run `pnpm generate:schemas`: the path came with `\`
   between its parts, and the check looked for `/`. The file got the license

@@ -25,6 +25,12 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { platform, tmpdir } from 'node:os';
+import { delimiter, dirname, join } from 'node:path';
+
+import { UNREADABLE } from '../lib/program.js';
+import { installScript, withPath } from './helpers/npm-shim.js';
 
 import {
   DIRECTORY_HEADER,
@@ -179,6 +185,13 @@ describe('whether the background service runs', () => {
     assert.deepEqual(await serviceStatus({ exec: runner }), { ok: false, error: 'opencode: not found' });
   });
 
+  test('an opencode on PATH as a batch file it does not run is said in the words that name the file', async () => {
+    const message = 'opencode is C:\\tools\\opencode.cmd, a batch file npm, pnpm or corepack did not write, and pdkit runs none through cmd.exe';
+    const { runner } = cli({ status: { error: Object.assign(new Error(message), { code: UNREADABLE }) } });
+
+    assert.deepEqual(await serviceStatus({ exec: runner }), { ok: false, error: message });
+  });
+
   test('a failure is the first line the CLI put on stderr', async () => {
     const error = Object.assign(new Error('Command failed: opencode service status'), { code: 1 });
     const { runner } = cli({ status: { error, stderr: '\nError: Failed to read service config\n    at …\n' } });
@@ -248,6 +261,36 @@ describe('asking only a background service that runs', () => {
 
     assert.deepEqual(await ask('/api/plugin'), { ok: false, error: 'opencode: not found' });
     assert.equal(calls.length, 1);
+  });
+});
+
+// Not a stand-in for execFile this time: the opencode on PATH is a script that
+// prints what it was given. On Windows it is what `npm install -g` leaves
+// there — an opencode.cmd that runs node with the package's script — so the
+// .cmd needs node's directory on PATH after its own.
+describe('the opencode it runs', () => {
+  const POSIX = platform() !== 'win32';
+  const STAND_IN = "console.log(process.argv[2] === 'service' ? 'http://127.0.0.1:4096' : JSON.stringify(process.argv.slice(2)))";
+
+  test('is the one on PATH — on Windows, the .cmd npm leaves there — and it gets the directory as it is', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pdkit-opencode-'));
+    // What cmd.exe would read as its own: a variable, a command separator, its
+    // escape character, delayed expansion, a space and parentheses.
+    const directory = join(dir, 'R&D 100%PATH% ^x !y (z)');
+    try {
+      if (POSIX) await writeFile(join(dir, 'opencode'), `#!/usr/bin/env node\n${STAND_IN}\n`, { mode: 0o755 });
+      else await installScript(dir, { command: 'opencode', pkg: 'opencode-stand-in', script: STAND_IN });
+
+      await withPath(`${dir}${delimiter}${dirname(process.execPath)}`, async () => {
+        assert.deepEqual(await serviceStatus(), { ok: true, running: true, url: 'http://127.0.0.1:4096' });
+        assert.deepEqual(await askRunning({ directory })('/api/mcp'), {
+          ok: true,
+          data: ['api', 'GET', '/api/mcp', '-H', `${DIRECTORY_HEADER}:${directory}`],
+        });
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

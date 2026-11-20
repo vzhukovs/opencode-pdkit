@@ -31,9 +31,10 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { access, cp, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { homedir, platform, tmpdir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { corepackShim, installProgram, installScript, placeProgram, withPath } from './helpers/npm-shim.js';
 import { database } from './helpers/opencode-db.js';
 import { cleanup, commitAll, initRepo } from './helpers/repo-fixture.js';
 import {
@@ -49,6 +50,7 @@ import {
   checkOpenCodeVersion,
   checkPermissions,
   checkPlugin,
+  checkTools,
   diagnose,
   format,
   gateSelftest,
@@ -1271,6 +1273,63 @@ describe('the Node check', () => {
   });
 });
 
+// The programs pdkit runs, each run once to see that it is there. On Windows
+// pnpm is on PATH as a .cmd when corepack provides it or npm installs it, and
+// the doctor finds it as the shell does; git and gh are found by execFile, as
+// in the Claude Code version, which starts only an .exe or a .com.
+describe('the programs pdkit runs', () => {
+  const ENGINES = { node: '>=22.13.0', opencode: '>=2.3.0' };
+  // The server's version, so that opencode itself is not run.
+  const ENV = { PDKIT_OPENCODE_VERSION: '2.3.0' };
+
+  test('pnpm on PATH is run, and the first line it prints is the detail — on Windows, corepack’s pnpm.CMD', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pdkit-pnpm-'));
+    try {
+      if (POSIX) {
+        await writeFile(join(dir, 'pnpm'), '#!/bin/sh\necho 11.0.0\n', { mode: 0o755 });
+      } else {
+        await mkdir(join(dir, 'node_modules', 'corepack', 'dist'), { recursive: true });
+        await writeFile(join(dir, 'node_modules', 'corepack', 'dist', 'pnpm.js'), 'console.log("11.0.0")\n');
+        await writeFile(join(dir, 'pnpm.CMD'), corepackShim('node_modules\\corepack\\dist\\pnpm.js'));
+      }
+      const checks = await withPath(`${dir}${delimiter}${dirname(process.execPath)}`, () => checkTools(ENGINES, ENV));
+
+      assert.deepEqual(find(checks, 'pnpm'), { id: 'pnpm', level: 'required', status: 'ok', detail: '11.0.0' });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('on Windows, a pnpm.cmd none of npm, pnpm and corepack wrote is not run: cannot tell, which is not a failure', { skip: POSIX && 'npm leaves a .cmd on Windows only' }, async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pdkit-pnpm-'));
+    try {
+      await writeFile(join(dir, 'pnpm.cmd'), '@echo off\r\necho 11.0.0\r\n');
+      const checks = await withPath(dir, () => checkTools(ENGINES, ENV));
+
+      assert.deepEqual(find(checks, 'pnpm'), {
+        id: 'pnpm',
+        level: 'required',
+        status: 'skip',
+        detail: `cannot tell: pnpm is ${join(dir, 'pnpm.cmd')}, a batch file npm, pnpm or corepack did not write, and pdkit runs none through cmd.exe`,
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('on Windows, gh is found as the Claude Code version found it: a gh.cmd is not', { skip: POSIX && 'npm leaves a .cmd on Windows only' }, async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pdkit-gh-'));
+    try {
+      await installScript(dir, { command: 'gh', pkg: 'gh-stand-in', script: "console.log('gh version 2.0.0')" });
+      const checks = await withPath(`${dir}${delimiter}${dirname(process.execPath)}`, () => checkTools(ENGINES, ENV));
+
+      assert.deepEqual(find(checks, 'gh'), { id: 'gh', level: 'required', status: 'fail', detail: 'gh: not found' });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 // D9: Open Code loads a plugin on any host, whatever engines.opencode says
 // (F241), so the doctor holds the host to the minimum. The version that counts
 // is the server's, which the plugin puts on every shell command; the CLI's can
@@ -1358,23 +1417,75 @@ describe('the Open Code that runs the plugin', () => {
     }
   });
 
-  test('runs the opencode of that PATH, and reads what it prints', { skip: !POSIX && 'T10.11: the stand-in is a shell script, and execFile runs no opencode.cmd' }, async () => {
+  // On Windows the stand-in is what `npm install -g` leaves on PATH: an
+  // opencode.cmd that runs node with the package's script. The .cmd needs
+  // node, so its directory is on PATH after the stand-in's.
+  test('runs the opencode of that PATH, and reads what it prints', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'pdkit-opencode-'));
-    const stand = async (body) => writeFile(join(dir, 'opencode'), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+    const env = onPath(POSIX ? dir : `${dir}${delimiter}${dirname(process.execPath)}`);
+    const stand = POSIX
+      ? async (body) => writeFile(join(dir, 'opencode'), `#!/bin/sh\n${body}\n`, { mode: 0o755 })
+      : async (body) => installScript(dir, { command: 'opencode', pkg: 'opencode-stand-in', script: body });
+    const [version, old, broken] = POSIX
+      ? ['[ "$1" = --version ] && echo "opencode v2.4.1"', 'echo 1.19.5', 'echo "cannot start" >&2; exit 3']
+      : ["if (process.argv[2] === '--version') console.log('opencode v2.4.1')", "console.log('1.19.5')", "console.error('cannot start'); process.exit(3)"];
     try {
-      await stand('[ "$1" = --version ] && echo "opencode v2.4.1"');
-      assert.equal((await checkOpenCodeVersion(RANGE, { env: onPath(dir) })).detail, `2.4.1, ${TERMINAL}; opencode-pdkit is tested on 2.3.0`);
+      await stand(version);
+      assert.equal((await checkOpenCodeVersion(RANGE, { env })).detail, `2.4.1, ${TERMINAL}; opencode-pdkit is tested on 2.3.0`);
 
-      await stand('echo 1.19.5');
-      assert.equal((await checkOpenCodeVersion(RANGE, { env: onPath(dir) })).detail, `1.19.5, ${TERMINAL}${VERSIONS[4][2]}`);
+      await stand(old);
+      assert.equal((await checkOpenCodeVersion(RANGE, { env })).detail, `1.19.5, ${TERMINAL}${VERSIONS[4][2]}`);
 
-      await stand('echo "cannot start" >&2; exit 3');
-      const broken = await checkOpenCodeVersion(RANGE, { env: onPath(dir) });
-      assert.equal(broken.status, 'fail');
-      assert.match(broken.detail, /^opencode --version: Command failed: opencode --version/);
+      await stand(broken);
+      const failed = await checkOpenCodeVersion(RANGE, { env });
+      assert.equal(failed.status, 'fail');
+      assert.match(failed.detail, /^opencode --version: Command failed: opencode --version/);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  // Open Code's own package: its command is bin/opencode.exe, and the .cmd npm
+  // leaves runs that. The stand-in program is this node, so what it prints for
+  // --version is node's, which names no Open Code version.
+  test('on Windows, the opencode.cmd npm leaves for Open Code’s opencode.exe is that program', { skip: POSIX && 'npm leaves a .cmd on Windows only' }, async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pdkit-opencode-'));
+    try {
+      await installProgram(dir, { command: 'opencode', pkg: join('@opencode', 'cli'), program: process.execPath });
+
+      assert.deepEqual(await checkOpenCodeVersion(RANGE, { env: onPath(dir) }), {
+        id: 'opencode',
+        level: 'required',
+        status: 'skip',
+        detail: `cannot tell: opencode --version printed "${process.version}", not a version`,
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The shell runs the first opencode PATH has, whatever its form: PATH in
+  // order, and in each directory the extensions of PATHEXT in theirs.
+  test('on Windows, the first directory of PATH that has an opencode is the one it runs, .cmd or .exe', { skip: POSIX && 'npm leaves a .cmd on Windows only' }, async () => {
+    const first = await mkdtemp(join(tmpdir(), 'pdkit-opencode-'));
+    const second = await mkdtemp(join(tmpdir(), 'pdkit-opencode-'));
+    try {
+      await installScript(first, { command: 'opencode', pkg: 'opencode-stand-in', script: "console.log('opencode v2.4.1')" });
+      await placeProgram(join(second, 'opencode.exe'), process.execPath);
+      const env = onPath([first, second, dirname(process.execPath)].join(delimiter));
+
+      assert.equal((await checkOpenCodeVersion(RANGE, { env })).detail, `2.4.1, ${TERMINAL}; opencode-pdkit is tested on 2.3.0`);
+    } finally {
+      await rm(first, { recursive: true, force: true });
+      await rm(second, { recursive: true, force: true });
+    }
+  });
+
+  test('an opencode on PATH as a batch file it does not run: cannot tell, with the file, not a failure', async () => {
+    const error = 'opencode is C:\\tools\\opencode.cmd, a batch file npm, pnpm or corepack did not write, and pdkit runs none through cmd.exe';
+    const entry = await checkOpenCodeVersion(RANGE, { env: {}, cli: async () => ({ ok: false, stdout: '', error, unread: true }) });
+
+    assert.deepEqual(entry, { id: 'opencode', level: 'required', status: 'skip', detail: `cannot tell: ${error}` });
   });
 
   test('output that names no version: cannot tell, with what it printed', async () => {
