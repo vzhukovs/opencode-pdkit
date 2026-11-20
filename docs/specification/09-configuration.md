@@ -59,9 +59,17 @@ config uses them as enum members next to `auto`.
 | `exec.max_attempts` | how many failed captures block a task; zero switches blocking off |
 | `review.bots_collapsed`, `review.bot_escalate` | which accounts collapse, and which words expand one back |
 
-There is **no `routing:` block** and no model selection here at all: a skill's own
-model can only be set in its frontmatter, so a config key would control the
-subagents and not the skill.
+There is **no `routing:` block** and no model selection here at all, and that
+is deliberate: changing `pd-auditor`'s model changes what acceptance is worth,
+and that should not turn on a key nobody notices. Each command and agent names
+its default model in its own frontmatter, `model:`. What overrides a default is
+the person's choice, made in one place: a map in the plugin's entry of Open
+Code's global config, `options.models`, which reaches commands and agents alike
+(for an agent, Open Code's own `agents.<id>.model` is stronger still).
+`pdkit doctor` shows, for every agent and command, the model it runs on and
+where that came from. The order in which the sources win is in
+[section 5](05-agents.md); how to write the map, in
+[`configuration/05-models.md`](../configuration/05-models.md).
 
 ## The package map
 
