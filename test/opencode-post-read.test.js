@@ -52,7 +52,6 @@ import { cutDecision } from '../lib/hooks/cut.js';
 import { logOf } from './helpers/server-log.js';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
-const POSIX = process.platform !== 'win32';
 
 /** Where the rule is, as the message names it: under the plugin's root, as runHook passes it. */
 const RULE = `${PLUGIN_ROOT}/knowledge/pitfalls.md`;
@@ -590,7 +589,7 @@ describe('no answer leaves the result as the tool gave it, and says why', () => 
     assert.deepEqual(now, before);
   }
 
-  test('no node on the PATH of the server', { skip: !POSIX && 'T10.10' }, async (t) => {
+  test('no node on the PATH of the server', async (t) => {
     const { ran: hooks, log } = await loaded(t);
     const path = process.env.PATH;
     process.env.PATH = session;

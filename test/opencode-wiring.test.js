@@ -51,7 +51,6 @@ import { FAIL_CLOSED, HOOK_HANDLERS } from '../lib/hooks/events.js';
 import { refusal } from '../lib/hooks/runner.js';
 import { WIRING } from '../opencode/bridge/hooks.js';
 
-const POSIX = process.platform !== 'win32';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 
@@ -502,7 +501,6 @@ describe('a runner that gets no answer: pre-bash refuses, and every other hook l
       files: {},
       path: true,
       problem: `cannot run: "node" was not found on the PATH of the process that runs hooks (ENOENT); pdkit's hooks need Node.js 22 or later there`,
-      skip: !POSIX && 'T10.10',
     },
   ]) {
     test(what, { skip }, async (t) => {

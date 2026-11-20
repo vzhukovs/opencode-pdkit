@@ -54,7 +54,6 @@ import { logOf } from './helpers/server-log.js';
 const execFileAsync = promisify(execFile);
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
-const POSIX = process.platform !== 'win32';
 
 const SOURCE = 'packages/main/src/plugin/container-registry.ts';
 const SCHEMA = 'packages/main/src/plugin/schemas/settings.ts';
@@ -458,7 +457,7 @@ describe('no answer leaves the result as the tool gave it, and says why', () => 
     assert.deepEqual(now, before);
   }
 
-  test('no node on the PATH of the server', { skip: !POSIX && 'T10.10' }, async (t) => {
+  test('no node on the PATH of the server', async (t) => {
     const { ran: hooks, log } = await loaded(t);
     const path = process.env.PATH;
     process.env.PATH = home;

@@ -73,7 +73,7 @@ const ADVICE = refusal('pre-bash', 'x').slice('pdkit: hook "pre-bash" x. '.lengt
  */
 const STUB = `
 import { spawn } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const [, , verb, event] = process.argv;
 let input = '';
@@ -87,12 +87,18 @@ if (event === 'echo') {
 } else if (event === 'signal') {
   process.kill(process.pid, 'SIGKILL');
 } else if (event === 'hang') {
-  // A child of its own that outlives nothing, so the deadline has a grandchild to stop.
-  const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
-  writeFileSync(process.env.RUNNER_TEST_PIDFILE, String(grandchild.pid));
+  // A process under a shell of its own, so the deadline has more than the hook
+  // to stop. Not a child of the hook's: on Windows Node ends those with it, and
+  // what can be left running there is a process further down, as ssh under
+  // git. The process writes its own pid (SLEEPER).
+  const sleeper = fileURLToPath(new URL('../sleeper.cjs', import.meta.url));
+  spawn('"' + process.execPath + '" "' + sleeper + '"', { shell: true, stdio: 'ignore' });
   setInterval(() => {}, 1000);
 }
 `;
+
+/** What the hanging stand-in leaves running, under a shell: a process that writes its pid and waits. */
+const SLEEPER = "require('node:fs').writeFileSync(process.env.RUNNER_TEST_PIDFILE, String(process.pid));\nsetInterval(() => {}, 1000);\n";
 
 let stub;
 let work;
@@ -102,6 +108,7 @@ before(async () => {
   await mkdir(join(stub, 'bin'));
   await writeFile(join(stub, 'package.json'), '{ "type": "module" }\n');
   await writeFile(join(stub, 'bin', 'pdkit'), STUB);
+  await writeFile(join(stub, 'sleeper.cjs'), SLEEPER);
   work = await mkdtemp(join(tmpdir(), 'pdkit-runner-work-'));
 });
 
@@ -178,7 +185,7 @@ describe('run', () => {
 
   // Not process.execPath: inside the Open Code server that is the server's own
   // binary. The PATH that counts is the one the child is given.
-  test('node is looked up on the PATH of the environment the child gets', { skip: !POSIX && 'T10.10' }, async () => {
+  test('node is looked up on the PATH of the environment the child gets', async () => {
     const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => name.toUpperCase() !== 'PATH'));
     const outcome = await run('echo', payload(), { root: stub, env: { ...env, PATH: work } });
 
@@ -217,15 +224,20 @@ describe('run', () => {
     assert.deepEqual(outcome.failure, { kind: 'signal', detail: 'was killed by SIGKILL' });
   });
 
-  test('a process that does not answer in time is stopped, with what it started', { skip: !POSIX && 'T10.10' }, async () => {
+  // Long enough for the hook, its shell and the process under it to start on a
+  // slow runner: what is stopped has to be there first. A process left running
+  // is ended here after the check: on Windows it holds handles it inherited,
+  // the test runner's output among them, and the run would wait on it forever.
+  test('a process that does not answer in time is stopped, with what it started', async (t) => {
     const pidfile = join(work, 'grandchild.pid');
     const started = Date.now();
 
-    const outcome = await runStub('hang', {}, { env: { ...process.env, RUNNER_TEST_PIDFILE: pidfile }, deadlineMs: 400 });
+    const outcome = await runStub('hang', {}, { env: { ...process.env, RUNNER_TEST_PIDFILE: pidfile }, deadlineMs: 2000 });
 
-    assert.ok(Date.now() - started < 400 + 2000, 'the deadline did not hold');
-    assert.deepEqual(outcome.failure, { kind: 'deadline', detail: 'gave no answer within 0.4s and was stopped' });
-    const grandchild = Number(await readFile(pidfile, 'utf8'));
+    assert.ok(Date.now() - started < 2000 + 2000, 'the deadline did not hold');
+    assert.deepEqual(outcome.failure, { kind: 'deadline', detail: 'gave no answer within 2s and was stopped' });
+    const grandchild = Number(await readFile(pidfile, 'utf8').catch(() => assert.fail('the process under the shell had not started by the deadline')));
+    t.after(() => alive(grandchild) && process.kill(grandchild, 'SIGKILL'));
     for (let i = 0; i < 20 && alive(grandchild); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
     assert.equal(alive(grandchild), false, 'the hook was stopped and its own child was left running');
   });

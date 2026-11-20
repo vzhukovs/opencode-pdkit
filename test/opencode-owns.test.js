@@ -49,7 +49,6 @@ import { logOf } from './helpers/server-log.js';
 const execFileAsync = promisify(execFile);
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
-const POSIX = process.platform !== 'win32';
 
 const ISSUE = 3001;
 const OWNED = 'packages/main/src/plugin/container-registry.ts';
@@ -428,7 +427,7 @@ const allowing = (log, problem) => {
 describe('no answer is a pass that says why', () => {
   withTask('T1');
 
-  test('no node on the PATH of the server', { skip: !POSIX && 'T10.10' }, async (t) => {
+  test('no node on the PATH of the server', async (t) => {
     const { check, log } = await loaded(t);
     const path = process.env.PATH;
     process.env.PATH = home;

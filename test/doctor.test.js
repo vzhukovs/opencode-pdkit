@@ -235,7 +235,7 @@ describe('the self-test', () => {
   // The PATH that counts is the one the hook is started with: in a session,
   // the Open Code server's. Without node there the plugin refuses every
   // command, and the self-test says it is not checking any.
-  test('no node on the PATH the hook starts with: no answer, and every half fails', { skip: !POSIX && 'T10.10' }, async () => {
+  test('no node on the PATH the hook starts with: no answer, and every half fails', async () => {
     const empty = await mkdtemp(join(tmpdir(), 'pdkit-no-node-'));
 
     try {
@@ -274,7 +274,7 @@ describe('the self-test', () => {
   // From a session the doctor's environment is the one Open Code gives the
   // shell — the server's PATH (F93) — and that is what the hook starts with,
   // not the PATH of whatever ran the doctor's process.
-  test('diagnose starts the hook with the environment it is given', { skip: !POSIX && 'T10.10' }, async () => {
+  test('diagnose starts the hook with the environment it is given', async () => {
     const repo = await initRepo('pdkit-doctor-selftest-env-');
     const empty = await mkdtemp(join(tmpdir(), 'pdkit-no-node-'));
 
@@ -1358,7 +1358,7 @@ describe('the Open Code that runs the plugin', () => {
     }
   });
 
-  test('runs the opencode of that PATH, and reads what it prints', { skip: !POSIX && 'T10.10' }, async () => {
+  test('runs the opencode of that PATH, and reads what it prints', { skip: !POSIX && 'T10.11: the stand-in is a shell script, and execFile runs no opencode.cmd' }, async () => {
     const dir = await mkdtemp(join(tmpdir(), 'pdkit-opencode-'));
     const stand = async (body) => writeFile(join(dir, 'opencode'), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
     try {

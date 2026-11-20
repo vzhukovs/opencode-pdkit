@@ -53,7 +53,6 @@ import { setOwns, transition } from '../lib/state.js';
 import { logOf } from './helpers/server-log.js';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
-const POSIX = process.platform !== 'win32';
 const execFileAsync = promisify(execFile);
 
 const ISSUE = 18248;
@@ -611,7 +610,7 @@ const allowing = (log, problem) => {
 // (F59). Each case is an implementer without a receipt, which a working gate
 // holds, so a stop let go is the failure's doing.
 describe('no answer lets the subagent go, and says why', () => {
-  test('no node on the PATH of the server', { skip: !POSIX && 'T10.10' }, async (t) => {
+  test('no node on the PATH of the server', async (t) => {
     const { id, stop, log } = await oneImplementer(t);
     const path = process.env.PATH;
     process.env.PATH = home;
