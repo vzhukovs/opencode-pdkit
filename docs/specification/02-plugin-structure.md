@@ -76,6 +76,7 @@ a handful of modules that reach nothing beyond one another — the `LEAVES` of
 | `drift.js` | composition: a slice's branch point, upstream commits after it, overlap with lines the plan cites |
 | `gh.js` | `gh` wrappers (REST + GraphQL), read-only by default |
 | `git.js` | the one way git is run: `options.exec` for tests, one function per result shape the callers rely on |
+| `program.js` | where a program npm installs is on PATH, and how to start it without a shell: on Windows, as the shell looks for it, and what the `.cmd` of npm, pnpm or corepack starts — for the doctor's `opencode` and `pnpm`, and `opencode-api.js` |
 | `gate.js` | issues, verifies and revokes consent tokens; TTL; token kind |
 | `duration.js` | `10m`, `30s`, `1h` from the config; shared by `gate.js` and validation |
 | `journal.js` | append-only, sliced by month |
