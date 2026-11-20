@@ -15,7 +15,8 @@ opencode-pdkit/                      # repository root = plugin root = the npm p
 │   ├── environment.js               # bin/ first on the PATH of every shell command
 │   ├── prompts.js                   # the plugin root spelled out in agent and skill bodies
 │   └── bridge/                      # the hook bridge: Open Code events → bin/pdkit hook <event>
-├── bin/pdkit                        # the only file in bin/; +x, #!/usr/bin/env node
+├── bin/pdkit                        # +x, #!/usr/bin/env node
+├── bin/pdkit.cmd                    # bin/pdkit for PowerShell and cmd.exe, which run no shebang
 ├── lib/                             # ESM, zero-dependency, stdlib only
 ├── skills/                          # 21 orchestrating + 3 phrase-triggered
 ├── agents/                          # 14, prefixed pd- (agent names are not namespaced)

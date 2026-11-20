@@ -162,6 +162,13 @@ with what stands in for each, is also in [section 6 of
   an answer.
 - **`/pd:doctor` says eighteen probes for the push gate**, the number the
   self-test runs and prints; its text said seventeen.
+- **On Windows, a command may run in PowerShell.** Open Code runs one in
+  PowerShell when it finds one, in Git Bash after it and in cmd.exe last;
+  Claude Code ran every command in Git Bash. `pdkit` runs in all three —
+  `bin/pdkit.cmd` is the one PowerShell and cmd.exe find — and the gate reads
+  the command the same way in each. A skill's command in bash's spelling, such
+  as `git reset --soft <base> && git commit`, is the model's to put in
+  PowerShell's.
 - **On Windows, a schema file gets its reminder.** Under Fixed.
 
 ### Added
