@@ -7,7 +7,160 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Pre-1.0, a MINOR bump may carry a breaking change and PATCH is reserved for
 fixes — see [RELEASING.md](RELEASING.md).
 
+The releases from 0.15.0 down are those of
+[podman-desktop-kit](https://github.com/vzhukovs/podman-desktop-kit), the Claude
+Code plugin this one is ported from. Their notes stay here as the kit's history,
+and their links go into the repository they were released from.
+
 ## [Unreleased]
+
+**Ported from podman-desktop-kit 0.15.0.** The same kit — the state machine,
+the gate on writes upstream, receipts, slices, preflight, the journal — as a
+plugin for Open Code instead of Claude Code, so that each phase and each agent
+can run on a model of its own, from any provider. It does what 0.15.0 did,
+except where Open Code makes that impossible or unneeded; each such place is
+listed under [Where it differs from the Claude Code
+version](#where-it-differs-from-the-claude-code-version), and the sections after
+it say what the port changed. The numbering goes on from 0.15.0.
+
+### Upgrading
+
+From the Claude Code version, which gets no further releases. This is not an
+update of that plugin, and it does not come through Claude Code's marketplace:
+it is the same kit for another harness, installed into Open Code.
+
+1. Install Open Code 2, 2.3.0 or later, and have Node.js 22.13 or later on the
+   PATH Open Code runs with: the hooks are started with that `node`
+   ([Requirements](README.md#requirements)).
+2. Before the first work in Open Code, with the Claude Code version's `pdkit`,
+   in the fork: copy `$PDKIT_HOME`, take `pdkit cost --snapshot` and
+   `pdkit cost --planning --snapshot`, and check that `pdkit task show` finds
+   no task running. Both versions keep their state in the same `$PDKIT_HOME`,
+   and nothing is imported: an issue begun in Claude Code carries on
+   ([Moving from the Claude Code version, and
+   back](README.md#moving-from-the-claude-code-version-and-back)).
+3. Add the plugin to Open Code's global config:
+
+   ```bash
+   opencode plugin add opencode-pdkit
+   ```
+
+   then start `opencode` in the fork and type there:
+
+   ```text
+   !pdkit doctor
+   !pdkit doctor --gate-selftest
+   ```
+
+4. Connect Playwright, for `/pd:validate`, in Open Code's global config; the
+   `mcp:playwright` line of `pdkit doctor` prints the command
+   ([Optional MCP servers](README.md#optional-mcp-servers)).
+5. Nothing to choose for models. Each command and agent names its own, of the
+   class it had, through Open Code's `claude-agent` provider — a Claude
+   subscription. For other models, give the plugin's entry a `models` map
+   ([Models](README.md#models)).
+6. Work an issue in one harness at a time. A task begun in Claude Code is
+   started again in Open Code: `/pd:exec` does it.
+
+The `.claude/settings.local.json` the Claude Code version's `pdkit init` wrote
+into the fork is left as it is, for going back.
+
+MINOR rather than PATCH because everything you do to install, run and
+configure the kit changes with the harness.
+
+### Where it differs from the Claude Code version
+
+Open Code is not Claude Code, and in these places the kit does not do what
+0.15.0 did. Each was agreed before it was built. The hooks' part of the list,
+with what stands in for each, is also in [section 6 of
+`docs/specification/`](docs/specification/06-hooks.md#where-open-code-differs-and-what-stands-in).
+
+- **No model of its own for the fork.** `pdkit init` no longer writes a model
+  into the fork, `pdkit doctor` has no `settings:model` check, and nothing
+  tells you to type `/model`: each command switches the session to its own
+  model and keeps it for the whole phase. Outside the commands, a session in
+  the fork runs on the model you chose.
+- **You see one more line under a command.** After `/pd:exec 42` the session
+  shows your line and, under it, `◈ the instructions of /pd:exec`; Claude Code
+  showed the line alone. A command you queue behind work under way
+  (`<leader>return`) shows the whole skill as your message.
+- **`/effort` does not reach the agents.** An agent's effort is the variant in
+  its model — by default the effort of the command that calls it. Change it
+  in the plugin's `options.models`.
+- **Without the plugin, no gate.** When Open Code runs a session without the
+  plugin — a config turns it off, its first install had no network, or it
+  failed to load — nothing checks a push. Claude Code had the same edge, with
+  its hooks off or no `node`. The `plugin` and `hooks` lines of `pdkit doctor`
+  say when it is not running.
+- **Another plugin can change a command the gate let through**, if it comes
+  after this one in `plugins`. The gate guards against the model, not against
+  code running inside Open Code.
+- **The gate reads more than the shell.** A tool call of any kind that carries
+  a `command` — an MCP server's, another plugin's — is held to the same rules.
+  Claude Code's gate saw only its Bash tool.
+- **No answer is a refusal.** A command the gate could not decide on — no
+  `node` on Open Code's PATH, a hook that crashed, ten seconds without an
+  answer — is refused, with the reason. Under Claude Code it went through.
+- **A patch is checked whole.** Open Code gives OpenAI's GPT models `patch` to
+  write files with, and a patch can also delete and move them. The ownership
+  check reads every file a patch touches, both ends of a move included, and
+  one outside the active task refuses the whole patch. Claude Code's Write and
+  Edit could neither delete nor move.
+- **What a hook adds after a tool is part of the tool's result.** The model
+  reads it at the end of the result, not as a note of its own, and you may see
+  it where Open Code shows a result: under `write` in `opencode run`, or in a
+  `shell` result opened in the TUI. Claude Code never showed it to you.
+- **A page of a file that cannot be counted gets no reminder.** Open Code's
+  `read` does not say how many lines a file has, so the plugin counts them on
+  disk. It cannot for a file deleted or shortened since the read, a skill's
+  file Open Code serves without one on disk, or a name Open Code matched in
+  another spelling, and that read goes without the reminder.
+- **A continued session keeps its summary and its consent.** Continuing a
+  session (`--continue`, `--session`, reopening one in the TUI) neither
+  rebuilds the summary nor withdraws push and reply consent, as Claude Code did
+  on resume: consent lives out its `gates.push_ttl`, ten minutes by default.
+  The summary is part of the session's instructions, so the model sees it on
+  every request and after a compaction, and a newer one replaces it.
+- **What a command learns about its issue's tree shows as a file.** The model
+  reads it as an attachment after your message, and the TUI shows a
+  `pdkit-context` chip under the message. Claude Code showed you nothing.
+- **The receipt gate stands on a hook Open Code calls experimental.** A version
+  that renames it turns the gate off without a word; the `hooks:agent-done`
+  line of `pdkit doctor` fails once one of the plugin's subagents stops and
+  leaves no record, and a check in CI watches it too. A plugin reloaded in the
+  middle of an implementer's round — `opencode plugin update`, say — forgets
+  that it already held the implementer, and at the limit of attempts holds it
+  once more, telling it the task is blocked.
+- **Your permissions reach the plugin's agents.** Top-level `permissions` in an
+  Open Code config are added to every agent's rules, the plugin's included,
+  and can give an agent more than its `tools:` — `shell * allow` gives the
+  shell to the reviewers that only read. Nothing in the plugin undoes it; the
+  `permissions` line of `pdkit doctor` lists each such rule. The gate and the
+  ownership check hold whatever an agent may do.
+- **An agent without the Skill tool still sees a `skill` tool**, and calling it
+  is refused.
+- **Agents read outside the project only under the plugin and
+  `$PDKIT_HOME`.** Any other path outside it is refused without a question,
+  though an agent with a shell can still `cat` it; under Claude Code a
+  subagent read any path. With `external_directory` set to `ask` in your
+  config, reads under `$PDKIT_HOME` are asked about, and refused in
+  `opencode run`.
+- **`pdkit cost` counts from where Claude Code stopped.** It reads Open Code's
+  session database (`--db` in place of `--transcripts`). Work before the
+  newest snapshot taken in Claude Code is "outside Open Code data, not
+  measured", a snapshot taken the same day goes beside that one, and
+  compactions are counted apart. The details are under Changed.
+- **A failed MCP server is a warning.** `pdkit doctor` reports a server Open
+  Code says has failed or waits for authorization as a warning, with its
+  error; the Claude Code version read it as connected.
+- **`pdkit doctor` does not start Open Code's background service.** A service
+  that starts takes over the sessions another Open Code server is in the
+  middle of. With it stopped, the lines that would ask it — `plugin` from a
+  terminal, `models`, `commands`, `mcp` — say they cannot tell, and how to get
+  an answer.
+- **`/pd:doctor` says eighteen probes for the push gate**, the number the
+  self-test runs and prints; its text said seventeen.
+- **On Windows, a schema file gets its reminder.** Under Fixed.
 
 ### Added
 
@@ -3157,7 +3310,7 @@ found by a unit test.
   gate strips wrapper programs because hooks on the Bash tool are global, not
   because any particular tool exists.
 
-[Unreleased]: https://github.com/vzhukovs/podman-desktop-kit/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/vzhukovs/opencode-pdkit/compare/89aa5b5...HEAD
 [0.15.0]: https://github.com/vzhukovs/podman-desktop-kit/compare/v0.14.1...v0.15.0
 [0.14.1]: https://github.com/vzhukovs/podman-desktop-kit/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/vzhukovs/podman-desktop-kit/compare/v0.13.0...v0.14.0
