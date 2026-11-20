@@ -51,7 +51,6 @@ import { setOwns, transition } from '../lib/state.js';
 import { assertNoNotice, logOf } from './helpers/server-log.js';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
-const POSIX = process.platform !== 'win32';
 const execFileAsync = promisify(execFile);
 
 const ISSUE = 18248;
@@ -363,7 +362,7 @@ const allowing = (log, problem) => {
 describe('no answer lets the compaction go on, and says why', () => {
   const handler = (body) => ({ 'lib/hooks/session-start.js': `export async function handle() { ${body} }\n` });
 
-  test('no node on the PATH of the server', { skip: !POSIX && 'T10.10' }, async (t) => {
+  test('no node on the PATH of the server', async (t) => {
     const { compact, log } = await loaded(t);
     const path = process.env.PATH;
     process.env.PATH = home;

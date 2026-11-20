@@ -113,7 +113,9 @@ with what stands in for each, is also in [section 6 of
   Claude Code's gate saw only its Bash tool.
 - **No answer is a refusal.** A command the gate could not decide on — no
   `node` on Open Code's PATH, a hook that crashed, ten seconds without an
-  answer — is refused, with the reason. Under Claude Code it went through.
+  answer — is refused, with the reason. Under Claude Code it went through. A
+  hook stopped at those ten seconds is stopped with everything it started, on
+  Windows too.
 - **A patch is checked whole.** Open Code gives OpenAI's GPT models `patch` to
   write files with, and a patch can also delete and move them. The ownership
   check reads every file a patch touches, both ends of a move included, and

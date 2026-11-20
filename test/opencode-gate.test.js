@@ -45,7 +45,6 @@ import { BRANCH, otherRepository, podmanDesktopClone, readyIssue } from './helpe
 import { logOf } from './helpers/server-log.js';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
-const POSIX = process.platform !== 'win32';
 
 /** The advice a refusal for want of an answer ends with. */
 const ADVICE = refusal('pre-bash', 'x').slice('pdkit: hook "pre-bash" x. '.length);
@@ -399,7 +398,7 @@ const undecided = (problem) => (error) => {
 };
 
 describe('no answer is a refusal', () => {
-  test('no node on the PATH of the server', { skip: !POSIX && 'T10.10' }, async (t) => {
+  test('no node on the PATH of the server', async (t) => {
     const { check } = await loaded(t);
     const path = process.env.PATH;
     process.env.PATH = home;

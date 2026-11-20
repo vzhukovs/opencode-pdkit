@@ -52,7 +52,6 @@ import { transition } from '../lib/state.js';
 import { assertNoNotice, logOf } from './helpers/server-log.js';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
-const POSIX = process.platform !== 'win32';
 const execFileAsync = promisify(execFile);
 
 /** The issue whose branch the main checkout is on. */
@@ -392,7 +391,7 @@ describe('no answer lets the prompt through, and says why', () => {
 
   const untouched = (event) => assert.deepEqual(event.prompt.files, [], 'nothing attached');
 
-  test('no node on the PATH of the server', { skip: !POSIX && 'T10.10' }, async (t) => {
+  test('no node on the PATH of the server', async (t) => {
     const { submit, log } = await loaded(t);
     const path = process.env.PATH;
     process.env.PATH = home;
