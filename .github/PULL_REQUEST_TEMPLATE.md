@@ -1,4 +1,5 @@
-<!-- This template is for pull requests against podman-desktop-kit itself.
+<!-- This template is for pull requests against Podman Desktop Kit for OpenCode
+     itself.
 
      It is NOT templates/pr-body.md — that one is the body this plugin renders
      for pull requests it opens against podman-desktop, and it follows upstream's
