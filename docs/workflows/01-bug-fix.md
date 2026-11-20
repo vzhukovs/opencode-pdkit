@@ -68,7 +68,7 @@ pdkit state 12345 --to plan-approved
 /pd:validate 12345
 
 /clear
-/pd:audit 12345                     pd-auditor is opus#high on its own
+/pd:audit 12345                     pd-auditor is sol#high on its own
 
 /clear
 /pd:slice 12345
@@ -83,23 +83,23 @@ pdkit state 12345 --to slices-approved   your approval
 
 | Step | Session | Default model | Subagents |
 |---|---|---|---|
-| `/pd:triage 12345` | **new** · main checkout | `opus#high` | `pd-scout` · `sonnet#high` |
-| `/pd:plan 12345` | **new** · main checkout | `opus#high` | `pd-scout` · `sonnet#high` |
+| `/pd:triage 12345` | **new** · main checkout | `sol#high` | `pd-scout` · `sonnet#high` |
+| `/pd:plan 12345` | **new** · main checkout | `astra#high` | `pd-scout` · `sonnet#high` |
 | `/pd:plan-review 12345` | **new** · main checkout | `opus#high` | `pd-plan-critic` · `opus#high` |
 | approve: `pdkit ids freeze`, `pdkit state --to plan-approved` | the plan-review session, or **terminal** | — | — |
-| `/pd:exec 12345` | **new** · main checkout, then the skill moves it into `DESKTOP-12345` | `sonnet#medium` | `pd-implementer` · `sonnet#medium`, one per task |
-| `/pd:validate 12345` | **new** · issue tree | `sonnet#medium` | `pd-validator` · `sonnet#medium` |
-| `/pd:audit 12345` | **new** · issue tree | `sonnet#high` | `pd-auditor` · `opus#high` |
-| `/pd:slice 12345` | **new** · issue tree | `sonnet#medium` | `pd-slicer` · `sonnet#medium` |
+| `/pd:exec 12345` | **new** · main checkout, then the skill moves it into `DESKTOP-12345` | `sonnet#high` | `pd-implementer` · `sonnet#high`, one per task |
+| `/pd:validate 12345` | **new** · issue tree | `terra#medium` | `pd-validator` · `terra#medium` |
+| `/pd:audit 12345` | **new** · issue tree | `opus#high` | `pd-auditor` · `sol#high` |
+| `/pd:slice 12345` | **new** · issue tree | `opus#high` | `pd-slicer` · `opus#high` |
 | approve: `pdkit state --to slices-approved` | the slice session, or **terminal** | — | — |
-| `/pd:preflight 12345` | **new** · issue tree | `sonnet#medium` | — |
+| `/pd:preflight 12345` | **new** · issue tree | `flash#low` | — |
 | `/pd:pr 12345` | **new** · issue tree, one per slice | `sonnet#medium` | — |
 
 No model to type on this path. Each command switches the session to its own —
-`opus#high` for planning, `sonnet#medium` from `/pd:exec` on — before its
-instructions reach the model, and the session keeps it until the next command,
-whatever it was on before: the planning model does not carry over into the
-implementation.
+`astra#high` for the plan, `sonnet#high` for `/pd:exec`, and so on down the
+table — before its instructions reach the model, and the session keeps it
+until the next command, whatever it was on before: the planning model does not
+carry over into the implementation.
 
 ---
 

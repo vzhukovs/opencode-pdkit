@@ -97,7 +97,7 @@ What you type, session by session — `/clear` starts the next one:
 
 | Step | Session | Default model | Subagents |
 |---|---|---|---|
-| `/pd:review-pr 2903` | **new** · main checkout | `opus#medium` | `pd-review-architecture`, `-api-compat`, `-tests`, `-product` · `sonnet#medium`; `pd-review-synth` · `opus#medium` |
+| `/pd:review-pr 2903` | **new** · main checkout | `opus#high` | `pd-review-architecture` and `-tests` · `sol#high`, `-api-compat` · `opus#high`, `-product` · `sonnet#high`; `pd-review-synth` · `opus#medium` |
 | posting the review | GitHub, by hand | — | — |
 
 One session per pull request reviewed. The `pdkit review …` lines above are

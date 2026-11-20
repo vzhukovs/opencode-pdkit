@@ -117,31 +117,35 @@ the reporter still has to confirm.
 
 | Command | Run it when | Needs first | You get | Model |
 |---|---|---|---|---|
-| `/pd:doctor` | before anything, or when something misbehaves | — | tools, Open Code and the plugin, config, `$PDKIT_HOME`, hooks, models, MCP | `sonnet#medium` |
-| `/pd:sync` | "where am I" | — | fork vs upstream, every worktree. Read-only | `sonnet#medium` |
-| `/pd:editor [<n>]` | to work in the issue's tree | its worktree; `editor.path` set | the worktree opened in your IDE. Without a number, the current branch's issue | `haiku#low` |
-| `/pd:open home\|issue\|tree [<n>]` | to look at the files | — | `$PDKIT_HOME`, `issues/<n>`, or the worktree in the file manager | `haiku#low` |
-| `/pd:triage <n>` | a new issue — or no number, to pick one. Anything typed after the first line is recorded as prior context | — | route, drafted requirements → `triaged` | `opus#high` |
-| `/pd:plan <n>` | the route is standard | `triaged` | scouts, `research.md`, `plan.md`, task files → `planned` | `opus#high` |
+| `/pd:doctor` | before anything, or when something misbehaves | — | tools, Open Code and the plugin, config, `$PDKIT_HOME`, hooks, models, MCP | `flash#low` |
+| `/pd:sync` | "where am I" | — | fork vs upstream, every worktree. Read-only | `flash#low` |
+| `/pd:editor [<n>]` | to work in the issue's tree | its worktree; `editor.path` set | the worktree opened in your IDE. Without a number, the current branch's issue | `flash#none` |
+| `/pd:open home\|issue\|tree [<n>]` | to look at the files | — | `$PDKIT_HOME`, `issues/<n>`, or the worktree in the file manager | `flash#none` |
+| `/pd:triage <n>` | a new issue — or no number, to pick one. Anything typed after the first line is recorded as prior context | — | route, drafted requirements → `triaged` | `sol#high` |
+| `/pd:plan <n>` | the route is standard | `triaged` | scouts, `research.md`, `plan.md`, task files → `planned` | `astra#high` |
 | `/pd:plan-review <n>` | a plan exists | `planned` | must-change findings; repeat until clean → **you approve** → `plan-approved` | `opus#high` |
-| `/pd:exec <n> [task]` | the plan is approved | `plan-approved` | code, one worker per task, a receipt each → `implemented` | `sonnet#medium` |
-| `/pd:validate <n>` | the code is written | `implemented` | evidence from the running app → `validated` | `sonnet#medium` |
-| `/pd:audit <n>` | validation is done | `validated` | the diff against the plan, in fresh context → `audited` | `sonnet#high` |
-| `/pd:slice <n>` | the audit is clean | `audited` | a verified slice graph → `sliced` → **you approve** → `slices-approved` | `sonnet#medium` |
-| `/pd:preflight <n>` | before every push | the slice branch cut | twenty-four checks, in two passes → `preflight-green` | `sonnet#medium` |
+| `/pd:exec <n> [task]` | the plan is approved | `plan-approved` | code, one worker per task, a receipt each → `implemented` | `sonnet#high` |
+| `/pd:validate <n>` | the code is written | `implemented` | evidence from the running app → `validated` | `terra#medium` |
+| `/pd:audit <n>` | validation is done | `validated` | the diff against the plan, in fresh context → `audited` | `opus#high` |
+| `/pd:slice <n>` | the audit is clean | `audited` | a verified slice graph → `sliced` → **you approve** → `slices-approved` | `opus#high` |
+| `/pd:preflight <n>` | before every push | the slice branch cut | twenty-four checks, in two passes → `preflight-green` | `flash#low` |
 | `/pd:pr <n> [slice]` | preflight is green | `preflight-green` and a body | push and pull request → `pr-open`. **You confirm, per branch** | `sonnet#medium` |
-| `/pd:pr-status` | any time | — | CI, threads and idleness across open PRs. Read-only | `sonnet#medium` |
+| `/pd:pr-status` | any time | — | CI, threads and idleness across open PRs. Read-only | `flash#low` |
 | `/pd:pr-sync <pr>` | a reviewer answered | an open pull request | thread triage, the fixes, draft replies | `opus#high` |
-| `/pd:resume <n>` | back after a break | — | drift, rebase, plan amendment | `sonnet#medium` |
-| `/pd:close <n>` | every PR of the issue merged | all of them merged | knowledge harvest, worktree cleanup → `merged` | `sonnet#medium` |
-| `/pd:quickfix <n>` | triage chose that route | `triaged`, route `quickfix` | the fix, without a plan → `quickfix` | `sonnet#medium` |
-| `/pd:review-pr <pr>` | reviewing someone else's PR | — | four parallel axes and a verdict. Outside the lifecycle | `opus#medium` |
-| `/pd:reset <n>` | the cycle went wrong early | — | forgets one issue → `new`. Touches no other, and nothing upstream | `sonnet#medium` |
+| `/pd:resume <n>` | back after a break | — | drift, rebase, plan amendment | `opus#high` |
+| `/pd:close <n>` | every PR of the issue merged | all of them merged | knowledge harvest, worktree cleanup → `merged` | `flash#low` |
+| `/pd:quickfix <n>` | triage chose that route | `triaged`, route `quickfix` | the fix, without a plan → `quickfix` | `sonnet#high` |
+| `/pd:review-pr <pr>` | reviewing someone else's PR | — | four parallel axes and a verdict. Outside the lifecycle | `opus#high` |
+| `/pd:reset <n>` | the cycle went wrong early | — | forgets one issue → `new`. Touches no other, and nothing upstream | `flash#low` |
 | `/pd:knowledge` | periodically, not per issue | — | a revision of the shipped knowledge base | `opus#medium` |
 
-**Model** is the command's default, the effort included as its variant; `opus`,
-`sonnet` and `haiku` are short for `claude-agent/opus`, `claude-agent/sonnet`
-and `claude-agent/haiku`. The command switches the session to it before its
+**Model** is the command's default, the effort included as its variant, in
+short: `opus` and `sonnet` are `claude-agent/opus` and `claude-agent/sonnet`;
+`astra`, `sol` and `terra`, `openai/gpt-6-astra`, `openai/gpt-6.1-sol` and
+`openai/gpt-6.1-terra`; `flash`, `deepseek/deepseek-flash`. The defaults use
+all three providers; with fewer, map the rest
+([One provider only](docs/configuration/05-models.md#one-provider-only)). The
+command switches the session to it before its
 instructions reach the model, and the session keeps it for the phase — until
 you pick another in `/models` or run the next command — so there is no model to
 choose first. To run a command, or an agent it calls, on another model, any
@@ -443,7 +447,7 @@ scope is a note rather than a failure, because commitlint does not require it.
 | a quickfix outgrew its thresholds | `pdkit issue escalate <n>` |
 | something must be set aside | `pdkit defer new --issue <n> --what "<it>"` — drafts the follow-up issue |
 | a task stopped because the plan is wrong | `pdkit task stop --finding <f.json>` — what is wrong, evidence, what else it reaches, the decision, what to change |
-| what goes in the amendment after a stop | `pdkit amendment draft --issue <n> --out <f.json>` in a new session on planning's model — `opus#high` by default; no command sets it, so pick it in `/models`. Finish every `[FILL IN: …]` |
+| what goes in the amendment after a stop | `pdkit amendment draft --issue <n> --out <f.json>` in a new session on opus — `opus#high`, the model a plan is reviewed on; no command sets it, so pick it in `/models`. Finish every `[FILL IN: …]` |
 | a stop turned out not to be the plan's fault | `pdkit task clear --issue <n> --report T1-1 --reason "<why>"` |
 | the review is decided — how do I start `/pd:plan`? | `/pd:plan <n>`, nothing after it; `pdkit next <n>` says so while the decisions wait |
 | an approved plan has to change | `pdkit amendment new --issue <n> --values <f>` (requirement changes as `rows`), then `approve` — applies them to the R-IDs and plan.md |

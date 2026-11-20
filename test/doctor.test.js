@@ -1958,8 +1958,16 @@ describe('the models the agents and commands run on', () => {
     };
   };
   const entry = (providerID, id, variants) => ({ id, modelID: id, providerID, enabled: true, status: 'active', variants: variants.map((variant) => ({ id: variant })), settings: { apiKey: KEY } });
-  /** The classes the defaults name, through the claude-agent provider, each with the five variants it has. */
-  const CLAUDE = ['opus', 'sonnet', 'haiku'].map((id) => entry('claude-agent', id, ['low', 'medium', 'high', 'xhigh', 'max']));
+  /** The models the defaults name, of the three providers they span, each with the variants it has. */
+  const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+  const SHIPPED = [
+    entry('claude-agent', 'opus', EFFORTS),
+    entry('claude-agent', 'sonnet', EFFORTS),
+    entry('openai', 'gpt-6-astra', EFFORTS),
+    entry('openai', 'gpt-6.1-sol', EFFORTS),
+    entry('openai', 'gpt-6.1-terra', ['none', ...EFFORTS]),
+    entry('deepseek', 'deepseek-flash', ['none', 'low', 'high', 'max']),
+  ];
   const MOCK = ['alpha', 'beta'].map((id) => entry('mock', id, ['low', 'high']));
   /** GET /api/model. */
   const catalog = (...entries) => ({ location: { directory: DIR }, data: entries.flat() });
@@ -1969,7 +1977,7 @@ describe('the models the agents and commands run on', () => {
     const result = await checkModels({ pluginRoot: process.cwd(), id: 'opencode-pdkit', directory: DIR, ask: server.ask, ...clock(), ...more });
     return { result, asked: server.asked };
   };
-  const answers = ({ models, config, project, ran = registered(models ?? {}), listed = catalog(CLAUDE, MOCK) } = {}) => ({
+  const answers = ({ models, config, project, ran = registered(models ?? {}), listed = catalog(SHIPPED, MOCK) } = {}) => ({
     '/api/config': [answer(documents({ models, config, project }))],
     '/api/agent': [answer(ran)],
     '/api/model': [answer(listed)],
@@ -2003,7 +2011,8 @@ describe('the models the agents and commands run on', () => {
     assert.equal(result.status, 'warn');
     assert.match(result.detail, /; 35 not in Open Code's catalog for \/fork, as the table says — an agent on such a model fails when it is called, a command refuses to run;/);
     assert.equal(row(result, 'pd-implementer').catalog, 'there is no model claude-agent/sonnet for this directory');
-    assert.equal(row(result, 'pd:plan').catalog, 'there is no model claude-agent/opus for this directory');
+    assert.equal(row(result, 'pd:plan').catalog, 'there is no model openai/gpt-6-astra for this directory');
+    assert.equal(row(result, 'pd:doctor').catalog, 'there is no model deepseek/deepseek-flash for this directory');
   });
 
   test('a variant the model lacks, in the map: the row names the variants there are', async () => {
@@ -2037,7 +2046,7 @@ describe('the models the agents and commands run on', () => {
     const { result } = await run(answers({ models }));
 
     assert.equal(result.status, 'warn');
-    assert.deepEqual(row(result, 'pd-auditor'), { id: 'pd-auditor', model: 'claude-agent/opus#high', source: 'frontmatter', catalog: 'in the catalog' });
+    assert.deepEqual(row(result, 'pd-auditor'), { id: 'pd-auditor', model: 'openai/gpt-6.1-sol#high', source: 'frontmatter', catalog: 'in the catalog' });
     assert.equal(row(result, 'pd:triage').source, 'frontmatter');
     const said = result.detail.split('; ');
     for (const line of [
@@ -2144,7 +2153,7 @@ describe('the models the agents and commands run on', () => {
 
     assert.equal(rows.length, 35);
     for (const line of rows) assert.match(line, /^ {6}pd[-:]\S+ +\S+ +\S+ +\S/);
-    assert.match(rows[0], /^ {6}pd-archaeologist +claude-agent\/sonnet#high +frontmatter +in the catalog$/);
+    assert.match(rows[0], /^ {6}pd-archaeologist +openai\/gpt-6\.1-sol#high +frontmatter +in the catalog$/);
     // Each column starts at one place in every row.
     for (const key of ['model', 'source', 'catalog']) {
       const starts = new Set(rows.map((line, at) => line.indexOf(` ${result.table[at][key]}`, 6 + result.table[at].id.length) + 1));

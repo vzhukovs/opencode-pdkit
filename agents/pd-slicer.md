@@ -1,7 +1,7 @@
 ---
 name: pd-slicer
 description: "Cuts a finished change set into a graph of atomic pull requests and verifies each one."
-model: claude-agent/sonnet#medium
+model: claude-agent/opus#high
 tools: Read, Grep, Glob, Bash
 ---
 

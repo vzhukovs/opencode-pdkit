@@ -3,7 +3,7 @@ name: validate
 description: "Drive the built application, collect evidence, and propose an e2e test."
 argument-hint: "<issue-number>"
 disable-model-invocation: true
-model: claude-agent/sonnet#medium
+model: openai/gpt-6.1-terra#medium
 ---
 
 Via `pd-validator`, against a running application.

@@ -89,7 +89,7 @@ pdkit state 12345 --to slices-approved   your approval
 
 | Step | Session | Default model | Subagents |
 |---|---|---|---|
-| `/pd:slice 12345` | **new** · issue tree | `sonnet#medium` | `pd-slicer` · `sonnet#medium` |
+| `/pd:slice 12345` | **new** · issue tree | `opus#high` | `pd-slicer` · `opus#high` |
 | approve: `pdkit state --to slices-approved` | the slice session, or **terminal** | — | — |
 | `/pd:pr 12345` | **new** · issue tree, **one per slice** | `sonnet#medium` | — |
 | `pdkit slice cascade …` | **terminal**, or the `/pd:pr-sync` session that made the fix | — | — |

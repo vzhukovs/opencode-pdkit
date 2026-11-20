@@ -114,7 +114,7 @@ pdkit close 18248 --finish
 | `pdkit defer list` / `resolve` / `drop` | **terminal** | — | — |
 
 `/pd:close 18248` does the same as the closing line, with the knowledge harvest
-— **new** · issue tree, `sonnet#medium`. It leaves the tree before removing it.
+— **new** · issue tree, `flash#low`. It leaves the tree before removing it.
 
 ---
 

@@ -3,7 +3,7 @@ name: quickfix
 description: "Small fix without the planning ceremony."
 argument-hint: "<issue-number>"
 disable-model-invocation: true
-model: claude-agent/sonnet#medium
+model: claude-agent/sonnet#high
 ---
 
 Planning is skipped deliberately: if the diff fits in one sentence, a plan is

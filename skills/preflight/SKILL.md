@@ -3,7 +3,7 @@ name: preflight
 description: "Run the deterministic gates and report pass or fail."
 argument-hint: "<issue-number>"
 disable-model-invocation: true
-model: claude-agent/sonnet#medium
+model: deepseek/deepseek-flash#low
 ---
 
 Runs `pdkit preflight` and presents the report. The checks decide; this skill

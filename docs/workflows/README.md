@@ -57,16 +57,28 @@ and in one cycle the model changes here, with nothing typed for it:
 ```
 cd <fork> && opencode          ──► the model you chose, until the first command
 
-/pd:triage, /pd:plan, /pd:plan-review      opus#high
-/pd:exec, validate, slice, preflight, pr   sonnet#medium
-/pd:audit                                  sonnet#high
+/pd:triage                                 sol#high
+/pd:plan                                   astra#high
+/pd:plan-review                            opus#high
+/pd:exec                                   sonnet#high
+/pd:validate                               terra#medium
+/pd:audit, /pd:slice                       opus#high
+/pd:preflight                              flash#low
+/pd:pr                                     sonnet#medium
 /pd:pr-sync                                opus#high, every review round
 ```
 
-`/pd:review-pr` and `/pd:knowledge` run on `opus#medium`. Those are the
-defaults, `claude-agent/opus` and `claude-agent/sonnet`; to run a command or an
-agent on another model, another provider's included, map it in the plugin's
-`options.models` — [configuration · Model selection](../configuration/05-models.md).
+`/pd:review-pr` runs on `opus#high` and `/pd:knowledge` on `opus#medium`. Those
+are the defaults, in short: `opus` and `sonnet` are `claude-agent/opus` and
+`claude-agent/sonnet`; `astra`, `sol` and `terra`, `openai/gpt-6-astra`,
+`openai/gpt-6.1-sol` and `openai/gpt-6.1-terra`; `flash`,
+`deepseek/deepseek-flash`. They use three providers; to run a command or an
+agent on another model, map it in the plugin's `options.models` —
+[configuration · Model selection](../configuration/05-models.md), with
+[Trying another model](../configuration/05-models.md#trying-another-model) for
+one phase at a time and
+[One provider only](../configuration/05-models.md#one-provider-only) for fewer
+than three.
 `pdkit next <n>` prints the command alone. Start `opencode` in the fork: the
 hook moves the session into the issue's tree —
 [Where a session works](reference/trees.md). Every command, with its session,
@@ -77,18 +89,18 @@ default model and subagents:
 
 | § | Scenario | Sessions |
 |---|---|---|
-| 0 | [Picking what to work on](00-picking-what-to-work-on.md) | main checkout · opus |
-| 1 | [A bug fix](01-bug-fix.md) | main checkout · opus through planning; issue tree · sonnet from `/pd:exec` on |
-| 2 | [A one-line fix](02-one-line-fix.md) | main checkout · opus for triage; sonnet after |
-| 3 | [A feature, cut into several pull requests](03-feature-in-several-prs.md) | issue tree · sonnet, one session per slice |
+| 0 | [Picking what to work on](00-picking-what-to-work-on.md) | main checkout · sol |
+| 1 | [A bug fix](01-bug-fix.md) | main checkout · sol, astra and opus through planning; issue tree · a model per phase from `/pd:exec` on |
+| 2 | [A one-line fix](02-one-line-fix.md) | main checkout · sol for triage; sonnet and flash after |
+| 3 | [A feature, cut into several pull requests](03-feature-in-several-prs.md) | issue tree · opus for the cut, sonnet for each pull request, one session per slice |
 
 ## Part II — Proving it works
 
 | § | Scenario | Sessions |
 |---|---|---|
-| 4 | [Validating against the running application](04-validating.md) | issue tree · sonnet, Playwright connected |
-| 5 | [Work that was already tried and reverted](05-tried-and-reverted.md) | main checkout · opus |
-| 6 | [An issue that ends in an answer](06-ends-in-an-answer.md) | sonnet for the reproduction; the rest in a terminal |
+| 4 | [Validating against the running application](04-validating.md) | issue tree · terra, Playwright connected |
+| 5 | [Work that was already tried and reverted](05-tried-and-reverted.md) | main checkout · sol |
+| 6 | [An issue that ends in an answer](06-ends-in-an-answer.md) | terra for the reproduction; the rest in a terminal |
 
 ## Part III — Living with an open pull request
 
@@ -96,16 +108,16 @@ default model and subagents:
 |---|---|---|
 | 7 | [A pull request that has gone stale](07-stale-pr.md) | issue tree · opus, one session per review round |
 | 7a | [Feedback that arrives after the merge](07a-feedback-after-merge.md) | terminal |
-| 8 | [Coming back after a break](08-coming-back.md) | issue tree · sonnet, opus for `/pd:pr-sync` |
-| 9 | [The reviewer rejected the approach, not the diff](09-approach-rejected.md) | terminal, then planning again · opus |
+| 8 | [Coming back after a break](08-coming-back.md) | issue tree · opus for `/pd:resume` and `/pd:pr-sync`, flash and sonnet for the rest |
+| 9 | [The reviewer rejected the approach, not the diff](09-approach-rejected.md) | terminal, then planning again · astra |
 | 10 | [A pull request replaced by another](10-pr-replaced.md) | terminal |
-| 11 | [Upstream asks you to split an open pull request](11-split-open-pr.md) | issue tree · sonnet |
-| 11a | [Upstream asks you to join open pull requests](11a-join-open-prs.md) | issue tree · sonnet |
+| 11 | [Upstream asks you to split an open pull request](11-split-open-pr.md) | issue tree · opus for the split, sonnet for the pull requests |
+| 11a | [Upstream asks you to join open pull requests](11a-join-open-prs.md) | issue tree · opus for the cut, sonnet for the pull request |
 | 12 | [Work that predates the plugin](12-predates-the-plugin.md) | terminal, then `/pd:pr-sync` · opus |
 | 13 | [Reviewing someone else's pull request](13-reviewing-others-pr.md) | main checkout · opus |
 | 14 | [Two issues at once](14-two-issues.md) | one set of sessions per tree |
 | 15 | [A task that has failed three times](15-task-failed-three-times.md) | terminal, then issue tree · sonnet |
-| 16 | [Starting one issue over](16-starting-over.md) | terminal, then main checkout · opus |
+| 16 | [Starting one issue over](16-starting-over.md) | terminal, then main checkout · sol |
 
 ## Part IV — Reference
 
@@ -131,6 +143,7 @@ default model and subagents:
 | take an issue from triage to a pull request | [1 · A bug fix](01-bug-fix.md) |
 | know which model a command runs on | [Which session, which model](reference/sessions.md#which-session-which-model) |
 | run a phase on another model, another provider's included | [configuration · The map](../configuration/05-models.md#the-map) |
+| try another model on one phase or one agent, and go back | [configuration · Trying another model](../configuration/05-models.md#trying-another-model) |
 | know whether a step needs a new session | [Which session, which model](reference/sessions.md#which-session-which-model), [One session per phase](reference/sessions.md) |
 | skip planning for a small fix | [2 · A one-line fix](02-one-line-fix.md) |
 | publish one change as several pull requests | [3 · A feature, cut into several pull requests](03-feature-in-several-prs.md) |

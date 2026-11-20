@@ -1,7 +1,7 @@
 ---
 name: pd-auditor
 description: "Audits a finished diff against the plan in fresh context."
-model: claude-agent/opus#high
+model: openai/gpt-6.1-sol#high
 tools: Read, Grep, Glob, Bash
 ---
 

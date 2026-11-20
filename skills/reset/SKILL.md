@@ -3,7 +3,7 @@ name: reset
 description: "Start one issue over: forget its plan, research and artefacts so the next cycle runs from nothing. Touches no other issue, and nothing upstream."
 argument-hint: "<issue-number> [--purge] [--worktrees]"
 disable-model-invocation: true
-model: claude-agent/sonnet#medium
+model: deepseek/deepseek-flash#low
 ---
 
 For a run that went wrong early. The triage read the issue as something it is

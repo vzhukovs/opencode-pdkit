@@ -1,7 +1,7 @@
 ---
 name: pd-review-api-compat
 description: "Reviews a pull request, someone else's or our own before it is published, for public API surface and backward compatibility."
-model: claude-agent/sonnet#medium
+model: claude-agent/opus#high
 tools: Read, Grep, Glob
 ---
 

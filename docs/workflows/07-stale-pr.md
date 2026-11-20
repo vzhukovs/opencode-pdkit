@@ -162,8 +162,8 @@ What you type, session by session — `/clear` starts the next one:
 
 | Step | Session | Default model | Subagents |
 |---|---|---|---|
-| `/pd:pr-status` | **new** · anywhere in the fork | `sonnet#medium` | — |
-| `/pd:pr-sync 17577` | **new** · issue tree, **one per review round** | `opus#high` | `pd-thread-resolver` · `sonnet#high`; on the first round of an adopted issue also the four `pd-review-*` · `sonnet#medium` and `pd-review-synth` · `opus#medium` |
+| `/pd:pr-status` | **new** · anywhere in the fork | `flash#low` | — |
+| `/pd:pr-sync 17577` | **new** · issue tree, **one per review round** | `opus#high` | `pd-thread-resolver` · `sonnet#high`; on the first round of an adopted issue also the four `pd-review-*` · `sol#high` for architecture and tests, `opus#high` for api-compat, `sonnet#high` for product and `pd-review-synth` · `opus#medium` |
 | `pdkit gate open …` | the pr-sync session, when it asks — you confirm | — | — |
 | `pdkit pr list` / `refresh` / `ci` / `threads` / `diff` | **terminal** | — | — |
 

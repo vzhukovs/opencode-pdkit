@@ -5,21 +5,29 @@
 | Agent | Model | Tools | Role |
 |---|---|---|---|
 | `pd-scout` | sonnet#high | Read, Grep, Glob, Bash (ro) | reconnaissance, ≤ 40 lines (50 with local rules and modes of the environment), every claim `file:line`, proposes nothing |
-| `pd-implementer` | sonnet#medium | everything except push/gh | one task, only files from `Owns`, a receipt with real output |
-| `pd-auditor` | opus#high | Read, Grep, Glob, Bash (ro) | diff against plan, fresh context |
+| `pd-implementer` | sonnet#high | everything except push/gh | one task, only files from `Owns`, a receipt with real output |
+| `pd-auditor` | sol#high | Read, Grep, Glob, Bash (ro) | diff against plan, fresh context |
 | `pd-plan-critic` | opus#high | Read, Grep, Glob | adversarial review of the **plan**, before code: the whole plan, some of its areas, or one axis across it |
-| `pd-slicer` | sonnet#medium | Read, Grep, Bash | the slice graph, from the finished diff |
-| `pd-validator` | sonnet#medium | Bash + Playwright MCP tools | drives the built application, collects evidence |
-| `pd-archaeologist` | sonnet#high | Read, Bash (git log/blame) | history: reverts, regressions, who and why |
-| `pd-conflict-analyst` | opus#medium | Read, Grep, Bash | mechanical conflict or semantic |
+| `pd-slicer` | opus#high | Read, Grep, Bash | the slice graph, from the finished diff |
+| `pd-validator` | terra#medium | Bash + Playwright MCP tools | drives the built application, collects evidence |
+| `pd-archaeologist` | sol#high | Read, Bash (git log/blame) | history: reverts, regressions, who and why |
+| `pd-conflict-analyst` | opus#high | Read, Grep, Bash | mechanical conflict or semantic |
 | `pd-thread-resolver` | sonnet#high | Read, Edit, Bash | one review thread → fix + draft reply |
-| `pd-review-*` (4) | sonnet#medium | Read, Grep, Glob | the review axes |
+| `pd-review-architecture`, `pd-review-tests` | sol#high | Read, Grep, Glob | two of the review axes |
+| `pd-review-api-compat` | opus#high | Read, Grep, Glob | the third |
+| `pd-review-product` | sonnet#high | Read, Grep, Glob | the fourth |
 | `pd-review-synth` | opus#medium | Read | synthesis into one verdict |
 
-The Model column is each agent's default, `model:` in its frontmatter, with the
-provider left out: every one is `claude-agent/…`, Open Code's Claude Agent
-provider. The part after `#` is the variant — the effort — and it is the effort
-of the command that calls the agent.
+The Model column is each agent's default, `model:` in its frontmatter, in
+short: `opus` and `sonnet` are `claude-agent/opus` and `claude-agent/sonnet`,
+Open Code's Claude Agent provider; `sol` and `terra` are `openai/gpt-6.1-sol`
+and `openai/gpt-6.1-terra`. The part after `#` is the variant — the effort. As
+shipped, what one provider's model writes, another's checks: `pd-implementer`
+writes the code on a Claude model and `pd-auditor` accepts it on an OpenAI one,
+as `pd-plan-critic`, on a Claude model, reviews a plan `/pd:plan` wrote on an
+OpenAI one; the review axes are split between the two. The whole list, commands
+included, is in
+[`configuration/05-models.md`](../configuration/05-models.md#what-the-defaults-are).
 
 **The Tools column is the `tools:` field in agent frontmatter, and there are no
 other levers.** The plugin registers each agent from its file
@@ -126,14 +134,15 @@ default model into the fork, `pdkit next` and the session summary printed the
 session was on the wrong one, and `effort:` had to be typed as `/effort`. None
 of that is needed when the command sets its own model, and none of it is left.
 
-**Honestly about token economics.** "Opus plans, Sonnet implements" saves less
-than it appears: to plan well, Opus has to understand the code, which causes a
-double investigation — first the scouts, then itself. The real saving comes from
-three other things: the scouts compressing the map (Opus reads 40 lines instead
-of 4000), fresh context per task (no accumulation of failed attempts), and
-receipts instead of diffs at acceptance. The model split is a consequence, not a
-cause. On a tight budget, keep Opus on `plan` and on `pd-auditor`, and run
-everything else on Sonnet.
+**Honestly about token economics.** "A strong model plans, a working one
+implements" saves less than it appears: to plan well, the planner has to
+understand the code, which causes a double investigation — first the scouts,
+then itself. The real saving comes from three other things: the scouts
+compressing the map (the planner reads 40 lines instead of 4000), fresh context
+per task (no accumulation of failed attempts), and receipts instead of diffs at
+acceptance. The model split is a consequence, not a cause. On a tight budget,
+keep the strongest model you have on `plan` and on `pd-auditor`, and run
+everything else on a working one.
 
 ---
 

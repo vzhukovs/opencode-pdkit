@@ -36,7 +36,7 @@ What you type, session by session — `/clear` starts the next one:
 /pd:sync
 
 /clear
-/pd:resume 12345                    pd-conflict-analyst is opus#medium on its own
+/pd:resume 12345                    pd-conflict-analyst is opus#high on its own
 
 /clear
 /pd:pr-sync <pr#>
@@ -50,10 +50,10 @@ What you type, session by session — `/clear` starts the next one:
 
 | Step | Session | Default model | Subagents |
 |---|---|---|---|
-| `/pd:sync` | **new** · main checkout | `sonnet#medium` | — |
-| `/pd:resume 12345` | **new** · issue tree | `sonnet#medium` | `pd-conflict-analyst` · `opus#medium` |
+| `/pd:sync` | **new** · main checkout | `flash#low` | — |
+| `/pd:resume 12345` | **new** · issue tree | `opus#high` | `pd-conflict-analyst` · `opus#high` |
 | `/pd:pr-sync <pr#>` | **new** · issue tree | `opus#high` | `pd-thread-resolver` · `sonnet#high` |
-| `/pd:preflight 12345` | **new** · issue tree | `sonnet#medium` | — |
+| `/pd:preflight 12345` | **new** · issue tree | `flash#low` | — |
 | `/pd:pr 12345` | **new** · issue tree | `sonnet#medium` | — |
 
 ---

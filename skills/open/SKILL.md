@@ -4,7 +4,7 @@ description: "Open $PDKIT_HOME, an issue's directory in it, or an issue's worktr
 disable-model-invocation: true
 argument-hint: "home | issue [<issue>] | tree [<issue>]"
 allowed-tools: Bash(pdkit open home), Bash(pdkit open issue), Bash(pdkit open issue:*), Bash(pdkit open tree), Bash(pdkit open tree:*)
-model: claude-agent/haiku#low
+model: deepseek/deepseek-flash#none
 ---
 
 Arguments: `$ARGUMENTS`
