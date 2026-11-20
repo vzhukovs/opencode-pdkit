@@ -157,7 +157,8 @@ model:
 
 `pdkit` is on PATH there because the plugin puts its `bin/` first on the PATH of
 every command an Open Code session runs: the model's, a subagent's, and yours
-after `!`.
+after `!`. On Windows that command runs in PowerShell when Open Code finds one,
+and in Git Bash or cmd.exe otherwise; `pdkit` runs in all three.
 
 `init` reads your fork's name from the `origin` remote and writes it into
 `$PDKIT_HOME/config.yaml` — there is nothing to configure by hand before running
@@ -438,7 +439,8 @@ keeps that accounting, with the evidence per line, as the history of 0.15.0.
 ```text
 opencode/          the Open Code plugin: registers the commands, the agents and
                    the hook bridge, and puts bin/ on PATH
-bin/pdkit          deterministic CLI, put on PATH by the plugin
+bin/pdkit          deterministic CLI, put on PATH by the plugin; pdkit.cmd beside
+                   it is the same CLI for PowerShell and cmd.exe on Windows
 lib/               its implementation: state machine, slicing, gates, preflight,
                    validation, reviews of other people's pull requests
 lib/hooks/         the hook rules; events.js is the one list of hook events,

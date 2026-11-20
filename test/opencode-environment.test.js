@@ -425,6 +425,27 @@ describe('on Windows', () => {
     assert.match(lines[0], /^bin\/ cannot go on PATH: its path holds ".", the PATH delimiter \(.+\)\. Shell commands run without pdkit on PATH;/);
   });
 
+  // Open Code 2.3.0 runs a command on Windows in pwsh or Windows PowerShell
+  // when it finds one, in Git Bash after them, in cmd.exe last (ShellSelect).
+  // Git Bash runs bin/pdkit by its shebang. PowerShell finds a file without an
+  // extension and refuses to run it, and cmd.exe looks only for the extensions
+  // PATHEXT names: what both run is bin/pdkit.cmd, by the same bare name.
+  for (const [shell, argv] of [
+    ['powershell.exe', (command) => ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', `${command}; exit $LASTEXITCODE`]],
+    ['cmd.exe', (command) => ['/d', '/c', command]],
+  ]) {
+    test(`in ${shell}, \`pdkit\` is the plugin's, and so is its exit code`, { skip: process.platform !== 'win32' && 'a Windows shell' }, async () => {
+      const { ctx, registered, plugin } = host(ROOT);
+      await registerEnvironment(ctx, plugin, { windows: true });
+      const created = event({ ...process.env });
+      await registered[0].callback(created);
+      const run = (command) => promisify(execFile)(shell, argv(command), { cwd: tmpdir(), env: created.env });
+
+      assert.match((await run('pdkit --help')).stdout, /^  pdkit <command> \[options\]$/m);
+      await assert.rejects(run('pdkit no-such-command'), (error) => error.code === 1 && /unknown command "no-such-command"/.test(error.stderr));
+    });
+  }
+
   test('elsewhere, `Path` is not PATH', () => {
     const env = prepare({ Path: '/not/the/path', PATH: '/usr/bin' }, { bin: '/plugin/bin', version: '2.3.0', ...POSIX });
 

@@ -30,7 +30,8 @@
 // That works because Node resolves the link before it sets import.meta.url of
 // the script it runs, so lib/ is still looked for beside the real file.
 //
-// Keep bin/ to this one file: everything here becomes a bare command.
+// Keep bin/ to this file and pdkit.cmd, its form for PowerShell and cmd.exe
+// on Windows: everything here becomes a bare command.
 
 // `pathToFileURL` and not the path itself. A filesystem path works as an import
 // specifier on Linux and macOS by accident — it begins with `/`, which is a
