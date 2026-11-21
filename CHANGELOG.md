@@ -192,7 +192,7 @@ with what stands in for each, is also in [section 6 of
   one, so the loop had no last round. Now only an `issue:` and an unanswered
   `question:` hold it, as they do for upstream's agent; a nit stays in the
   record, the check counts it, and `/pd:pr` shows it to you before the push.
-  After three commits in a row that the review left something open on
+  After three commits in a row reviewed without a clean review
   (`review.self_review_rounds`), the next round waits for you. Under Changed.
 - **The implementer writes no comments.** `pd-implementer`, and the
   `/pd:quickfix` and `/pd:pr` sessions that follow its discipline, leave no
@@ -303,13 +303,14 @@ with what stands in for each, is also in [section 6 of
   commit an issue makes anyway, never in a round of its own, and step 7 shows
   you the ones left — fixing one first is yours to ask for. `/pd:pr-sync`
   makes a row of an open finding only.
-- **The self-review's rounds end.** A round is a commit the review left
-  something open on, counted from the journal; a review with nothing open, a
-  `pdkit reset`, or your sentence starts the count over. At
+- **The self-review's rounds end.** A round is a commit the axes were handed:
+  it starts at `pdkit self-review target`, whether or not the session records
+  it, and is counted from the journal (`self-review-target`); a review with
+  nothing open, a `pdkit reset`, or your sentence starts the count over. At
   `review.self_review_rounds` (three by default, zero for no limit)
   `pdkit self-review target` and `record` refuse a new commit and say to stop
-  and ask you; recording the same commit again — an answer, a corrected body —
-  is not another round. The way past is yours to word:
+  and ask you; reading or recording the same commit again — an answer, a
+  corrected body — is not another round. The way past is yours to word:
   `pdkit self-review continue --issue <n> --reason "<what is different this time>"`,
   as `pdkit task unblock` is for a task that keeps failing. A count that
   includes rounds 0.15.0 recorded counted their nits as open; `continue`
