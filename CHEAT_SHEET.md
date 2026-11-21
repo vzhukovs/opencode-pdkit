@@ -349,7 +349,7 @@ Twenty-four checks. Every one blocks except the three marked `warn`.
 | `validation-evidence` | | every validation step has an artefact, or the body explains |
 | `debug-leftovers` | `warn` | no `console.log`, `.only`, `.skip`, `@ts-ignore`, bare `any` in added lines |
 | `maintainer-rules` | | added lines clear of the rules upstream's review agent applies that have no exception: `vi.spyOn` in a new test, `as unknown as`, `any`, `!`, `../` imports, `export function` in `packages/main`, a hardcoded product name or color — see `knowledge/maintainer-rules.md`. A rule with its own condition (a `vi.mock` factory) only warns, and the self-review rules on it |
-| `self-review` | | the four review axes read this commit and this body, and left nothing open (`pdkit self-review record`) |
+| `self-review` | | the four review axes read this commit and this body, and left no `issue:` and no unanswered `question:` open (`pdkit self-review record`); a `nit:` stays in the record and does not block |
 | `ci-blind-spots` | | build, packaging or platform behavior CI cannot judge is named in the body |
 
 **It runs twice, and the second pass is not ceremony.** Nine checks read the
@@ -359,6 +359,7 @@ Draft the body, run the self-review on it, then:
 ```bash
 pdkit self-review target --issue <n> [--slice <i>]  # the diff and commit the axes read
 pdkit self-review record --issue <n> [--slice <i>] --findings <f.json> --body <file>
+pdkit self-review continue --issue <n> --reason "<why>"  # past review.self_review_rounds: your sentence
 pdkit preflight <n> --body-only --body <file>
 pdkit preflight <n> --body-only --body-from-pr <k>   # after a rebase or a review round:
                                                      # the body the open PR already has

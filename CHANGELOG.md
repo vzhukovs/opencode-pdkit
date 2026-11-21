@@ -186,6 +186,14 @@ with what stands in for each, is also in [section 6 of
 - **On Windows, `pdkit doctor` finds the pnpm that corepack or npm puts on
   PATH.** Under Fixed. git and gh are still found as the Claude Code version
   found them.
+- **The self-review lets nits through, and its rounds end.** 0.15.0 held the
+  push on every nit the four axes found on new code, and fresh axes find new
+  nits in every round, many of them in the code written to answer the last
+  one, so the loop had no last round. Now only an `issue:` and an unanswered
+  `question:` hold it, as they do for upstream's agent; a nit stays in the
+  record, the check counts it, and `/pd:pr` shows it to you before the push.
+  After three commits in a row that the review left something open on
+  (`review.self_review_rounds`), the next round waits for you. Under Changed.
 
 ### Added
 
@@ -278,6 +286,28 @@ with what stands in for each, is also in [section 6 of
 
 ### Changed
 
+- **The `self-review` check holds the push on what upstream's agent rejects a
+  pull request for: an `issue:`, or a `question:` with no answer.** A `nit:`,
+  on new code or old, does not: upstream's agent accepts a pull request with
+  nits ("Accepted with nits"), and a gate stricter than the reviewer it
+  imitates never reached a round with none. The nit stays in
+  `self-review.json`, pass two says how many were left (`no issue, no
+  unanswered question; 3 nit(s) left`), `pdkit self-review record` counts them
+  and `show` marks each one `not blocking`. `/pd:pr` fixes a nit only in a
+  commit an issue makes anyway, never in a round of its own, and step 7 shows
+  you the ones left — fixing one first is yours to ask for. `/pd:pr-sync`
+  makes a row of an open finding only.
+- **The self-review's rounds end.** A round is a commit the review left
+  something open on, counted from the journal; a review with nothing open, a
+  `pdkit reset`, or your sentence starts the count over. At
+  `review.self_review_rounds` (three by default, zero for no limit)
+  `pdkit self-review target` and `record` refuse a new commit and say to stop
+  and ask you; recording the same commit again — an answer, a corrected body —
+  is not another round. The way past is yours to word:
+  `pdkit self-review continue --issue <n> --reason "<what is different this time>"`,
+  as `pdkit task unblock` is for a task that keeps failing. A count that
+  includes rounds 0.15.0 recorded counted their nits as open; `continue`
+  starts it over.
 - **Agents name their default model the way Open Code reads one,
   `provider/model#variant`.** The defaults span three providers — Claude
   through the `claude-agent` provider (a subscription), OpenAI and DeepSeek —

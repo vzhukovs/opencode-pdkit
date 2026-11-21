@@ -133,14 +133,20 @@ merged together." Closing those is `/pd:pr-sync`'s job, after this one is open.
 
    Then act on what was found. **Arguing is not one of the options:**
 
-   - `issue:` and `nit:` on code this branch wrote: fix the code. On a single
+   - `issue:` on code this branch wrote: fix the code. On a single
      pull request, fix it on the branch, squash again (step 2) and go back to
      step 3. On a slice, fix it on the working branch the slices are cut from,
      verify the slice again (`/pd:slice`), rebuild its branch with `pdkit slice
      materialize --force`, and go back to step 3. Either way the commit has
      changed, so pass one, the review and the record all run again;
-   - a finding about the title or the body: fix the text, then review and
-     record again. The body is part of what was reviewed;
+   - `nit:` on code this branch wrote: it does not hold the push — upstream's
+     agent accepts a pull request with nits. Fix one only in a commit an
+     `issue:` makes anyway, never in a round of its own: each round reads the
+     code fresh, and the code written for a nit is where the next round finds
+     its own. The rest stay in the record, and step 7 shows them;
+   - an `issue:` about the title or the body: fix the text, then review and
+     record again. The body is part of what was reviewed. A `nit:` about them
+     is a nit like any other;
    - `question:`: answer it in `Notes for reviewers` or by changing the code,
      and put the answer in the finding's `answer` field when recording;
    - `nit:` marked pre-existing: leave it. Fixing it here is the drive-by
@@ -151,8 +157,22 @@ merged together." Closing those is `/pd:pr-sync`'s job, after this one is open.
 
    **Never edit the findings to make the record clean.** The record is what
    the review said. The `self-review` check in pass two fails unless that
-   record is for this commit and this body, with nothing open. A green pass
-   two therefore means the review ran clean on what is about to be pushed.
+   record is for this commit and this body, with no `issue:` and no unanswered
+   `question:` open. A green pass two therefore means the review found nothing
+   upstream's agent would reject the pull request for, on what is about to be
+   pushed.
+
+   **The rounds end.** `pdkit self-review record` counts the commits in a row
+   the review left something open on. At `review.self_review_rounds` — three by
+   default — the next round is refused: another one costs what the last one
+   did, and finds fault with the code the last one wrote. Stop there and ask
+   the person. Show what is still open and how the diff grew since the first
+   round; whether to go on, to escalate a quickfix (`pdkit issue escalate
+   <n>`) or to stop is theirs to decide, and going on is theirs to word:
+
+   ```
+   pdkit self-review continue --issue <n> [--slice <i>] --reason "<what is different this time>"
+   ```
 
 6. **Preflight, pass two.** `pdkit preflight <n> --body-only --body <file>`.
    The body-dependent checks could only skip on pass one; the command says how
@@ -163,6 +183,11 @@ merged together." Closing those is `/pd:pr-sync`'s job, after this one is open.
    the full body as it will appear. Not a summary of it: the gate exists so a
    human reads the thing being published, and a summary defeats that as
    thoroughly as no gate at all.
+
+   Then the nits the review left, as `pdkit self-review show --issue <n>
+   [--slice <i>]` lists them. They do not hold the push; upstream's agent may
+   still raise them. Fixing one first is the person's call, and it is a new
+   commit, so a new round.
 
 8. **Wait for explicit confirmation in this same turn.** Not implied by an
    earlier "go ahead", not carried from another slice. Confirmation for slice

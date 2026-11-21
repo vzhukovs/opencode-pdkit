@@ -25,7 +25,8 @@ request whichever stage misses one. The greppable part is the
 `maintainer-rules` preflight check, which blocks on a rule with no exception.
 The rest is read by the agents below, and the `self-review` check refuses a
 push until the four review axes have read the exact commit and body being
-published with nothing left open. The rules that CI or a hook enforces are in
+published with no `issue:` and no unanswered `question:` left open — what the
+agent rejects a pull request for. The rules that CI or a hook enforces are in
 `upstream-rules.md`. Where the two disagree, see "Where this differs from
 upstream-rules.md" at the end.
 
