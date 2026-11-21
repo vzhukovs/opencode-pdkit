@@ -201,6 +201,10 @@ with what stands in for each, is also in [section 6 of
   header, the JSDoc of a new extension-API field, the `eslint-disable` section 4
   of the rules allows on an empty interface. 0.15.0 relied on the rule that
   comments adding nothing are removed.
+- **The implementer tests both sides of a condition it adds**: what it now
+  leaves out, what it still lets through, and a change of state that crosses
+  it. The self-review asked for exactly these on a fix that tested only what
+  it left out, and each such request is a round of four reviewers.
 
 ### Added
 
