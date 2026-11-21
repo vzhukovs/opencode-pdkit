@@ -155,6 +155,10 @@ merged together." Closing those is `/pd:pr-sync`'s job, after this one is open.
      question with the code that answers it. If the axis keeps it, it is
      fixed.
 
+   A fix is written the way "Write it the way the maintainer reviews it" in
+   `${CLAUDE_PLUGIN_ROOT}/agents/pd-implementer.md` says, comments included:
+   a finding is answered in the code, not by a comment beside it.
+
    **Never edit the findings to make the record clean.** The record is what
    the review said. The `self-review` check in pass two fails unless that
    record is for this commit and this body, with no `issue:` and no unanswered

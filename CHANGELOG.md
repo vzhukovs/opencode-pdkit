@@ -194,6 +194,12 @@ with what stands in for each, is also in [section 6 of
   record, the check counts it, and `/pd:pr` shows it to you before the push.
   After three commits in a row that the review left something open on
   (`review.self_review_rounds`), the next round waits for you. Under Changed.
+- **The implementer writes no comments.** `pd-implementer`, and the
+  `/pd:quickfix` and `/pd:pr` sessions that follow its discipline, leave no
+  comment in the code but the ones a rule asks for: a new file's license
+  header, the JSDoc of a new extension-API field, the `eslint-disable` section 4
+  of the rules allows on an empty interface. 0.15.0 relied on the rule that
+  comments adding nothing are removed.
 
 ### Added
 
