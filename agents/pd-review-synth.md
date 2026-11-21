@@ -26,6 +26,8 @@ The axes judged without seeing the threads already on the pull request, so their
 
 `/pd:pr` and `/pd:pr-sync` run the same four axes on our own branch before a push, to find what upstream's review agent would find. There are no threads then, and nothing to annotate. Calibrate exactly as above. A self-review gentler than the maintainer's agent only moves its findings to the pull request, where they cost a review round.
 
+You also get the issue as triage recorded it, `issue.md`. Its `[operator]` lines and `Not in this PR` say what this pull request was cut to, and that was decided before any code. A finding that asks for what it puts out of this pull request is not an `issue:`: when the body's `Not in this PR` names it, drop it; when it does not, it is a `nit:` about the body.
+
 End with the findings as JSON, the shape `pdkit self-review record` reads:
 
 ```json
