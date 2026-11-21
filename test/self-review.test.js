@@ -23,19 +23,33 @@
 // what is being published, or a review with an open finding, let the push
 // through? The record ties a review to a commit and a body; the check refuses
 // on any mismatch and on anything still open.
+//
+// And the second one: does the loop end? Open is what upstream's agent rejects
+// a pull request for, so a review that leaves only nits is done, and a review
+// that keeps finding something stops after a set number of commits until a
+// person says why another one will differ.
 
 import { test, describe, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 
+import { append as appendJournal, read as readJournal } from '../lib/journal.js';
 import { run as check } from '../lib/preflight/checks/self-review.js';
 import * as selfReview from '../lib/self-review.js';
+
+const BIN = join(dirname(dirname(fileURLToPath(import.meta.url))), 'bin', 'pdkit');
+const exec = promisify(execFile);
 
 const ISSUE = 7001;
 const SHA = 'a'.repeat(40);
 const OTHER = 'b'.repeat(40);
+const THIRD = 'c'.repeat(40);
+const FOURTH = 'd'.repeat(40);
 const BODY = '### What does this PR do?\n\nFixes the thing.\n';
 const AXES = [...selfReview.AXES];
 
@@ -88,7 +102,7 @@ describe('the record', () => {
     assert.deepEqual(Object.keys(raw.entries).sort(), ['single', 'slice-2']);
   });
 
-  test('what stays open: every issue, a nit on new code, a question with no answer', async () => {
+  test('what stays open: every issue and a question with no answer, what upstream rejects for', async () => {
     const result = await record({
       findings: [
         { label: 'issue', text: 'blocks', section: 2 },
@@ -103,7 +117,20 @@ describe('the record', () => {
     assert.equal(result.ok, true);
     assert.deepEqual(
       result.unresolved.map((finding) => finding.text),
-      ['blocks', 'blocks even when old', 'new code', 'why?'],
+      ['blocks', 'blocks even when old', 'why?'],
+    );
+  });
+
+  test('a nit on new code is not open, and the record keeps it as the review said it', async () => {
+    const result = await record({ findings: [{ label: 'nit', text: 'name the helper after its role', path: 'a.ts', line: 3, section: 10 }] });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.unresolved, []);
+
+    const entry = selfReview.entryFor(await selfReview.read(ISSUE, { home }), undefined);
+    assert.deepEqual(
+      entry.findings.map((finding) => [finding.label, finding.text, finding.preExisting]),
+      [['nit', 'name the helper after its role', false]],
     );
   });
 
@@ -158,6 +185,192 @@ describe('the self-review check', () => {
     await record({ findings: [{ label: 'nit', text: 'old', preExisting: true }] });
     const result = await check(context({ prBody: BODY.replace(/\n/g, '\r\n') }));
     assert.equal(result.status, 'pass');
-    assert.match(result.summary, /nothing open \(1 pre-existing/);
+    assert.match(result.summary, /no issue, no unanswered question; 1 nit\(s\) left, 1 of them pre-existing/);
+  });
+
+  test('passes a review that left only nits on new code, and counts them rather than calling it clean', async () => {
+    await record({
+      findings: [
+        { label: 'nit', text: 'test title reads awkwardly', path: 'a.spec.ts', line: 9, section: 2 },
+        { label: 'nit', text: 'readonly array', path: 'a.ts', line: 3 },
+        { label: 'question', text: 'intended?', answer: 'yes, Notes for reviewers says why' },
+      ],
+    });
+    const result = await check(context());
+
+    assert.equal(result.status, 'pass');
+    assert.match(result.summary, /no issue, no unanswered question; 2 nit\(s\) left, 1 answered question\(s\)/);
+    assert.doesNotMatch(result.summary, /nothing found/);
+  });
+
+  test('names nothing found only when nothing was', async () => {
+    await record();
+    const result = await check(context());
+    assert.equal(result.status, 'pass');
+    assert.match(result.summary, /four axes on aaaaaaaa, nothing found/);
+  });
+});
+
+describe('rounds of the self-review', () => {
+  /** A review of `sha` that left one issue open. */
+  const open = (sha, overrides = {}) => record({ sha, findings: [{ label: 'issue', text: `missing test on ${sha.slice(0, 4)}` }], ...overrides });
+
+  test('counts the commits a review left something open on, and stops a review of the next one at three', async () => {
+    assert.equal(selfReview.DEFAULT_ROUNDS, 3);
+    await open(SHA);
+    await open(OTHER);
+    const third = await open(THIRD);
+
+    assert.equal(third.ok, true);
+    assert.equal(third.rounds.rounds, 3);
+    assert.equal(third.rounds.blocked, true);
+
+    const fourth = await open(FOURTH);
+    assert.equal(fourth.ok, false);
+    assert.match(fourth.error, /3 commits/);
+    assert.match(fourth.error, /stop and ask/i);
+    assert.match(fourth.error, /pdkit self-review continue --issue 7001 --reason "/);
+
+    const stored = selfReview.entryFor(await selfReview.read(ISSUE, { home }), undefined);
+    assert.equal(stored.sha, THIRD, 'a refused round writes nothing');
+  });
+
+  test('the same commit again is not another round: an answer or a new body is recorded at the limit', async () => {
+    await open(SHA);
+    await open(OTHER);
+    await open(THIRD);
+
+    const answered = await record({ sha: THIRD, body: `${BODY}\nNotes: why it holds.\n`, findings: [{ label: 'question', text: 'intended?', answer: 'yes' }] });
+    assert.equal(answered.ok, true);
+    assert.deepEqual(answered.unresolved, []);
+  });
+
+  test('a review that leaves nothing open starts the count over', async () => {
+    await open(SHA);
+    await open(OTHER);
+    await record({ sha: THIRD, findings: [{ label: 'nit', text: 'only a nit' }] });
+
+    const status = await selfReview.rounds({ issue: ISSUE, home });
+    assert.equal(status.rounds, 0);
+    assert.equal(status.blocked, false);
+    assert.equal((await open(FOURTH)).ok, true);
+  });
+
+  test('a person starts it over with a sentence, and only with one', async () => {
+    await open(SHA);
+    await open(OTHER);
+    await open(THIRD);
+
+    assert.equal((await selfReview.continueRounds({ issue: ISSUE, reason: '  ', home })).ok, false);
+    assert.equal((await open(FOURTH)).ok, false);
+
+    const allowed = await selfReview.continueRounds({ issue: ISSUE, reason: 'the two missing tests are the last of the issue', home });
+    assert.equal(allowed.ok, true);
+    assert.equal((await open(FOURTH)).ok, true);
+
+    const entry = (await readJournal({ issue: ISSUE, event: selfReview.EVENTS.continued }, { home })).at(-1);
+    assert.equal(entry.detail, 'the two missing tests are the last of the issue');
+  });
+
+  test('starting the issue over starts the count over', async () => {
+    await open(SHA);
+    await open(OTHER);
+    await open(THIRD);
+    await appendJournal({ issue: ISSUE, event: 'reset', detail: 'archived' }, { home });
+
+    assert.equal((await open(FOURTH)).ok, true);
+  });
+
+  test('each pull request of the issue counts its own', async () => {
+    await open(SHA, { slice: 1 });
+    await open(OTHER, { slice: 1 });
+    await open(THIRD, { slice: 1 });
+
+    assert.equal((await open(FOURTH, { slice: 1 })).ok, false);
+    assert.equal((await open(FOURTH, { slice: 2 })).ok, true);
+    assert.equal((await open(FOURTH)).ok, true);
+  });
+
+  test('the limit is configured, and zero switches it off', async () => {
+    const one = { review: { self_review_rounds: 1 } };
+    await open(SHA, { config: one });
+    assert.equal((await open(OTHER, { config: one })).ok, false);
+
+    const off = { review: { self_review_rounds: 0 } };
+    assert.equal((await open(OTHER, { config: off })).ok, true);
+    assert.equal((await open(THIRD, { config: off })).ok, true);
+    assert.equal(selfReview.roundLimit(off), 0);
+    assert.equal(selfReview.roundLimit({}), 3);
+  });
+
+  test('the check says to stop and ask once the limit is reached, not to run the axes again', async () => {
+    await open(OTHER);
+    await open(THIRD);
+    await open(SHA);
+
+    const result = await check(context());
+    assert.equal(result.status, 'fail');
+    assert.match(result.remedy, /stop and ask/i);
+    assert.match(result.remedy, /pdkit self-review continue --issue 7001 --reason "/);
+  });
+
+  test('below the limit the check sends the axes round again', async () => {
+    await open(SHA);
+
+    const result = await check(context());
+    assert.equal(result.status, 'fail');
+    assert.match(result.remedy, /run the axes on the new commit/);
+    assert.doesNotMatch(result.remedy, /stop and ask/i);
+  });
+});
+
+describe('pdkit self-review, end to end', () => {
+  /**
+   * @param {...string} args
+   * @returns {Promise<{code: number, stdout: string, stderr: string}>}
+   */
+  async function pdkit(...args) {
+    try {
+      const { stdout, stderr } = await exec(process.execPath, [BIN, 'self-review', ...args], {
+        cwd: home,
+        env: { ...process.env, PDKIT_HOME: home },
+        encoding: 'utf8',
+      });
+      return { code: 0, stdout, stderr };
+    } catch (error) {
+      return { code: error.code ?? 1, stdout: String(error.stdout ?? ''), stderr: String(error.stderr ?? '') };
+    }
+  }
+
+  const open = (sha) => record({ sha, findings: [{ label: 'issue', text: 'missing test' }, { label: 'nit', text: 'title' }] });
+
+  test('show says how many rounds left something open, and that the next one waits', async () => {
+    await open(SHA);
+    await open(OTHER);
+    await open(THIRD);
+
+    const shown = await pdkit('show', '--issue', String(ISSUE));
+    assert.equal(shown.code, 0);
+    assert.match(shown.stdout, /\[open\] {2}issue: missing test/);
+    assert.match(shown.stdout, /\[not blocking\] {2}nit: title/);
+    assert.match(shown.stdout, /rounds with something open: 3 of 3 — a review of another commit waits for a person/);
+  });
+
+  test('continue takes a sentence, writes it to the journal and starts the count over', async () => {
+    await open(SHA);
+    await open(OTHER);
+    await open(THIRD);
+
+    const bare = await pdkit('continue', '--issue', String(ISSUE));
+    assert.equal(bare.code, 1);
+    assert.match(bare.stderr, /--reason "<what is different this time>" is required/);
+
+    const said = await pdkit('continue', '--issue', String(ISSUE), '--reason', 'one test left, and it is the last');
+    assert.equal(said.code, 0);
+    assert.match(said.stdout, /may run again; the count of rounds starts over/);
+
+    const status = await selfReview.rounds({ issue: ISSUE, home });
+    assert.equal(status.rounds, 0);
+    assert.equal(status.blocked, false);
   });
 });

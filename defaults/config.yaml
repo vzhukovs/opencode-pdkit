@@ -236,6 +236,13 @@ review:
   # prevent, so the filter does not get to make it.
   bot_escalate: [security, data-loss, correctness]
   stale_after_days: 14         # uncalibrated, like the quickfix thresholds
+  # How many commits in a row our own self-review (/pd:pr step 5, /pd:pr-sync
+  # step 8) may leave an issue or an unanswered question open on before the
+  # next round waits for a person: `pdkit self-review continue --reason`. Fresh
+  # axes find something in every round, much of it in the code written to
+  # answer the round before, so the loop needs an end that is not "they found
+  # nothing". Zero switches the limit off.
+  self_review_rounds: 3
 
 gates:
   push_ttl: 10m

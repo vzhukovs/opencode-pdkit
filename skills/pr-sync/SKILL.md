@@ -286,9 +286,12 @@ or into nothing at all.
    body is the one on GitHub, write it there first with
    `gh pr view <k> --json body -q .body`. Upstream's agent reads
    the whole pull request again after every push, not only this round's
-   commits, so ours does too. An open finding is a new row for step 4, with
-   source `self (§n)`. The `self-review` check fails until a review of the
-   commit being pushed finds nothing open.
+   commits, so ours does too. An open finding — an `issue:`, a `question:`
+   with no answer — is a new row for step 4, with source `self (§n)`; a
+   `nit:` is not, and stays in the record. The `self-review` check fails until
+   a review of the commit being pushed leaves nothing open. The rounds end as
+   in `/pd:pr` step 5: at `review.self_review_rounds` the next one is refused,
+   and you stop and ask the person.
 
 9. **Publish, in this order.** First show what the push would change:
 
