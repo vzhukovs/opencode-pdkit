@@ -119,18 +119,19 @@ merged together." Closing those is `/pd:pr-sync`'s job, after this one is open.
    pdkit self-review target --issue <n> [--slice <i>]
    ```
 
-   It prints the diff and the commit that preflight will check. Then:
+   It prints the diff, the commit that preflight will check and the triage
+   record, and starts a round. Then:
 
-   - the four `pd-review-*` axes, in parallel. Each gets the diff command, the
-     changed files, the title, the body file and the issue as triage recorded
-     it, `$PDKIT_HOME/issues/<n>/issue.md` — not the issue on GitHub: its
-     `[operator]` lines and `Not in this PR` are the scope this pull request
-     was cut to. Each is told this is our own pull request before publishing,
-     so there are no threads. Together they cover all twelve sections of the
-     rules;
+   - the four `pd-review-*` axes, in parallel. Each gets what `target`
+     printed, as it printed it — the diff command, the changed files and the
+     triage record, `issue.md`, not the issue on GitHub: its `[operator]`
+     lines and `Not in this PR` are the scope this pull request was cut to —
+     with the title and the body file, and is told this is our own pull
+     request before publishing, so there are no threads. Together they cover
+     all twelve sections of the rules;
    - wait for all four axis reports, then `pd-review-synth` on the four
-     reports and the same `issue.md`. It calibrates as the maintainer's agent
-     does and ends with the findings as JSON;
+     reports and the same triage record. It calibrates as the maintainer's
+     agent does and ends with the findings as JSON;
    - `pdkit self-review record --issue <n> [--slice <i>] --findings <f.json>
      --body <file>`.
 
