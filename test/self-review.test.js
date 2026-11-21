@@ -303,6 +303,53 @@ describe('rounds of the self-review', () => {
     assert.equal(selfReview.roundLimit({}), 3);
   });
 
+  test('a round starts where the axes start: three commits targeted and never recorded stop the fourth', async () => {
+    const start = (sha) => selfReview.startRound({ issue: ISSUE, sha, home });
+
+    assert.equal((await start(SHA)).ok, true);
+    assert.equal((await start(OTHER)).ok, true);
+    const third = await start(THIRD);
+    assert.equal(third.ok, true);
+    assert.equal(third.rounds.rounds, 3);
+    assert.equal(third.rounds.blocked, true);
+
+    const fourth = await start(FOURTH);
+    assert.equal(fourth.ok, false);
+    assert.match(fourth.error, /stop and ask/i);
+    assert.equal((await open(FOURTH)).ok, false, 'nor can the fourth be recorded');
+
+    const entries = await readJournal({ issue: ISSUE, event: selfReview.EVENTS.started }, { home });
+    assert.deepEqual(
+      entries.map((entry) => entry.detail),
+      ['aaaaaaaa', 'bbbbbbbb', 'cccccccc'],
+      'a refused start writes nothing',
+    );
+  });
+
+  test('starting the same commit again is the same round, and its record closes it', async () => {
+    const start = (sha) => selfReview.startRound({ issue: ISSUE, sha, home });
+    await start(SHA);
+    await start(SHA);
+    await open(SHA);
+    await start(OTHER);
+    await start(THIRD);
+
+    assert.equal((await selfReview.rounds({ issue: ISSUE, home })).rounds, 3);
+    assert.equal((await start(THIRD)).ok, true, 'the commit at the limit can be read again');
+    assert.equal((await start(FOURTH)).ok, false);
+  });
+
+  test('a clean record after started rounds starts the count over', async () => {
+    const start = (sha) => selfReview.startRound({ issue: ISSUE, sha, home });
+    await start(SHA);
+    await start(OTHER);
+    await start(THIRD);
+    await record({ sha: THIRD, findings: [{ label: 'nit', text: 'left' }] });
+
+    assert.equal((await selfReview.rounds({ issue: ISSUE, home })).rounds, 0);
+    assert.equal((await start(FOURTH)).ok, true);
+  });
+
   test('the check says to stop and ask once the limit is reached, not to run the axes again', async () => {
     await open(OTHER);
     await open(THIRD);
@@ -353,7 +400,7 @@ describe('pdkit self-review, end to end', () => {
     assert.equal(shown.code, 0);
     assert.match(shown.stdout, /\[open\] {2}issue: missing test/);
     assert.match(shown.stdout, /\[not blocking\] {2}nit: title/);
-    assert.match(shown.stdout, /rounds with something open: 3 of 3 — a review of another commit waits for a person/);
+    assert.match(shown.stdout, /rounds since the last clean review: 3 of 3 — a review of another commit waits for a person/);
   });
 
   test('continue takes a sentence, writes it to the journal and starts the count over', async () => {

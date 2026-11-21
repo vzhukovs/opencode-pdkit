@@ -58,7 +58,7 @@ config uses them as enum members next to `auto`.
 | `preflight.typecheck_scope` | `repo` (default) or `packages` — what `typecheck` means in preflight and in `slice verify`. The whole one, because a type error lands in the consumer of a change |
 | `exec.max_attempts` | how many failed captures block a task; zero switches blocking off |
 | `review.bots_collapsed`, `review.bot_escalate` | which accounts collapse, and which words expand one back |
-| `review.self_review_rounds` | how many commits in a row the self-review may leave something open on before the next round waits for a person (`pdkit self-review continue`); zero switches the limit off |
+| `review.self_review_rounds` | how many commits in a row the self-review may run on without a clean review before the next round waits for a person (`pdkit self-review continue`); a round starts at `self-review target`; zero switches the limit off |
 
 There is **no `routing:` block** and no model selection here at all, and that
 is deliberate: changing `pd-auditor`'s model changes what acceptance is worth,

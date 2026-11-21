@@ -166,11 +166,12 @@ merged together." Closing those is `/pd:pr-sync`'s job, after this one is open.
    upstream's agent would reject the pull request for, on what is about to be
    pushed.
 
-   **The rounds end.** `pdkit self-review record` counts the commits in a row
-   the review left something open on. At `review.self_review_rounds` — three by
-   default — the next round is refused: another one costs what the last one
-   did, and finds fault with the code the last one wrote. Stop there and ask
-   the person. Show what is still open and how the diff grew since the first
+   **The rounds end.** A round starts when `pdkit self-review target` hands
+   the axes a commit, recorded or not, and the rounds count until a review
+   leaves nothing open. Record every round before you change anything for it.
+   At `review.self_review_rounds` — three by default — the next round is
+   refused: another one costs what the last one did, and finds fault with the
+   code the last one wrote. Stop there and ask the person. Show what is still open and how the diff grew since the first
    round; whether to go on, to escalate a quickfix (`pdkit issue escalate
    <n>`) or to stop is theirs to decide, and going on is theirs to word:
 
