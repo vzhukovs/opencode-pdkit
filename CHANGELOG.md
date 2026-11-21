@@ -308,13 +308,15 @@ with what stands in for each, is also in [section 6 of
   commit an issue makes anyway, never in a round of its own, and step 7 shows
   you the ones left — fixing one first is yours to ask for. `/pd:pr-sync`
   makes a row of an open finding only.
-- **The self-review reads the scope triage recorded.** The four axes and the
-  synthesis get `issue.md`, with its `[operator]` lines and `Not in this PR`,
-  in place of the issue as it stands on GitHub, and a finding that asks for
-  what triage put out of the pull request is not an `issue:` — it is dropped
-  when the body names it, and a nit about the body when it does not. Judged
-  against the issue alone, an axis asked for exactly what you had cut out,
-  and every round after that reviewed code nobody had asked for.
+- **The self-review reads the scope triage recorded.** `pdkit self-review
+  target` prints the triage record, `issue.md`, with the diff and the commit,
+  and the four axes and the synthesis get it as printed — its `[operator]`
+  lines and `Not in this PR`, in place of the issue as it stands on GitHub.
+  A finding that asks for what triage put out of the pull request is not an
+  `issue:`: it is dropped when the body names it, and a nit about the body
+  when it does not. Judged against the issue alone, an axis asked for exactly
+  what you had cut out, and every round after that reviewed code nobody had
+  asked for.
 - **The self-review's rounds end.** A round is a commit the axes were handed:
   it starts at `pdkit self-review target`, whether or not the session records
   it, and is counted from the journal (`self-review-target`); a review with

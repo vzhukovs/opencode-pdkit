@@ -357,7 +357,7 @@ pull request body, so on the first pass the ones that need it judge nothing.
 Draft the body, run the self-review on it, then:
 
 ```bash
-pdkit self-review target --issue <n> [--slice <i>]  # the diff and commit the axes read
+pdkit self-review target --issue <n> [--slice <i>]  # what the axes read: diff, commit, triage record; starts a round
 pdkit self-review record --issue <n> [--slice <i>] --findings <f.json> --body <file>
 pdkit self-review continue --issue <n> --reason "<why>"  # past review.self_review_rounds: your sentence
 pdkit preflight <n> --body-only --body <file>
