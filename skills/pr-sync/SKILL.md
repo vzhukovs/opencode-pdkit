@@ -280,7 +280,8 @@ or into nothing at all.
 
    Between the two passes, **the self-review**, exactly as `/pd:pr` step 5
    runs it: `pdkit self-review target`, the four axes on the whole pull
-   request, wait for all four axis reports, then the synthesis, then
+   request with the issue as triage recorded it (`issue.md`, as there), wait
+   for all four axis reports, then the synthesis, then
    `pdkit self-review record` with the body pass two will read, in a file
    under `$PDKIT_HOME/issues/<n>/`, where the axes can read it. When that
    body is the one on GitHub, write it there first with
