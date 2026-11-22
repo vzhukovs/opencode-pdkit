@@ -1747,6 +1747,13 @@ describe('the MCP servers Open Code reports', () => {
   const CONFIG = { mcp: { playwright: 'auto', context7: 'off', basic_memory: 'off', github: 'off' }, validation: { app: { debug_port: PORT } } };
   const WIRED = ['npx', '@playwright/mcp@latest', '--cdp-endpoint', `http://127.0.0.1:${PORT}`];
   const FIX = `opencode mcp add playwright --global -- npx @playwright/mcp@latest --cdp-endpoint http://127.0.0.1:${PORT}`;
+  // DV27: without the server's tools the application is still launched, and
+  // PASS rests on what is attached, never on the server. Claude Code's version
+  // said validation "produces a checklist instead of a run and never sets PASS".
+  const LAUNCHED_ANYWAY =
+    '/pd:validate still launches the application, building it first when the tree is stale, and a step pd-validator ' +
+    'cannot back with an artefact stays unverified, as a checklist for a human; PASS needs an artefact either way';
+  const NO_TOOLS = `pd-validator gets no browser tools; ${LAUNCHED_ANYWAY}`;
 
   const answer = (data) => ({ ok: true, data });
   /** GET /api/config: a bare list, documents and directories, in the order the server read them. */
@@ -1803,8 +1810,7 @@ describe('the MCP servers Open Code reports', () => {
     const line = find(checks, 'mcp:playwright');
 
     assert.equal(line.status, 'skip');
-    assert.match(line.detail, /^not configured — \/pd:validate produces a checklist instead of a run and never sets PASS\. /);
-    assert.ok(line.detail.includes(`Add it with: ${FIX} (--global,`), line.detail);
+    assert.ok(line.detail.startsWith(`not configured — ${NO_TOOLS}. Add it with: ${FIX} (--global,`), line.detail);
     assert.match(line.detail, /no worktree would see it/);
     // Nothing configured, so no status to wait for.
     assert.deepEqual(asked, ['/api/config']);
@@ -1891,7 +1897,7 @@ describe('the MCP servers Open Code reports', () => {
       id: 'mcp:playwright',
       level: 'optional',
       status: 'warn',
-      detail: 'configured, but Open Code reports it failed: NotFound: ChildProcess.spawn (npx) — /pd:validate produces a checklist instead of a run and never sets PASS',
+      detail: `configured, but Open Code reports it failed: NotFound: ChildProcess.spawn (npx) — ${NO_TOOLS}`,
     });
     assert.equal(asked.includes('/api/agent'), false, 'a server that is down has no tools to check');
   });
@@ -1940,8 +1946,26 @@ describe('the MCP servers Open Code reports', () => {
 
     assert.equal(line.status, 'warn');
     assert.match(line.detail, /^attaches to http:\/\/127\.0\.0\.1:9222, but pd-validator is not offered 6 of its 6 tools \(playwright_browser_navigate, /);
-    assert.match(line.detail, /never sets PASS — the permissions line names the rule that takes them, and where it is$/);
+    assert.ok(line.detail.endsWith(`); ${LAUNCHED_ANYWAY} — the permissions line names the rule that takes them, and where it is`), line.detail);
     assert.equal(line.detail.includes('playwright_* * deny'), false, line.detail);
+  });
+
+  test('one tool taken is named alone, and the line does not say the validator has none', async () => {
+    const deny = { action: 'playwright_browser_take_screenshot', resource: '*', effect: 'deny' };
+    const rules = [...validatorRules.slice(0, -BUILT_IN_TAIL.length), deny, ...BUILT_IN_TAIL];
+    const { checks } = await run({
+      '/api/config': [answer(documents({ playwright: { type: 'local', command: WIRED } }))],
+      '/api/mcp': [answer(statuses({ playwright: { status: 'connected' } }))],
+      '/api/agent': [answer(agents(rules))],
+    });
+    const line = find(checks, 'mcp:playwright');
+
+    assert.equal(line.status, 'warn');
+    assert.ok(
+      line.detail.startsWith(`attaches to http://127.0.0.1:${PORT}, but pd-validator is not offered 1 of its 6 tools (playwright_browser_take_screenshot); ${LAUNCHED_ANYWAY} — `),
+      line.detail,
+    );
+    assert.equal(line.detail.includes('no browser tools'), false, line.detail);
   });
 
   test('allowed again under agents.pd-validator.permissions, after the rule, they are offered', async () => {
@@ -1986,7 +2010,7 @@ describe('the MCP servers Open Code reports', () => {
     });
 
     assert.equal(find(checks, 'mcp:playwright').status, 'warn');
-    assert.match(find(checks, 'mcp:playwright').detail, /pd-validator's rules allow none of its tools \(Playwright_\*\)/);
+    assert.ok(find(checks, 'mcp:playwright').detail.endsWith(`, but pd-validator's rules allow none of its tools (Playwright_*); ${LAUNCHED_ANYWAY}`), find(checks, 'mcp:playwright').detail);
   });
 
   test('another server is ok once connected, under either spelling of its name', async () => {
