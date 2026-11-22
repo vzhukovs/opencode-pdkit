@@ -187,7 +187,9 @@ export async function seedWorkspace(root) {
  * A task file under an issue, in the shape templates/task.md renders.
  *
  * Slicing reads these to answer which R-IDs a file carries, so a test about
- * requirement coverage needs real ones rather than a hand-written graph.
+ * requirement coverage needs real ones rather than a hand-written graph. It
+ * lists one test case, as a task that owns code does in the plan the approval
+ * reads it with.
  *
  * @param {{home: string, issue: number, id: string, satisfies: string[], owns: string[]}} input
  * @returns {Promise<void>}
@@ -216,6 +218,11 @@ export async function writeTask(input) {
       'true',
       '```',
       'Expected: nothing',
+      '',
+      '## Tests',
+      '| Case | When | Asserts | Fails without the change because |',
+      '|---|---|---|---|',
+      '| the fixture behavior | always | it holds | the work is not done |',
       '',
     ].join('\n'),
   );

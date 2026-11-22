@@ -32,16 +32,26 @@ did not say that, this is the wrong command — go back to `/pd:triage`.
    "Write it the way the maintainer reviews it" is this session's to follow.
    Read that section too. If the rules file cannot be read, stop: a fix
    written without it is the fix the review sends back.
-3. Make the fix. Add or extend a test for it; "too small to test" is how a
-   reviewer's first comment gets written for them.
-4. `pdkit preflight <n> --only maintainer-rules`. A fail is a rule with no
+3. **List the tests before the fix**, as `## Tests` at the end of
+   `$PDKIT_HOME/issues/<n>/issue.md`, in the table a planned task carries
+   (`${CLAUDE_PLUGIN_ROOT}/templates/task.md`): a row per case, with the
+   behavior or path, the conditions, what the test asserts and why it fails
+   without the fix. Every path the fix changes, the error path included; both
+   sides of a condition it adds, and a change of state across it; every side
+   effect; for anything asynchronous, an assertion on completion rather than
+   on a halfway state. `/pd:pr` hands `issue.md` to the review axes with the
+   diff.
+4. Make the fix, and write exactly those cases: "too small to test" is how a
+   reviewer's first comment gets written for them. A case the fix turns out to
+   need beyond the list goes into the list too, with why.
+5. `pdkit preflight <n> --only maintainer-rules`. A fail is a rule with no
    exception: change the code. A warning is a rule with its own condition:
    say in one sentence why the condition holds, or change the code. The
    self-review in `/pd:pr` reads the sentence.
-5. Commit with a conventional subject and one `Signed-off-by`. Squash with
+6. Commit with a conventional subject and one `Signed-off-by`. Squash with
    `git reset --soft <base> && git commit` — never `rebase -i`, which the
    husky hook rejects for the duplicate sign-off it just created.
-6. `pdkit preflight <n>` → hand over to `/pd:pr`.
+7. `pdkit preflight <n>` → hand over to `/pd:pr`.
 
 ## The thresholds are the point
 

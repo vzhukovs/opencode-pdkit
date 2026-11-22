@@ -399,6 +399,21 @@ describe('the tasks an amendment writes', () => {
     const text = await readFile(issueFile('tasks', 'T3.md'), 'utf8');
     assert.match(text, /## Steps\n1\. add the four tests\n {3}with a deferred dispose\n2\. run them\n/);
     assert.match(text, /From A1 \(amendments\/A1\.md; replaces T2\)/);
+    // A plan written before tasks listed their tests: the file has the section,
+    // and nothing in it, which is what the block said.
+    assert.match(text, /## Tests\n<!--[\s\S]*?-->\n\| Case \| When \| Asserts \| Fails without the change because \|\n\|---\|---\|---\|---\|\n\s*\n## Steps/);
+    assert.deepEqual(t3.tests, []);
+  });
+
+  test('a block that lists its tests puts them in the task file it renders', async () => {
+    const row = '| a second quit while disposing | dispose is pending | the quit is vetoed | the second quit exits |';
+    await writeFile(join(home, 'values.json'), JSON.stringify({ ...VALUES, slices: SLICES.replace('- Steps:', `- Tests:\n  ${row}\n- Steps:`) }));
+
+    const out = await pdkit('amendment', 'approve', await propose(), '--issue', String(ISSUE));
+
+    assert.equal(out.code, 0, out.stderr);
+    assert.deepEqual(parseTask(await readFile(issueFile('tasks', 'T3.md'), 'utf8')).tests, [row]);
+    assert.doesNotMatch(await readFile(issueFile('plan.md'), 'utf8'), /a second quit while disposing/);
   });
 
   test('the replaced task is marked withdrawn in its file and in the record, and owns nothing', async () => {

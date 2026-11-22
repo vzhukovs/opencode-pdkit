@@ -26,13 +26,19 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
+  ANSWER_SECTIONS,
+  TASK_PARTS,
   addPlanTasks,
   amendmentCoverageProblems,
   amendmentTaskProblems,
   amendmentTaskValues,
   checkPlan,
+  codeIn,
   parseAmendment,
   parsePlan,
   parseTask,
@@ -40,9 +46,13 @@ import {
   setAmendmentStatus,
   setPlanRequirements,
   setTaskStatus,
+  taskParts,
   withdrawalOf,
   withdrawnStatus,
 } from '../lib/artefacts.js';
+import { render } from '../lib/render.js';
+
+const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
 /**
  * A plan in template shape, with the pieces a case needs replaced.
@@ -934,5 +944,378 @@ describe('a withdrawn task file', () => {
     assert.equal(parseTask(TASK).withdrawn, null);
     assert.deepEqual(withdrawalOf('withdrawn'), { amendment: null, replacedBy: [] });
     assert.equal(setTaskStatus('# T2: x\n', 'withdrawn'), null);
+  });
+});
+
+// A plan written after the review's questions became sections of it: Reuse,
+// Modes, Gates and Body must disclose in plan.md, and a `## Tests` in every
+// task file. What the critic checks, the plan answers in writing before it is
+// asked; what a grep can see of those answers, `plan check` refuses here.
+
+/** One case, as a row of the table a task file's `## Tests` carries. */
+const ROW = '| a command of three words | the container was created with them | `start` passes all three to the engine | `Command[0]` drops two |';
+
+/** The typecheck, the lint of both its files and the spec: the gate a code task runs. */
+const GATED = '`pnpm typecheck:main && pnpm exec eslint packages/main/src/plugin/container-registry.ts packages/main/src/plugin/container-registry.spec.ts && pnpm test:main -- container-registry.spec.ts`';
+
+/** A task that owns code and its spec, its Done when gated. */
+const CODE_TASK = [
+  '### T1: join the command arguments',
+  '- Satisfies: R1',
+  '- Owns: packages/main/src/plugin/container-registry.ts, packages/main/src/plugin/container-registry.spec.ts',
+  `- Done when: ${GATED}`,
+  '- Intent: run the command a container was created with, not only its first word (R1).',
+].join('\n');
+
+/**
+ * A plan in the template's present shape. `drop` leaves out answer sections by
+ * name; `tasks` replaces the one task.
+ *
+ * @param {{tasks?: string, drop?: string[]}} [over]
+ */
+function fullPlan(over = {}) {
+  const drop = new Set(over.drop ?? []);
+  const section = (name, body) => (drop.has(name) ? [] : [`## ${name}`, body, '']);
+  return [
+    '# PLAN: DESKTOP-18248',
+    '',
+    '- Requirements: R1 (frozen on approval)',
+    '- e2e coverage: no — a one-line fix on a route where e2e is off',
+    '- Slice hypothesis: 1 slices',
+    '',
+    '## Context',
+    '- `packages/main/src/plugin/container-registry.ts:559` — the offending line',
+    '',
+    ...section('Reuse', 'searched: `join(` in packages/main/src/plugin -> 3; none joins a command'),
+    ...section('Modes', '- the main process only: nothing renders, one runner (`test:main`)'),
+    '## Frozen interfaces',
+    '```ts',
+    'none',
+    '```',
+    '',
+    '## Tasks',
+    over.tasks ?? CODE_TASK,
+    '',
+    ...section('Gates', '- T1: `typecheck:main`, eslint on its two files, its spec'),
+    '## Upstream compliance',
+    '- SPDX headers needed: no new files',
+    '- Schemas touched: no',
+    '- `extension-api.d.ts` touched: no',
+    '- Commit scope: main',
+    '',
+    '## Slice hypothesis',
+    'One slice: the fix and its test ship together.',
+    '',
+    ...section('Body must disclose', 'none'),
+    '## Open decisions',
+    'none',
+    '',
+  ].join('\n');
+}
+
+/**
+ * A task file as the template renders it, with `tests` as the rows of its
+ * `## Tests`.
+ *
+ * @param {string} id
+ * @param {string} tests
+ */
+async function taskFile(id, tests) {
+  const text = await render('task', {
+    taskId: id,
+    title: 'a task',
+    issue: '18248',
+    satisfies: 'R1',
+    status: 'pending',
+    attempts: '0',
+    ownedFiles: ['- packages/main/src/plugin/container-registry.ts'],
+    command: 'pnpm test:main',
+    expected: 'exit 0',
+    context: '—',
+    tests,
+    steps: '1. Replace Command[0] with Command.join(" ")',
+    notes: '—',
+  });
+  return parseTask(text);
+}
+
+/** Check a plan's text with its content, so the sections are compared too. */
+const checkFull = (text, extra = {}) => checkPlan({ plan: parsePlan(text), content: text, ...extra });
+
+const checks = (result, check) => result.problems.filter((problem) => problem.check === check).map((problem) => problem.detail);
+
+describe('a plan that answers the review before it is asked', () => {
+  test('the plan says which answer sections it has, and the template has all four', async () => {
+    assert.deepEqual(ANSWER_SECTIONS, ['Reuse', 'Modes', 'Gates', 'Body must disclose']);
+    assert.deepEqual(parsePlan(fullPlan()).answers, ANSWER_SECTIONS);
+    assert.deepEqual(parsePlan(fullPlan({ drop: ['Modes', 'Gates'] })).answers, ['Reuse', 'Body must disclose']);
+    assert.deepEqual(parsePlan(plan()).answers, []);
+
+    const template = await readFile(join(ROOT, 'templates', 'plan.md'), 'utf8');
+    for (const name of ANSWER_SECTIONS) assert.match(template, new RegExp(`^## ${name}$`, 'm'), name);
+  });
+
+  test('a task file reads its cases from "## Tests", the table\'s heading and rule left out', async () => {
+    const two = await taskFile('T1', `${ROW}\n| a command of one word | — | it still runs | — |`);
+    assert.deepEqual(two.tests, [ROW, '| a command of one word | — | it still runs | — |']);
+
+    assert.deepEqual((await taskFile('T1', '')).tests, []);
+    assert.deepEqual((await taskFile('T1', '—')).tests, []);
+  });
+
+  test('passes when every task that owns code lists its tests and gates its files', async () => {
+    const result = await checkFull(fullPlan(), { tasks: { T1: await taskFile('T1', ROW) } });
+
+    assert.deepEqual(result.problems, []);
+    assert.equal(result.warnings.some((warning) => warning.check === 'format'), false);
+  });
+
+  test('a section the plan dropped is refused, as any other', async () => {
+    const result = await checkFull(fullPlan({ drop: ['Gates'] }), { tasks: { T1: await taskFile('T1', ROW) } });
+
+    assert.deepEqual(checks(result, 'sections'), ['the plan has no "Gates" section']);
+  });
+
+  test('a task that owns code with no case under "## Tests" is refused', async () => {
+    for (const tasks of [{ T1: await taskFile('T1', '') }, {}]) {
+      const result = await checkFull(fullPlan(), { tasks });
+      assert.deepEqual(checks(result, 'tests'), [
+        'T1 owns code (packages/main/src/plugin/container-registry.ts) and lists no test case under "## Tests" — that list is what the implementer writes and the review checks',
+      ]);
+    }
+  });
+
+  test('a task with no file of its own may carry its cases in its block, as an amendment\'s does', async () => {
+    const inline = fullPlan({ tasks: `${CODE_TASK}\n- Tests:\n  ${ROW}` });
+    assert.deepEqual(checks(await checkFull(inline, { tasks: {} }), 'tests'), []);
+  });
+
+  test('a task that owns only specs, a declaration file, or nothing lists no tests and is not refused for it', async () => {
+    const tasks = [
+      '### T1: pin the current behavior',
+      '- Satisfies: R1',
+      '- Owns: packages/main/src/plugin/container-registry.spec.ts',
+      '- Done when: `pnpm typecheck:main && pnpm exec eslint packages/main/src/plugin/container-registry.spec.ts && pnpm test:main`',
+      '',
+      '### T2: declare the option',
+      '- Satisfies: R1',
+      '- Owns: packages/extension-api/src/extension-api.d.ts',
+      '- Done when: `pnpm typecheck:extension-api && pnpm exec eslint packages/extension-api/src/extension-api.d.ts`',
+      '',
+      '### T3: the whole suite',
+      '- Satisfies: R1',
+      '- Owns: (none — verification only, writes no files)',
+      '- Done when: `pnpm test:main`',
+    ].join('\n');
+
+    const result = await checkFull(fullPlan({ tasks }), { tasks: {} });
+    assert.deepEqual(result.problems, []);
+  });
+
+  test('a Done when that leaves out the typecheck or the lint of the task\'s files is refused, and says which', async () => {
+    const owned = ['packages/main/src/plugin/container-registry.ts', 'packages/main/src/plugin/container-registry.spec.ts'];
+    const withCommand = (command) => fullPlan({ tasks: CODE_TASK.replace(GATED, `\`${command}\``) });
+    const tasks = { T1: await taskFile('T1', ROW) };
+    const gates = async (command) => checks(await checkFull(withCommand(command), { tasks }), 'gates');
+
+    assert.deepEqual(await gates(`pnpm exec eslint ${owned.join(' ')} && pnpm test:main`), [
+      'T1\'s Done when runs no typecheck: an error its own command does not show surfaces in a later task, which may not write the file',
+    ]);
+    assert.deepEqual(await gates('pnpm typecheck:main && pnpm test:main -- container-registry.spec.ts'), [
+      'T1\'s Done when runs no lint: an error its own command does not show surfaces in a later task, which may not write the file',
+    ]);
+    // The spec is named, by the test runner — not by the lint.
+    assert.deepEqual(await gates(`pnpm typecheck:main && pnpm exec eslint ${owned[0]} && pnpm exec vitest run ${owned[1]}`), [
+      `T1's Done when does not lint ${owned[1]}: an error its own command does not show surfaces in a later task, which may not write the file`,
+    ]);
+    assert.deepEqual(await gates('pnpm test:main'), [
+      'T1\'s Done when runs no typecheck and runs no lint: an error its own command does not show surfaces in a later task, which may not write the file',
+    ]);
+  });
+
+  test('a lint of the whole project covers the task\'s files, and code a typecheck does not read needs none', async () => {
+    const tasks = { T1: await taskFile('T1', ROW) };
+    for (const command of ['pnpm typecheck:main && pnpm lint:check && pnpm test:main', 'npx tsc --noEmit -p packages/main && npx eslint . && pnpm test:main']) {
+      const result = await checkFull(fullPlan({ tasks: CODE_TASK.replace(GATED, `\`${command}\``) }), { tasks });
+      assert.deepEqual(checks(result, 'gates'), [], command);
+    }
+
+    const script = ['### T1: a script', '- Satisfies: R1', '- Owns: scripts/watch.mjs', '- Done when: `pnpm exec eslint scripts/watch.mjs && node scripts/watch.mjs --check`'].join('\n');
+    const result = await checkFull(fullPlan({ tasks: script }), { tasks: { T1: await taskFile('T1', ROW) } });
+    assert.deepEqual(result.problems, []);
+  });
+
+  test('a task that owns only specs is still held to its typecheck and its lint', async () => {
+    const tasks = ['### T1: pin the current behavior', '- Satisfies: R1', '- Owns: packages/main/src/plugin/container-registry.spec.ts', '- Done when: `pnpm test:main`'].join('\n');
+    assert.deepEqual(checks(await checkFull(fullPlan({ tasks }), { tasks: {} }), 'gates'), [
+      'T1\'s Done when runs no typecheck and runs no lint: an error its own command does not show surfaces in a later task, which may not write the file',
+    ]);
+  });
+
+  // `test:renderer` runs with `--passWithNoTests`: on the base, before the
+  // spec exists, the command passes, and it would pass after an implementer
+  // who wrote none. A warning and not a refusal: a refactor's command passes
+  // on both sides, and so does one that runs a spec its task only extends.
+  test('a code task whose Done when already passes on the base is warned about; a spec-only one is not', async () => {
+    const run = (task, command, exitCode) => ({ task, command, exitCode, complete: true, durationMs: 1, at: '2026-11-23T00:00:00.000Z', head: 'abc1234', dirty: false, tail: ['done'] });
+    const SPEC_ONLY = ['### T2: pin the current behavior', '- Satisfies: R1', '- Owns: packages/main/src/plugin/other.spec.ts', '- Done when: `pnpm typecheck:main && pnpm exec eslint packages/main/src/plugin/other.spec.ts && pnpm test:main`'].join('\n');
+    const text = fullPlan({ tasks: `${CODE_TASK}\n\n${SPEC_ONLY}` });
+    const parsed = parsePlan(text);
+    const probe = Object.fromEntries(parsed.tasks.map((task) => [task.id, run(task.id, task.command, 0)]));
+
+    const result = await checkFull(text, { tasks: { T1: await taskFile('T1', ROW) }, probe });
+
+    assert.deepEqual(result.problems, []);
+    const warned = result.warnings.filter((warning) => warning.check === 'done-when-run').map((warning) => warning.detail);
+    assert.deepEqual(warned, [
+      'T1\'s Done when exits 0 on abc1234 already, before T1\'s change: as written it passes without it — a new spec file, a filter naming the new cases or a guard that fails on the base would make it prove the change',
+    ]);
+  });
+});
+
+// The live $PDKIT_HOME holds plans approved before those sections existed,
+// with tasks in exec. Nothing they were not asked for is asked of them now.
+describe('a plan written before the review\'s questions were sections of it', () => {
+  /** A task file as the template rendered it before `## Tests`. */
+  const OLD_TASK = [
+    '# T1: join the command arguments',
+    '',
+    '- Issue: 18248',
+    '- Satisfies: R1',
+    '- Status: pending',
+    '- Attempts: 0',
+    '',
+    '## Owns',
+    '- packages/main/src/plugin/container-registry.ts',
+    '',
+    '## Done when',
+    '```bash',
+    'pnpm test:main -- container-registry.spec.ts',
+    '```',
+    'Expected: exit 0',
+    '',
+    '## Context',
+    '- `container-registry.ts:559` — the offending line',
+    '',
+    '## Steps',
+    '1. Replace Command[0] with Command.join(" ")',
+    '',
+    '## Notes',
+    '—',
+    '',
+  ].join('\n');
+
+  test('passes as it did, its code tasks not held to tests or gates, and says so once', async () => {
+    const result = await checkPlan({ plan: parsePlan(plan()), content: plan(), tasks: { T1: parseTask(OLD_TASK) } });
+
+    assert.deepEqual(result.problems, []);
+    const format = result.warnings.filter((warning) => warning.check === 'format').map((warning) => warning.detail);
+    assert.deepEqual(format, [
+      'the plan has none of the sections Reuse, Modes, Gates and Body must disclose: written before they were asked, it is not held to them, and its tasks are not held to "## Tests" or to a typecheck and a lint in "Done when"',
+    ]);
+  });
+
+  test('its task file reads as it did, with no tests', () => {
+    const task = parseTask(OLD_TASK);
+    assert.deepEqual(
+      [task.id, task.owns, task.command, task.expected, task.status, task.tests],
+      ['T1', ['packages/main/src/plugin/container-registry.ts'], 'pnpm test:main -- container-registry.spec.ts', 'exit 0', 'pending', []],
+    );
+  });
+
+  test('a green probe on it is not warned about: that rule came with the sections', async () => {
+    const parsed = parsePlan(plan());
+    const probe = Object.fromEntries(parsed.tasks.map((task) => [task.id, { task: task.id, command: task.command, exitCode: 0, complete: true, durationMs: 1, at: '2026-11-23T00:00:00.000Z', head: 'abc1234', dirty: false, tail: [] }]));
+    const result = await checkPlan({ plan: parsed, content: plan(), probe });
+    assert.equal(result.warnings.some((warning) => warning.check === 'done-when-run'), false);
+  });
+});
+
+describe('what a task\'s code is', () => {
+  test('specs, tests directories and declaration files are not code with behavior of its own', () => {
+    assert.deepEqual(
+      codeIn([
+        'packages/main/src/a.ts',
+        'packages/renderer/src/lib/B.svelte',
+        'packages/main/src/a.spec.ts',
+        'packages/renderer/src/lib/B.spec.ts',
+        'tests/playwright/src/specs/c.spec.ts',
+        'tests/playwright/src/model/page.ts',
+        'packages/extension-api/src/extension-api.d.ts',
+        'scripts/watch.mjs',
+        'website/docs/intro.md',
+        'package.json',
+      ]),
+      {
+        source: [
+          'packages/main/src/a.ts',
+          'packages/renderer/src/lib/B.svelte',
+          'packages/main/src/a.spec.ts',
+          'packages/renderer/src/lib/B.spec.ts',
+          'tests/playwright/src/specs/c.spec.ts',
+          'tests/playwright/src/model/page.ts',
+          'packages/extension-api/src/extension-api.d.ts',
+          'scripts/watch.mjs',
+        ],
+        behavior: ['packages/main/src/a.ts', 'packages/renderer/src/lib/B.svelte', 'scripts/watch.mjs'],
+        typed: [
+          'packages/main/src/a.ts',
+          'packages/renderer/src/lib/B.svelte',
+          'packages/main/src/a.spec.ts',
+          'packages/renderer/src/lib/B.spec.ts',
+          'tests/playwright/src/specs/c.spec.ts',
+          'tests/playwright/src/model/page.ts',
+          'packages/extension-api/src/extension-api.d.ts',
+        ],
+      },
+    );
+  });
+});
+
+describe('the tests of a task an amendment writes', () => {
+  const BLOCK = [
+    '# AMENDMENT A1: DESKTOP-18248',
+    '',
+    '- Status: proposed',
+    '',
+    '## Slices affected',
+    '### T5 (replaces T1): join the command arguments, escaped',
+    '- Satisfies: R1',
+    '- Owns: packages/main/src/plugin/container-registry.ts',
+    `- Done when: ${GATED}`,
+    '- Tests:',
+    `  ${ROW}`,
+    '- Steps:',
+    '  1. Escape each argument before joining.',
+    '',
+  ].join('\n');
+
+  test('are read from the block, go to the task file, and stay out of plan.md', async () => {
+    const [t5] = parseAmendment(BLOCK).tasks;
+    assert.equal(t5.tests, ROW);
+
+    const values = amendmentTaskValues(t5, { issue: 18248, amendment: 'A1' });
+    assert.equal(values.tests, ROW);
+    const rendered = parseTask(await render('task', values));
+    assert.deepEqual(rendered.tests, [ROW]);
+
+    const added = addPlanTasks(fullPlan(), [t5]);
+    assert.doesNotMatch(added.text, /- Tests:|Command\[0\] drops two/);
+  });
+
+  test('approval refuses one that owns code and lists none, in a plan whose tasks list theirs — and only there', () => {
+    const [t5] = parseAmendment(BLOCK.replace(`- Tests:\n  ${ROW}\n`, '')).tasks;
+    const amendment = { ...parseAmendment(BLOCK), tasks: [t5] };
+
+    const full = amendmentTaskProblems({ amendment, plan: parsePlan(fullPlan()), requirements: ['R1'] });
+    assert.deepEqual(full, ['T5 owns code (packages/main/src/plugin/container-registry.ts) and lists no test case under "- Tests:" — in a plan whose tasks list their tests, a task an amendment adds lists its own']);
+
+    assert.deepEqual(amendmentTaskProblems({ amendment, plan: parsePlan(plan()), requirements: ['R1'] }), []);
+  });
+
+  test('the task file\'s cases and the plan block\'s are a part of their own when two rounds are compared', () => {
+    assert.ok(TASK_PARTS.includes('Tests'));
+    assert.equal(TASK_PARTS.indexOf('Tests'), TASK_PARTS.indexOf('Context') + 1);
+    assert.equal(taskParts(`# T1: a\n\n## Tests\n| Case | When | Asserts | Fails without the change because |\n|---|---|---|---|\n${ROW}\n`).get('Tests'), `| Case | When | Asserts | Fails without the change because |\n|---|---|---|---|\n${ROW}`);
   });
 });

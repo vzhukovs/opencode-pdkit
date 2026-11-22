@@ -24,14 +24,15 @@
 import { test, describe, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import { issueDir } from '../lib/config.js';
-import { read, transition } from '../lib/state.js';
+import { render } from '../lib/render.js';
+import { allocateRequirement, freezeRequirements, read, transition } from '../lib/state.js';
 import { approvablePlan } from './helpers/approvable-plan.js';
 
 const exec = promisify(execFile);
@@ -67,12 +68,15 @@ async function pdkit(...args) {
   }
 }
 
+/** The helper's one `Done when`. */
+const GATED = '- Done when: `pnpm typecheck:main && pnpm exec eslint packages/main/src/index.ts && pnpm test:main`';
+
 /** The helper's plan with its one `Done when` written as prose, which `plan check` refuses. */
 async function proseDoneWhen() {
   const path = join(issueDir(home, ISSUE), 'plan.md');
   const text = await readFile(path, 'utf8');
-  assert.ok(text.includes('- Done when: `pnpm test:main`'));
-  await writeFile(path, text.replace('- Done when: `pnpm test:main`', '- Done when: the registry works'));
+  assert.ok(text.includes(GATED));
+  await writeFile(path, text.replace(GATED, '- Done when: the registry works'));
 }
 
 describe('the move to plan-approved', () => {
@@ -139,5 +143,124 @@ describe('pdkit ids freeze', () => {
 
     const moved = await pdkit('state', String(ISSUE), '--to', 'plan-approved');
     assert.equal(moved.code, 0, moved.stderr);
+  });
+});
+
+// The approval reads what `plan check` reads, the task files included: a plan
+// whose tasks list their tests is approved only while every task that owns
+// code lists its cases. A plan written before those sections were asked is
+// approved as it was, and nothing it was not asked for is asked of it.
+describe('a plan whose tasks list their tests', () => {
+  const ROW = '| the registry starts | a provider is registered | `start` resolves | it rejects without the fix |';
+
+  /** The helper's plan with T1's cases taken out of its block, so that only its task file can carry them. */
+  async function withoutCasesInBlock() {
+    const path = join(issueDir(home, ISSUE), 'plan.md');
+    const text = await readFile(path, 'utf8');
+    assert.match(text, /- Tests:\n {2}\|/);
+    await writeFile(path, text.replace(/- Tests:\n(?: {2}\|.*\n)+/, ''));
+  }
+
+  /** tasks/T1.md, rendered from the template, with `tests` as its rows. */
+  async function taskFile(tests) {
+    const dir = join(issueDir(home, ISSUE), 'tasks');
+    await mkdir(dir, { recursive: true });
+    const text = await render('task', {
+      taskId: 'T1',
+      title: 'a fixture task',
+      issue: String(ISSUE),
+      satisfies: 'R1',
+      status: 'pending',
+      attempts: '0',
+      ownedFiles: ['- packages/main/src/index.ts'],
+      command: 'pnpm typecheck:main && pnpm exec eslint packages/main/src/index.ts && pnpm test:main',
+      expected: 'exit 0',
+      context: '—',
+      tests,
+      steps: '—',
+      notes: '—',
+    });
+    await writeFile(join(dir, 'T1.md'), text);
+  }
+
+  test('the approval reads the task file: refused while T1 lists no case, through once it does', async () => {
+    await approvablePlan(ISSUE, { home });
+    await withoutCasesInBlock();
+    await taskFile('');
+
+    const refused = await transition(ISSUE, 'plan-approved', { home });
+    assert.equal(refused.ok, false);
+    assert.match(refused.error, /tests: T1 owns code \(packages\/main\/src\/index\.ts\) and lists no test case under "## Tests"/);
+
+    await taskFile(ROW);
+    const moved = await transition(ISSUE, 'plan-approved', { home });
+    assert.equal(moved.ok, true, moved.error);
+  });
+
+  test('pdkit plan check says the same, from the same files', async () => {
+    await approvablePlan(ISSUE, { home });
+    await withoutCasesInBlock();
+    await taskFile('');
+
+    const refused = await pdkit('plan', 'check', String(ISSUE));
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.stdout, /^ {2}✘ tests {12}T1 owns code \(packages\/main\/src\/index\.ts\) and lists no test case under "## Tests"/m);
+
+    await taskFile(ROW);
+    const passed = await pdkit('plan', 'check', String(ISSUE));
+    assert.equal(passed.code, 0, passed.stdout);
+    assert.doesNotMatch(passed.stdout, /format/);
+  });
+
+  test('a plan written before those sections is approved as it was, and plan check says what it did not ask', async () => {
+    const allocated = await allocateRequirement(ISSUE, { home });
+    assert.equal(allocated.ok, true);
+    await writeFile(
+      join(issueDir(home, ISSUE), 'plan.md'),
+      [
+        `# PLAN: DESKTOP-${ISSUE}`,
+        '',
+        '- Requirements: R1 (frozen on approval)',
+        '- e2e coverage: no — a fixture',
+        '- Slice hypothesis: 1 slices',
+        '',
+        '## Context',
+        '- `packages/main/src/index.ts:1` — the file the fixture task owns',
+        '',
+        '## Frozen interfaces',
+        '```ts',
+        'none',
+        '```',
+        '',
+        '## Tasks',
+        '### T1: a fixture task',
+        '- Satisfies: R1',
+        '- Owns: packages/main/src/index.ts',
+        '- Done when: `pnpm test:main`',
+        '- Intent: written before a task listed its tests',
+        '',
+        '## Upstream compliance',
+        '- SPDX headers needed: no new files',
+        '- Schemas touched: no',
+        '- `extension-api.d.ts` touched: no',
+        '- Commit scope: main',
+        '',
+        '## Slice hypothesis',
+        'One slice.',
+        '',
+        '## Open decisions',
+        'none',
+        '',
+      ].join('\n'),
+    );
+    const frozen = await freezeRequirements(ISSUE, { home });
+    assert.equal(frozen.ok, true);
+
+    const checked = await pdkit('plan', 'check', String(ISSUE));
+    assert.equal(checked.code, 0, checked.stdout);
+    assert.match(checked.stdout, /^ {2}! format {11}the plan has none of the sections Reuse, Modes, Gates and Body must disclose/m);
+
+    const moved = await transition(ISSUE, 'plan-approved', { home });
+    assert.equal(moved.ok, true, moved.error);
   });
 });

@@ -41,7 +41,8 @@
 ## `pdkit plan check`
 
 The mechanical half of the review, already run. Each red probe is a question
-for you: red because the code is not written yet, or red regardless.
+for you: red because the code is not written yet, or red regardless. So is a
+green one on a task that changes code: whether it can fail without the change.
 
 ```text
 {{check}}
@@ -90,8 +91,9 @@ Mode section above. Then these sections, in this order. Each item is a
 - `## Decisions of the last round`: one line per item under "Accepted in the
   last round" above: in the plan, or not, with `file:line`. Left out when that
   list is empty.
-- `## Probes`: one line per red probe in the check report — red because the
-  code is not written yet, or red regardless, and why.
+- `## Probes`: one line per probe the check report warns of — a red one: red
+  because the code is not written yet, or red regardless; a green one: whether
+  it can fail without the change — and why.
 - `## Checked, no findings`: what you checked that held, each with `file:line`,
   so the next round does not read it again.
 - `## Outside my scope`: when the scope above is an area or an axis, what you

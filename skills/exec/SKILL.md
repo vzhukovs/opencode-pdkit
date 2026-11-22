@@ -87,7 +87,7 @@ finding about the plan, like any other.
    issue's tree. From here until `task stop`, writes outside its files are
    refused and completing the task requires its receipt.
 2. Give the worker its task file, `tasks/T<k>.md` — `Owns`, `Done when`,
-   Context, Steps and Notes — and the frozen interfaces from `plan.md`. Nothing
+   Context, Tests, Steps and Notes — and the frozen interfaces from `plan.md`. Nothing
    else — not the whole plan, not the issue thread. The task's block in
    `plan.md` is its header and one line of intent; the steps are in the file.
 
@@ -115,7 +115,9 @@ finding about the plan, like any other.
    this task's lines needs the sentence the worker owes for it. If that
    sentence is missing, or it does not show the rule's own condition holds,
    send the task back too. A report without the per-section `§n:` lines is
-   incomplete, and is treated the same way.
+   incomplete, and is treated the same way. Its `added test:` lines name cases
+   the plan did not list: say them to the person in step 7, beside what is
+   done, since the plan's list was meant to be whole.
 6. Commit: conventional subject, one `Signed-off-by`. Squash with
    `git reset --soft <base> && git commit`, never `rebase -i`.
 7. `pdkit task stop`, then `pdkit task list --issue <n>` to the person: what is
@@ -204,10 +206,11 @@ neither the plan checks nor `pd-plan-critic`.
 
    drafts the values from every open stop report: the trigger, and a
    replacement block for each task the reports name — same Satisfies, Owns,
-   After and Slice, `Done when` copied, a first step saying to continue from
-   what the task left in the tree. What only the report and the person can say
-   is marked `[FILL IN: …]`: the corrected command, the change itself, the
-   rationale. Finish those from `stops/*.md`, `plan.md` and the person's
+   After and Slice, `Done when` copied, its `## Tests` copied in a plan that
+   lists them, a first step saying to continue from what the task left in the
+   tree. What only the report and the person can say is marked
+   `[FILL IN: …]`: the corrected command, the change itself, the cases it
+   adds, the rationale. Finish those from `stops/*.md`, `plan.md` and the person's
    answer to each report's `decision`; `amendment new` refuses a file with one
    left in. Delete the block of a task that should stay as it is, and clear its
    report instead (`pdkit task clear`). Then `pdkit plan probe <n> --amendment
@@ -222,7 +225,9 @@ neither the plan checks nor `pd-plan-critic`.
    ### T5 (replaces T2 and T3): <title>
    - Satisfies: R1, R7
    - Owns: packages/main/src/index.ts
-   - Done when: `npx vitest run packages/main/src/index.spec.ts` -> exit 0
+   - Done when: `pnpm typecheck:main && pnpm exec eslint packages/main/src/index.ts && npx vitest run packages/main/src/index.spec.ts` -> exit 0
+   - Tests:
+     | <case> | <when> | <asserts> | <fails without the change because> |
    - Steps:
      1. <step>
    ```
@@ -236,8 +241,10 @@ neither the plan checks nor `pd-plan-critic`.
 4. **A human approves it, by command.** `pdkit amendment approve A<k> --issue
    <n> --by <who>`. "Approved" in chat changes nothing. Approval runs the
    mechanical checks on the new tasks — an executable `Done when`, a live
-   R-ID, no `Owns` shared with a task that stays, no reused ID — and refuses
-   on any of them, leaving the amendment `proposed` with the line to fix.
+   R-ID, no `Owns` shared with a task that stays, no reused ID, and in a plan
+   whose tasks list their tests, a task that owns code with its `- Tests:` and
+   a `Done when` that typechecks and lints its files — and refuses on any of
+   them, leaving the amendment `proposed` with the line to fix.
    It also refuses an amendment that leaves an R-ID with no live task, and
    one that replaces a task an open stop report names while leaving another
    task that report names as it is.

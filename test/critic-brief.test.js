@@ -259,16 +259,41 @@ describe('brief', () => {
       assert.match(full.ok ? full.text : '', /^Full: the whole scope below — the plan round 2 read has no snapshot in `reviews\/`/m);
     });
 
-    test('is refused over a structural change, and the full brief says why it is full', async () => {
-      const added = `${REVISED}### T4: c\n- Satisfies: R1\n- Owns: src/c.ts\n- Done when: \`true\`\n`;
+    // A second round reads what applying the first round's decisions changed.
+    // A task added, a task removed, a slice hypothesis rewritten are parts of
+    // that change: a delta takes them in, rather than sending the whole plan
+    // back to a full round that reads again what the first round read.
+    test('takes in a structural change: an added task is read whole and is a row of the map', async () => {
+      const added = `${REVISED}### T4: c\n- Satisfies: R1\n- Owns: src/c.ts\n- After: T1\n- Done when: \`true\`\n`;
       const delta = await revise(added);
       const result = await render({ mode: 'delta', plan: parsePlan(added), delta });
-      assert.equal(result.ok, false);
-      assert.match(result.ok ? '' : result.error, /structural — tasks added: T4: a delta round does not cover it/);
+      assert.equal(result.ok, true, result.ok ? '' : result.error);
+      if (!result.ok) return;
+
+      assert.match(
+        result.text,
+        /^Delta: what changed since round 2 read the plan, and its neighbors\. The change is structural — tasks added: T4 — and the scope below takes it in; the rest of the plan was reviewed in rounds up to 2\.$/m,
+      );
+      assert.match(result.text, /## Scope\n\nThe tasks changed since round 2 read the plan: T1 — 1 of 3 live task\(s\)\. Added since: T4\. Under each, its neighbors/);
+      assert.match(result.text, /- T4 — c\n {2}Added since round 2: read it whole\.\n {2}After: T1\. Waited on by: none\./);
+      assert.deepEqual(coverageRows(result.text), ['T1', 'T4']);
 
       const full = await render({ plan: parsePlan(added), delta });
-      assert.match(full.ok ? full.text : '', /^Full: the whole scope below — the change since round 2 is structural: tasks added: T4\.$/m);
+      assert.match(full.ok ? full.text : '', /^Full: the whole scope below — the plan round 2 read was kept, and a full round was asked for\.$/m);
       assert.match(full.ok ? full.text : '', /## Changes since the last round\n\nNone: a full round reviews the whole scope\./);
+    });
+
+    test('names a removed task and a rewritten slice hypothesis among what to check', async () => {
+      const removed = PLAN.replace('### T1: a\n- Satisfies: R1\n- Owns: src/a.ts\n- Done when: `npx vitest run src/a.spec.ts`\n', '').replace('## Slice hypothesis\none', '## Slice hypothesis\ntwo');
+      const delta = await revise(removed);
+      const result = await render({ mode: 'delta', plan: parsePlan(removed), delta });
+      assert.equal(result.ok, true, result.ok ? '' : result.error);
+      if (!result.ok) return;
+
+      assert.match(result.text, /The change is structural — tasks removed: T1; Slice hypothesis changed — and the scope below takes it in/);
+      assert.match(result.text, /^Removed since round 2: T1\. Check that every requirement a removed task satisfied is still closed, and that no task still waits on one\.$/m);
+      assert.match(result.text, /^The slice hypothesis changed since round 2: check that each slice still leaves main working, against the Slice line of each task\.$/m);
+      assert.deepEqual(coverageRows(result.text), []);
     });
 
     test('takes no area and no axis: it is one critic over what changed', async () => {
@@ -282,7 +307,7 @@ describe('brief', () => {
     test('a full round that could have been a delta says so, and a first round says it is the first', async () => {
       const delta = await revise(REVISED);
       const full = await render({ plan: parsePlan(REVISED), delta });
-      assert.match(full.ok ? full.text : '', /^Full: the whole scope below — the change since round 2 is not structural, and a full round was asked for\.$/m);
+      assert.match(full.ok ? full.text : '', /^Full: the whole scope below — the plan round 2 read was kept, and a full round was asked for\.$/m);
 
       await rm(join(dir(), 'plan-review.md'));
       await rm(join(dir(), 'plan-review.r1.md'));
@@ -348,6 +373,7 @@ describe('brief', () => {
   // The brief prints the columns; the critic's definition says what each one
   // is. A column renamed in one and not the other is a check nobody makes.
   test('the critic\'s definition names every coverage check and every axis', async () => {
+    assert.deepEqual(COVERAGE_CHECKS, ['Order', 'Runs on base', 'Fails if unmet', "Neighbor's pattern", 'Local rules', 'Environment modes', 'Duplication', 'Tests', "Maintainer's rules"]);
     const agent = await readFile(join(ROOT, 'agents', 'pd-plan-critic.md'), 'utf8');
     for (const check of COVERAGE_CHECKS) assert.ok(agent.includes(`**${check}**`), `agents/pd-plan-critic.md does not define the check "${check}"`);
     for (const axis of Object.keys(AXES)) assert.ok(agent.includes(`\`${axis}\``), `agents/pd-plan-critic.md does not define the axis "${axis}"`);

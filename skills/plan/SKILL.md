@@ -35,8 +35,8 @@ What a revision is:
    execution reads, so it does not send the plan to another round. A note
    naming a task the plan no longer has is left out and named at the end.
 4. Edit `plan.md` and the task files in place. A task's header and its
-   `Intent:` are in `plan.md`; its Context, Steps and Notes are in its task
-   file, and a decision about them is applied there. A plan written before
+   `Intent:` are in `plan.md`; its Context, Tests, Steps and Notes are in its
+   task file, and a decision about them is applied there. A plan written before
    that split also has Steps, and often Context, in `plan.md`: change both
    copies. Task IDs never change; a task the revision drops is deleted from
    both files before approval, which is the only time that is allowed. Then
@@ -81,11 +81,27 @@ another archive's is read there.
 **The traps.** `${CLAUDE_PLUGIN_ROOT}/knowledge/pitfalls.md` holds traps this
 repository has set before, each with where it lives.
 
-Then at least three `pd-scout` agents **in parallel**, each with a different
-question: where the logic lives, which existing pattern the fix should follow,
-how this area is tested. Each scout's prompt carries, with its question, the
-`pitfalls.md` entries that bear on the region it maps (the whole file, while
-it stays near 300 lines and the region is unclear) and the lines of
+**What triage mapped.** Triage's scouts asked three questions — where the
+behavior lives, what already resembles the fix, how the area is tested — and
+their maps are in `research.md`. Read it before sending anyone. A question it
+answers, with `file:line`, for the region the plan will change, is not asked
+again: on one issue the planning scouts re-read what triage's had, at four
+times the cost.
+
+Then `pd-scout` agents **in parallel**, one per gap, each with a question
+`research.md` does not answer:
+
+- any of those three it leaves open, answers without `file:line`, or answers
+  for another region than the one the plan will change;
+- the **local rules** and the **modes of the environment** below, which
+  triage does not ask for — one scout for the region the change touches, or
+  one per region when it spans several;
+- a fact one of the choices in phase 2 turns on.
+
+With no `research.md`, or one that answers none of the three, it is a scout
+per question, three at least. Each scout's prompt carries, with its question,
+the `pitfalls.md` entries that bear on the region it maps (the whole file,
+while it stays near 300 lines and the region is unclear) and the lines of
 `## From earlier attempts` that touch it. A scout handed an entry checks it
 against the code it reads and cites the current `file:line`; one the code no
 longer bears out is a finding, not a premise.
@@ -97,8 +113,9 @@ likely touch, and asks for two sections after its answer:
   `README*` in those directories and in each one above them, with every
   obligation a change there is held to ("in the same change, update X", "do
   not do Y") quoted word for word with `file:line`; none found, the search.
-  The root's files are the same for every scout, so only the scout asked
-  where the logic lives goes up to the root; the others stop below it.
+  The root's files are the same for every scout, so one scout goes up to the
+  root — the one asked where the logic lives, or, when `research.md` answers
+  that, the one asked for the local rules; the others stop below it.
 - **Modes of the environment** — the modes the component it maps runs in
   (the operating system, a packaged or a development build, more than one
   runner or provider, a flag) and how the neighboring code handles each, a
@@ -111,14 +128,14 @@ otherwise a plan review finds it, one round at a time.
 
 Their format is fixed: ≤ 50 lines with those two sections, every claim with
 `file:line`, no recommendations. A scout that proposes a solution has exceeded
-its brief, and its proposal has not been checked against the other two.
+its brief, and its proposal has not been checked against the others.
 
 Do not read the code broadly yourself. Scouts exist so you read 40 lines
 instead of 4000; reading both is the failure mode this structure was built
 against.
 
-Wait for every scout's report, then write the compressed map to
-`research.md`, and after it two sections that merge what the scouts returned:
+Wait for every scout's report, then add the compressed map to `research.md`,
+below triage's, and after it two sections that merge what the scouts returned:
 `## Local rules`, one line per obligation with its `file:line` and the
 directory it binds, the same rule from two scouts once; and
 `## Modes of the environment`, one line per mode with how the neighbors
@@ -154,7 +171,9 @@ written into the plan, each is a claim about code that every review round
 then checks, and when it is wrong it costs exec one attempt. Write a detail
 down when the implementer cannot learn it that way: a fact in a file the
 task does not own, or one without which `Done when` would pass while the
-requirement is unmet.
+requirement is unmet. The cases a task's tests have to prove, and the design
+the maintainer's rules hold it to, are not such details: the plan decides
+them, in requirements 11 and 12 below.
 
 Every one of these is a requirement, and a plan that misses one gets redone
 rather than patched:
@@ -166,7 +185,11 @@ rather than patched:
    as its `Done when` runs, the hook refuses every write it attempts, and every
    slice inherits the requirements it satisfies.
 2. **`Done when` is a command and its expected output.** Prose is refused:
-   "works correctly" cannot be checked by anyone except its author.
+   "works correctly" cannot be checked by anyone except its author. For a task
+   that owns code, the command runs the typecheck and the lint of its files
+   beside its tests — `pnpm typecheck:<package>` and
+   `pnpm exec eslint <its files>`, say. An error a task's own command does not
+   show surfaces in a later task, which may not write the file.
 3. **Interfaces between tasks are frozen, with real signatures**, so two tasks
    cannot each invent their own version of the same boundary.
 4. **One to three files per task.**
@@ -220,18 +243,87 @@ rather than patched:
    callers, remove the old one. Each step then leaves main working, and that
    split has to be in the tasks, because no slicer can cut it out of a diff that
    replaced the old path.
+11. **Every task that owns code lists its tests**, under `## Tests` in its
+    task file: a row per case — the behavior or path, the conditions, what the
+    test asserts that a reader can observe, and why it fails without the
+    change. The list is whole when it has every path the task adds or changes,
+    the error path included; both sides of every condition it adds — what it
+    now leaves out and what it still lets through — and a change of state
+    across it; every side effect: what is written, cleaned up, removed or sent;
+    and, for anything asynchronous, an assertion that waits on completion
+    rather than on what the UI shows halfway. A case whose last column is empty
+    is one the implementer can make green with the requirement unmet. A task
+    that adds no behavior — a refactor, a move — lists the existing tests that
+    hold it, each passing before and after. `pd-implementer` writes exactly
+    these cases and names any it adds. `plan check` refuses a task that owns
+    code, not only specs, with no `## Tests`.
+12. **The design follows the maintainer's rules, and is decided here.** Read
+    sections 1 to 10 of `${CLAUDE_PLUGIN_ROOT}/knowledge/maintainer-rules.md`,
+    and the calibration above them. Most of those rules are a design before
+    they are a line of code, and the plan is where the design is chosen: §2 how
+    a behavior is tested, §3 the shape of the state, how data loads and where
+    logic lives, §4 how errors are handled and what runs in `finally`, §6 how
+    main-process code is structured, §8 the UI, §10 what is reused and how it
+    is named — and §5, §7 and §9, which a plan breaks before any code exists.
+    Where a task's Intent, Steps or Tests settle one of these — a value kept
+    in state, a computation placed in a component, a list copied under a new
+    name, a test that waits on a halfway state — they settle it the way the
+    rule says, and name the rule when that is not obvious. A design left to
+    the implementer is decided twice: once in the code, and again by the
+    review that sends it back. Only the syntax is the implementer's: how a
+    mock is written, a cast, a rune.
+
+**Four sections answer what the review would ask.** Each is a question
+`pd-plan-critic` puts to every plan; left to it, they are answered one round
+at a time.
+
+- `## Reuse` — what already exists that a task could reuse or would copy. For
+  each thing a task adds — a function, a class, a component, a list, a
+  constant, a test helper — the search for one that exists, as
+  `searched: <query> in <where> -> <n>`, and what it found, with `file:line`;
+  then what the plan reuses, and why not the rest. A list, a rule or a card
+  copied under a new name is the finding this section pre-empts. A grep is
+  yours to run; reading what it finds is a scout's.
+- `## Modes` — each mode the touched code runs in, from `research.md`'s
+  `## Modes of the environment`, and how the plan handles it: by which task,
+  or why it does not apply. Rendering and async are a mode — what a component
+  awaits before its first render, and what its spec then has to wait for — as
+  are the operating systems, a packaged and a development build, and the
+  runners a test runs under.
+- `## Gates` — the commands that check the change: per task, the typecheck,
+  the lint and the tests its `Done when` runs; and for each task that changes
+  a file an earlier task's gate has passed, the gate that checks it again,
+  after it. A gate that ran before the last change to a file is not a gate
+  for that file.
+- `## Body must disclose` — what a slice's pull request body has to say
+  because the plan decided it: a behavior that changes without being asked
+  for, a duplication kept on purpose, a decision the person made. One line
+  per item, naming its slice; `none` when there is nothing.
+
+A section with nothing to say says so, with the search that came back empty.
 
 ## Then
 
 `pdkit render plan --issue <n> --values <f> --path plan.md`, one
 `pdkit render task --issue <n> --values <f> --path tasks/T<k>.md` per task —
-the task's values carry its Context, Steps and Notes — then
+the task's values carry its Context, Tests, Steps and Notes — then
 `pdkit task sync --issue <n>` so the ownership map the pre-write hook enforces
 comes from the task files rather than from anyone's memory of them.
 
+**Then read it the way the critic will, before anyone else does.** Take each
+task through the checklist in `${CLAUDE_PLUGIN_ROOT}/agents/pd-plan-critic.md`
+and the columns of its coverage map — order, runs on base, fails if unmet,
+neighbor's pattern, local rules, environment modes, duplication, tests,
+maintainer's rules — against `research.md` and the plan's own sections. A
+check you cannot answer from them is a gap to close now, with a scout or a
+`[NEEDS DECISION]`; a check the plan fails is a fix to make now. Each one the
+critic finds instead costs a round.
+
 `pdkit plan check <n>` before showing the plan to anybody: everything it finds
 is something `/pd:plan-review` would find anyway, and finding it here costs one
-command instead of a review round.
+command instead of a review round. Beside the shape, it refuses a task that
+owns code with no `## Tests`, and one whose `Done when` leaves out the
+typecheck or the lint of its files.
 
 Then **run every `Done when`**, from the main checkout, which is on the base
 branch:
@@ -247,8 +339,14 @@ commands that could never pass: a typecheck that fails on the base branch with
 a config error, a lint on lines the task may not touch, a docs build that needs
 an artefact nothing builds. Each was one run away. A red run here is often
 expected — the spec file is not written yet — and that is fine; a red run for
-any other reason is a `Done when` to fix now. `pdkit plan check` then lists
-every task whose command was never run or did not exit 0, for the review.
+any other reason is a `Done when` to fix now. A green run of a task that
+changes code is the other warning: the command passes before the change it is
+meant to prove — a script that passes with no test files, a spec that already
+exists and runs only its old cases. Make it fail there: a new spec file, a
+filter that names the new cases, a guard that fails on the base. A refactor's
+command passes on both sides, and its `## Tests` says so. `pdkit plan check`
+then lists every task whose command was never run, did not exit 0, or exited
+0 while the task changes code, for the review.
 
 Then `pdkit state <n> --to planned`.
 

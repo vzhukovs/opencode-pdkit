@@ -31,7 +31,11 @@ pdkit plan check <n>
 
 Sections present; `Owns` exclusive between tasks; `Done when` a command rather
 than prose; every R-ID closed by a task and every task pointing at a real R-ID;
-`e2e coverage` decided; `Slice hypothesis` written; no `[NEEDS DECISION]` left.
+`e2e coverage` decided; `Slice hypothesis` written; no `[NEEDS DECISION]` left;
+and, in a plan written with `## Reuse`, `## Modes`, `## Gates` and
+`## Body must disclose`, a `## Tests` for every task that owns code and a
+`Done when` that runs the typecheck and the lint of its files. A plan written
+before those sections is read as it was written, and the check says so.
 
 None of these need judgment, and none of them should cost any. An Opus asked
 to intersect two lists of paths is an Opus that can fail to; `pdkit plan check`
@@ -39,8 +43,10 @@ cannot. Red here means the plan gets **redone rather than patched** — these ar
 the requirements from `/pd:plan`, not preferences.
 
 Its warnings include the probe: every live task whose `Done when` was never
-run, was run as a different command, or did not exit 0 on the base commit. A
-task never run is run now, before the critic starts:
+run, was run as a different command, or did not exit 0 on the base commit, and
+every task that changes code whose `Done when` exited 0 there — it passes
+before the change it is meant to prove. A task never run is run now, before
+the critic starts:
 
 ```
 pdkit plan probe <n> --task <the tasks it names>
@@ -65,25 +71,25 @@ pdkit plan diff <n> --json
 It compares the plan with the snapshot of the plan the last round read.
 
 - **Delta** when `base.round` equals `lastRound` — the plan the last round
-  read was kept — and `structural` is `false`: one critic, with
-  `pdkit plan brief <n> --mode delta`. Its brief carries the diff, the last
-  round's decisions, and each changed task with its neighbors: its `After`
-  both ways and the frozen interfaces it shares. The critic checks that each
-  accepted decision is in the plan, with `file:line`; then the changed blocks
-  and their neighbors — `Owns`, `After`, `Done when`, requirement coverage;
-  and outside the change, only a defect that would stop exec, as an A item
-  headed `Outside the delta:` with its evidence.
-- **Full** otherwise: the first round; a last round whose plan was not kept;
-  or a structural change — a task added or removed, `Slice hypothesis`
-  changed, or a `Frozen interfaces` entry changed that no task is in. A delta
-  there would say the rest of the plan was reviewed when what it rests on has
-  changed, and the brief refuses it. An entry that names its tasks is not
-  structural: every task in it, as it was and as it is, is a changed task of
-  the delta, with `Frozen interfaces` among its changed parts.
+  read was kept: one critic, with `pdkit plan brief <n> --mode delta`. Its
+  brief carries the diff, the last round's decisions, and each changed task
+  with its neighbors: its `After` both ways and the frozen interfaces it
+  shares. A task added since is a changed task, read whole; the neighbors of
+  a removed one are the tasks that waited on it; a changed slice hypothesis,
+  or an interface entry no task is in, is a changed part of the plan. An
+  entry that names its tasks makes every task in it, as it was and as it is,
+  a changed task, with `Frozen interfaces` among its changed parts. The
+  critic checks that each accepted decision is in the plan, with `file:line`;
+  then the changed blocks and their neighbors — `Owns`, `After`, `Done when`,
+  `## Tests`, requirement coverage; and outside the change, only a defect that
+  would stop exec, as an A item headed `Outside the delta:` with its evidence.
+- **Full** otherwise: the first round, or a last round whose plan was not
+  kept, so nothing says what changed.
 
-A repeat round reviewed whole costs about what the first did, and most of what
-it reads it read last time; a full round where a delta is possible is the
-person's call, not yours.
+A second round is there for the first round's A items and what applying them
+changed. A repeat round reviewed whole costs about what the first did, and
+most of what it reads it read last time; a full round where a delta is
+possible is the person's call, not yours.
 
 ### One critic or several
 

@@ -105,7 +105,9 @@ Act on that before analyzing anything:
 Two or three `pd-scout` agents in parallel, different questions each: where
 the behavior lives, what already exists that resembles the fix, how that area
 is tested. They return a map, ≤ 40 lines, every claim carrying `file:line`.
-Wait for every scout's map, then go on to section 3.
+Wait for every scout's map, then write them, merged and compressed, to
+`research.md` under the issue: `/pd:plan` reads it before it sends a scout of
+its own, and asks again only what it leaves open. Then go on to section 3.
 
 Do not read the code broadly yourself. The compression is the point — if you
 read what the scouts read, you have paid twice for one answer.
