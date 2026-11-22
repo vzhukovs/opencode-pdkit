@@ -41,7 +41,7 @@ the previous and next section, and, where they exist, to the matching part of
 | 10 | [Scenario coverage](10-scenarios.md) | the route for each of the brief's scenarios, and scenarios 6–15 the brief did not name |
 | 11 | [Known weaknesses of this design](11-known-weaknesses.md) | twelve places the design is known to be weak, stated rather than discovered later |
 | 12 | [Delivery order](12-delivery-order.md) | stages 0–5, what each gives and its readiness signal; skills rather than commands |
-| 13 | [Status: what has been verified, and what has not](13-status.md) | what has run against live upstream and its evidence, what has never been executed, and the lessons and measurements behind both |
+| 13 | [Status: what has been verified, and what has not](13-status.md) | what has run in Open Code against a copy of podman-desktop, and what ran against live upstream with the Claude Code version, each with its evidence; what has never been executed; and the lessons and measurements behind them |
 
 ### Section 4: contracts of the key commands
 

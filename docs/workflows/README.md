@@ -14,16 +14,20 @@ Every file ends with links to the previous and next scenario and to the part of
 [`specification/`](../specification/README.md) that holds the reasoning.
 
 **What works today:** every scenario below has machinery behind it and is covered
-by tests. **What has been proven against a live repository is narrower, and was
-proven with the Claude Code version, up to 0.15.0** — none of it in Open Code
-yet. The difference is worth knowing before trusting a step:
-[section 13 of `specification/`](../specification/13-status.md) keeps the full
-accounting, with evidence per row, as that version's record. In short: there,
-the `quickfix` and `standard` routes have each gone end to end to a published
+by tests. **What has been proven against podman-desktop itself is narrower, and
+was proven with the Claude Code version, up to 0.15.0.** In Open Code, the
+`quickfix` route, the `standard` route as far as its first pull request, and
+`pr-sync` have run on real models against a private copy of podman-desktop on
+GitHub; no podman-desktop issue has been worked in Open Code yet. The difference
+is worth knowing before trusting a step:
+[section 13 of `specification/`](../specification/13-status.md) keeps both
+accounts, with evidence per row. In short, with the Claude Code version: the
+`quickfix` and `standard` routes have each gone end to end to a published
 upstream pull request, once as a two-slice graph into two of them, and one issue
 has been through the whole machine to `merged` with a reviewer and a rebase in
 the middle. Much of that was driven through `pdkit` in a terminal — so ten of
-the twenty-four skills below were never invoked as `/pd:*` even there.
+the twenty-four skills below were never invoked as `/pd:*` even there. In Open
+Code, twelve have run only on a scripted model.
 
 ## Before anything
 
