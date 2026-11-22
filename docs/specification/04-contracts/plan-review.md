@@ -16,10 +16,19 @@ content: machine first, then model.**
    non-empty; no `[NEEDS DECISION]` left; no `Context` line saying something is
    absent that cites neither a `file:line` nor a `searched:` query; every
    `- After:` names a task the plan has, and no two tasks wait on each other.
-   With `probe.json` on record (`pdkit plan probe <n>`, run on the base
+   In a plan with `## Reuse`, `## Modes`, `## Gates` and `## Body must
+   disclose`, also: every task that owns code, not only specs, lists a case
+   under `## Tests` in its task file, and every task that owns code runs a
+   typecheck and a lint of its files in its `Done when` — a lint that names
+   each file, a directory above it, or the whole project. A plan with none of
+   those sections was written before they were asked, and is read as it was,
+   with a warning that says so; the approval and the audit read it the same
+   way. With `probe.json` on record (`pdkit plan probe <n>`, run on the base
    branch), it also warns about every live task whose `Done when` was never
    run, ran as another command, or did not exit 0 — with the last line it
-   printed.
+   printed — and, in a plan with those sections, about every task that changes
+   code whose `Done when` exited 0: it passes before the change it is meant to
+   prove.
 2. `pd-plan-critic` receives `pdkit plan brief <n>` **as it prints it**: where
    the plan, the research and the code are, that report, what the last round
    accepted and every round rejected, and the shape of the report. The
@@ -39,34 +48,41 @@ content: machine first, then model.**
    (`--axis duplication`). A scoped brief lists its tasks whole, with each edge
    that leaves the scope; what a critic sees outside its scope is a line for
    the critic whose scope it is, not an item.
-4. A repeat round is a **delta** when the plan the last round read was kept
-   and the change since is not structural: `pdkit plan diff <n>` names the
-   tasks added and removed, the parts of each task that changed and in which
-   file, whether `Frozen interfaces`, `Slice hypothesis` or `Upstream
-   compliance` changed, and calls the change structural when tasks were added
-   or removed, the slice hypothesis changed, or a frozen interface entry no
-   task is in changed. Interfaces are compared entry by entry: every task in
-   an entry that changed, before or after the edit, is a changed task with
-   `Frozen interfaces` among its parts. One critic gets
+4. A repeat round is a **delta** when the plan the last round read was kept:
+   `pdkit plan diff <n>` names the tasks added and removed, the parts of each
+   task that changed and in which file — `Tests` among them — whether `Frozen
+   interfaces`, `Slice hypothesis` or `Upstream compliance` changed, and calls
+   the change structural when tasks were added or removed, the slice
+   hypothesis changed, or a frozen interface entry no task is in changed.
+   Interfaces are compared entry by entry: every task in an entry that
+   changed, before or after the edit, is a changed task with `Frozen
+   interfaces` among its parts. One critic gets
    `pdkit plan brief <n> --mode delta`: the diff, the last round's decisions,
    and each changed task with its neighbors — its `After` both ways and the
-   frozen interfaces it shares. It checks that the decisions were applied,
-   then the changed tasks and their neighbors, and outside the change raises
-   only a defect that would stop exec, marked as outside the delta. A
-   structural change gets a full round, and the brief refuses a delta for it.
-   The report says under its title which mode the round ran in, and why.
+   frozen interfaces it shares. A structural change is in the same scope: a
+   task added since is read whole and is a row of the map, a task removed is
+   named with what to check of it, and a rewritten slice hypothesis or
+   interface entry no task is in is a part to check against the tasks. The
+   critic checks that the decisions were applied, then the changed tasks and
+   their neighbors, and outside the change raises only a defect that would
+   stop exec, marked as outside the delta. The report says under its title
+   which mode the round ran in, and why.
 5. The orchestrator merges the reports: one item per defect, a disagreement
    shown with both positions and left to the person, and a `## Coverage map` —
-   every live task against seven checks (order, `Done when` runs on the base,
+   every live task against nine checks (order, `Done when` runs on the base,
    `Done when` fails while the requirement is unmet, the neighbor's pattern,
-   local directory rules, environment modes, duplication), each cell `✓`, `—`
-   or `?`. Every `?` is a C item.
+   local directory rules, environment modes, duplication, the task's tests,
+   the maintainer's rules its design settles), each cell `✓`, `—` or `?`.
+   Every `?` is a C item.
 
 Why a delta: a repeat round reviewed whole cost about what the first did,
 and most of what it read had been read the round before; a round narrowed to
-the decisions and the change cost about a third. What changed is a fact
+the decisions and the change cost about a third. A second round is there for
+the first round's A items and what applying them changed, structural or not:
+a task added, a slice hypothesis rewritten. What changed is a fact
 `lib/plan-rounds.js` computes; whether a round reviews the change or the whole
-plan is the skill's call, and a structural change is never a delta.
+plan is the skill's call, and a full round where a delta is possible is the
+person's.
 
 Why several critics, and why a map: one critic on a plan of a dozen tasks
 reached the ceiling of its context every round and read a different part of

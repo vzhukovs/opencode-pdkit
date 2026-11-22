@@ -187,12 +187,12 @@ $PDKIT_HOME/                     # default: ~/.pdkit/podman-desktop
 │   ├── preflight.json           # every run, both passes; what `preflight-green` is earned from
 │   ├── issue.md                 # issue snapshot + prior context + verdict + R-set
 │   ├── archaeology.json / .md   # facts about a previous attempt, and their reading
-│   ├── research.md              # the scouts' compressed map, file:line only
+│   ├── research.md              # triage's and the plan's scouts' map, file:line only
 │   ├── plan.md                  # the plan; R-IDs are frozen here
 │   ├── plan-review.md           # latest round; earlier ones in plan-review.r<k>.md
 │   ├── reviews/r1/ …            # plan.md and tasks/ as review round k read them
 │   ├── probe.json               # each task's Done when, run on the base before any code
-│   ├── tasks/T1.md …
+│   ├── tasks/T1.md …            # a task: Owns, Done when, Context, Tests, Steps, Notes
 │   ├── receipts/T1.md …         # real command output
 │   ├── stops/T1-1.md …          # why a task stopped on the plan; input to the amendment
 │   ├── validation.json / .md    # steps, evidence, e2e run series; .md is rendered
