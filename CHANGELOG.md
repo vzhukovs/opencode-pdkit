@@ -14,6 +14,8 @@ and their links go into the repository they were released from.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-22
+
 **Ported from podman-desktop-kit 0.15.0.** The same kit — the state machine,
 the gate on writes upstream, receipts, slices, preflight, the journal — as a
 plugin for Open Code instead of Claude Code, so that each phase and each agent
@@ -3422,7 +3424,8 @@ found by a unit test.
   gate strips wrapper programs because hooks on the Bash tool are global, not
   because any particular tool exists.
 
-[Unreleased]: https://github.com/vzhukovs/opencode-pdkit/compare/89aa5b5...HEAD
+[Unreleased]: https://github.com/vzhukovs/opencode-pdkit/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/vzhukovs/opencode-pdkit/releases/tag/v0.16.0
 [0.15.0]: https://github.com/vzhukovs/podman-desktop-kit/compare/v0.14.1...v0.15.0
 [0.14.1]: https://github.com/vzhukovs/podman-desktop-kit/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/vzhukovs/podman-desktop-kit/compare/v0.13.0...v0.14.0

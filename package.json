@@ -1,6 +1,6 @@
 {
   "name": "opencode-pdkit",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "type": "module",
   "description": "Podman Desktop Kit for OpenCode: a workflow kit for working upstream issues in podman-desktop.",
   "keywords": [

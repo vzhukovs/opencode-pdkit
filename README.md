@@ -1,6 +1,3 @@
-Work in progress: not yet published to npm, so the install below works from the
-first release on; and parts of `docs/` still describe the Claude Code version.
-
 # Podman Desktop Kit for OpenCode
 
 An [Open Code](https://opencode.ai) plugin for working upstream issues in
