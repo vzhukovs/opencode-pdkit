@@ -197,8 +197,10 @@ skill. In Open Code every `/pd:` command runs on a model, and `opencode run`
 does not execute a plugin's command at all — the text goes to the model, which
 can imitate the answer from the plugin's source. The check that takes a model
 through the plugin is CI's `receipt-gate`, read at step 8. None of this
-replaces use: no issue has yet been worked through the plugin in Open Code —
-see [Status and limitations](README.md#status-and-limitations).
+replaces use. In Open Code the routes have run on real models only against a
+private copy of podman-desktop, and no podman-desktop issue has been worked
+through the plugin yet — see
+[Status and limitations](README.md#status-and-limitations).
 
 Step 8 exists because steps 4–6 run on one machine. CI runs the suite on
 Ubuntu, macOS and Windows, and a path separator or a shell quirk shows up only

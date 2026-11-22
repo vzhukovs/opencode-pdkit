@@ -8,27 +8,86 @@ one rule, learned the hard way after it fell three versions behind: **a row is
 removed by the same thing that puts one there — a journal entry, or an artefact
 you can point at.**
 
-**Every row below was recorded with the Claude Code version, up to 0.15.0, and
-none of it is evidence about this plugin in Open Code.** The journal entries and
-artefacts are real, and so is the host that produced them: Claude Code — its
-session transcripts, `claude -p`, its `SessionStart` and `SubagentStop`, a
-`${CLAUDE_PLUGIN_ROOT}` it expanded itself. They are kept as that version's
-record. The code in `lib/` is the same code, but what most rows prove is that
-the host ran it — a hook fired, a skill loaded, an agent was dispatched — and
-the host is another one now. Until the plugin has been run live in Open Code,
-on the `quickfix` and `standard` routes and through `pr-sync` against real
-upstream, every row below is unverified for Open Code, those under "Verified"
-included. A row for Open Code is added the way one is added here: by a journal
-entry, or an artefact you can point at.
+**The section keeps two records, and neither stands in for the other.** What
+has run in Open Code comes first, with its evidence. The two tables after it —
+what was verified against live upstream, and what never ran — were recorded
+with the Claude Code version, up to 0.15.0, and are not evidence about this
+plugin in Open Code; where a row of theirs has an Open Code half, it names Open
+Code. Those journal entries and artefacts are real, and so is the host that produced them:
+Claude Code — its session transcripts, `claude -p`, its `SessionStart` and
+`SubagentStop`, a `${CLAUDE_PLUGIN_ROOT}` it expanded itself. They are kept as
+that version's record. The code in `lib/` is the same code, but what most rows
+prove is that the host ran it — a hook fired, a skill loaded, an agent was
+dispatched — and the host is another one now. Where Open Code has run the same
+machinery, its own row says how far, and against what; nothing has yet run in
+Open Code against podman-desktop itself. A row for Open Code is added the way
+any row is: by a journal entry, or an artefact you can point at.
 
-What has been checked in Open Code so far is narrower, and none of it touches
-upstream. The test suite runs on Linux, macOS and Windows. The CI job
-`plugin-load` packs the plugin, loads it into a real Open Code — the minimum
-version and the latest — and checks that it is active and has registered its
-agents, commands and skills. The CI job `receipt-gate`, where the repository
-has a provider key, runs a real implementer on a real model with no receipt,
-and checks from the session records, the journal and `pdkit doctor` that the
-gate held it. Both jobs are in `.github/workflows/ci.yml`.
+## Run in Open Code, with its evidence
+
+**In CI, on every change.** The test suite runs on Linux, macOS and Windows,
+and all three block. The CI job `plugin-load` packs the plugin, loads it into a
+real Open Code — the minimum version and the latest — and checks that it is
+active and has registered its agents, commands and skills. The CI job
+`receipt-gate`, where the repository has a provider key, runs a real
+implementer on a real model with no receipt, and checks from the session
+records, the journal and `pdkit doctor` that the gate held it. Both jobs are in
+`.github/workflows/ci.yml`, and neither blocks a change yet.
+
+**Live, against a copy of podman-desktop.** On macOS, in Open Code 2.3.0, on
+real models of the three providers the defaults name, with the plugin in the
+global config. The gate and the ownership hook were tried in a clone of a
+podman-desktop fork, with a `$PDKIT_HOME` made for the run and nothing able to
+leave the clone. The routes ran against a private copy on GitHub: an upstream
+repository with podman-desktop's history and one quick check for CI, a fork of
+it, issues copied from podman-desktop's without their links and mentions, and a
+second account to review. To the plugin the copy is podman-desktop, because
+`repo.upstream` and `repo.fork` in its config name it, and the gate guards
+whatever they name
+([section 6](06-hooks.md#the-gate-guards-podman-desktop-and-stands-aside-only-where-that-is-proven)).
+Every push, pull request, review and reply went there. **No podman-desktop
+issue has been worked in Open Code yet**: nothing has been pushed, opened or
+answered there.
+
+| What | Evidence |
+|---|---|
+| **The gate, refusing** | In a session in the fork's clone, a model was asked, one request at a time, to run `git push`, `gh pr create`, `gh issue comment`, `git add -A`, a force push and `git commit --no-verify`. Each call failed before the command ran, with the text the Claude Code version's hook prints for the same command, byte for byte, and `pdkit journal --event denied` lists one entry per refusal, named by its rule: `push`, `gh-pr-create`, `gh-issue-comment`, `add-all`, `force-push-without-lease`, `no-verify`. `git status` in the same session ran. With no `node` on the server's `PATH`, `git status` and `git push` were both refused; with a hook that never answered, the command was refused at the ten-second deadline and the hook's processes were stopped |
+| **The gate, letting through on consent** | On the copy: after `pdkit gate open`, a push the model ran went through and `pdkit pr create` opened the pull request — the journal has `gate-open`, `gate-spent push:push`, `gate-spent push:pr`, `pr-registered` and `pr-open` — and a second push on the same consent was refused as already spent. `pdkit publish` did the same for a slice, and with `--pr` pushed a review fix to an open pull request (`pr-open … updated`). A reply token for that pull request let `pdkit pr reply` and `gh pr comment` through, and `gate close` journaled `gate-spent reply` |
+| **The ownership hook** | In an issue's worktree, with tasks recorded by `pdkit` commands, `write` and `edit` from a Claude model and `patch` from an OpenAI model: with no task running, with a task that owns files, with one that owns none, and after `task stop`. Each call was let through or refused as the Claude Code version's hook decides the same write, in its words, and the files `patch` deletes or moves were checked as well. Each refusal is a `denied` entry, `owns: T<k> may not write <path>`, and a refused file was left as it was |
+| **The `quickfix` route** | One issue on the copy: `/pd:triage` with two `pd-scout`, `/pd:quickfix`, `/pd:preflight` green, `/pd:pr` with its five self-review agents — three rounds, each recorded, the third with nothing open — then a push and a pull request on consent, through the gate as above, with the body `/pd:pr` rendered. The copy's check passed, and `/pd:pr-status` read the pull request back: CI pass, no review, no threads, nothing blocking |
+| **The `standard` route, as far as its first pull request** | One issue on the copy, every phase on its default model. `/pd:triage` with three `pd-scout`. `/pd:plan`, with scouts and the person's answers to its questions; two rounds of `/pd:plan-review`, a `pd-plan-critic` each, each answered by a revision; then `requirements-frozen` and `plan-approved` on the person's approval. `/pd:exec` with `pd-implementer` agents: the receipt gate held each implementer that stopped without a receipt, in its own session — "cannot be completed — there is no receipt. Run: pdkit receipt write …" — until it wrote one (`task-receipt T<k> accepted`); two whose brief forbade them `pdkit` it held three times, then let go without accepting their task. `/pd:validate` with no Playwright server: `pd-validator` launched the application itself (`app-launched`), and `validate finish` recorded the run `unverified`, two of its four steps without an artefact. `/pd:audit` with `pd-auditor`, whose finding went back through an amendment — drafted, reviewed twice, approved — and `/pd:exec` of its tasks, to `audited` on the second audit. `/pd:slice` with `pd-slicer` into two slices, the second stacked on the first, both verified and approved by the person. `/pd:pr` for the first, published by `pdkit publish`. The second slice was never published: its self-review still had findings open after the third round, the limit, and the person stopped there |
+| **`pr-sync`, and the replies** | A review from the second account on the `quickfix` pull request, requesting changes: four threads, one already answered by the author, and a request in the review's body. `/pd:pr-sync` put the five in one table, left the answered thread alone, deferred the request (`defer new`), had three `pd-thread-resolver` agents fix the rest in one commit, ran its self-review, and pushed on consent with `pdkit publish --pr`. On a reply token it answered the three threads with `pdkit pr reply`, two of them with `--resolve`: on GitHub the replies are there and the two threads resolved, which is `replyToThread`'s two GraphQL mutations — a row of "Never executed" below |
+| **Models of different providers, and `pdkit cost`** | Those issues ran on the defaults: the plan by an OpenAI model, the code by a Claude one, preflight on DeepSeek, each agent on the model its frontmatter names. `pdkit cost` measured them by issue, by model (`--issue`) and by planning round (`--planning`), wrote both snapshots, and with `--compare` set them beside a snapshot taken in Claude Code, saying the two scales differ |
+| **The plugin as installed from its catalog** | 0.16.0 from npm with `opencode plugin add opencode-pdkit`: `opencode plugin list` shows it from npm, and `opencode plugin check` as current. Then [First run](../../README.md#first-run) as written, in a fork whose `$PDKIT_HOME` the Claude Code version had used, after the steps in [Moving from the Claude Code version](../../README.md#moving-from-the-claude-code-version-and-back): `pdkit init` kept the config it found, `pdkit doctor` reported 0.16.0, that `$PDKIT_HOME`, the plugin running in the session and its ten hook events registered, and `pdkit doctor --gate-selftest` passed. In the Claude Code version this never ran — its marketplace entry's source was a local directory — and it headed "Never executed" below until 0.16.0 |
+
+Not run in Open Code, or not on a real model:
+
+- **Anything in podman-desktop itself**, and so whatever the copy lacks: its CI,
+  other people's open pull requests to tell a flaky check from a real failure,
+  its maintainers and review bot, branch protection and the review decision
+  GitHub reports with it, and history that links to its issues and pull
+  requests.
+- **A stack of slices published from a fork.** The run stopped before the
+  stacked slice went out; what the plugin does about a base that exists only in
+  the fork was seen by calling its code, not in a session. Neither `cascade`
+  nor `slice join` has run in Open Code.
+- **A compaction.** None of the sessions was compacted: neither `pre-compact`
+  nor whether a command's instructions outlast a provider's own compaction has
+  been seen.
+- **Nine of the twenty-one commands** — `/pd:doctor` (its report ran as
+  `pdkit doctor`), `/pd:sync`, `/pd:editor`, `/pd:open`, `/pd:resume`,
+  `/pd:review-pr`, `/pd:close`, `/pd:reset` and `/pd:knowledge` — and the three
+  skills that trigger by meaning ran in Open Code only on a scripted model,
+  while they were ported. `pd-archaeologist`, which only the `redo` route calls,
+  and `pd-conflict-analyst` have not run in Open Code, nor has the `redo` route.
+- **Seven of the ten hook events.** `pre-bash`, `pre-write` and `subagent-stop`
+  are the ones seen deciding in a live session. `session-start`, `post-write`,
+  `post-bash`, `post-read`, `post-claim`, `pre-compact` and `prompt-submit` are
+  registered in every session, which `pdkit doctor` reports, but what they add
+  was not checked there.
+- **Windows, beyond CI.** On a Windows 11 machine, on a scripted model, the
+  plugin loaded, `pdkit` ran from PowerShell, cmd.exe and Git Bash, and the gate
+  refused what it must. No issue has been worked on Windows.
 
 ## Verified against live upstream with the Claude Code version, with its evidence
 
@@ -62,16 +121,19 @@ gate held it. Both jobs are in `.github/workflows/ci.yml`.
 
 ## Never executed, in order of risk
 
-None of these has run in Open Code either. Two rows name Claude Code's own
-machinery, and say what stands in Open Code for it.
+The rows are the Claude Code version's, up to 0.15.0. Where Open Code's
+account differs — the skills, the hook events, the replies — the row says how
+far Open Code has gone, and against what; nothing else here has run in Open
+Code either. The row that headed this table, the plugin as installed from a
+catalog over the network, has run in Open Code and moved to
+[Run in Open Code](#run-in-open-code-with-its-evidence).
 
 | What | Why it is not a detail |
 |---|---|
-| **The plugin as installed from a catalog over the network.** In Open Code the catalog is npm: `opencode plugin add opencode-pdkit` puts the package in the global config. It has not been published yet, so that path has never run; what runs is CI loading the packed tarball into a real Open Code (`plugin-load`) | In the Claude Code version it loaded from a marketplace entry in `settings.json` whose source was a local directory, and half the row closed on 18832: the manifest was found through `extraKnownMarketplaces` plus `enabledPlugins`, not only through `--plugin-dir`, and skills and agents resolved from it. What was still untested there is the same thing that is untested here: the fetch, which is the path every other user takes |
-| **Ten of the twenty-four skills**: `editor`, `open`, `knowledge`, `pr-status`, `reset`, `resume`, `review-pr`, and `package-map`, `upstream-rules`, `worktree-kit`, which trigger by meaning. Fourteen have been invoked through a session; the row above lists them | Each skill body is prose, and prose is the half of this plugin that is not covered by anything. A skill that names a flag `pdkit` no longer has fails at the moment somebody is depending on it, and two of these were caught doing it: `/pd:preflight`, which ran, advised standing on a branch the graph had invented; `/pd:pr`, which did not run but was read and followed, documented a base `pr create` could not open against. **Not invoked is not the same as not exercised**, and the ten divide on it. `close --finish` finished 18248 and 18832, the `quickfix` route ran three times, `review fetch` and `review render` produced two reports, `pr list` and `drift` are routine — all through `pdkit` in a terminal, with the skill that wraps them never loaded (`close` and `quickfix` have since run as skills too). What is untested there is the prose: the part that says what to do with the output, in what order, and when to stop and ask |
-| **Three of the ten hook events**, in the Claude Code version. `pre-bash` has genuine firings in the journal, `subagent-stop` has host firings recorded as `agent-done` and watched by `pdkit doctor`, `session-start` has host firings in session transcripts (the row above), and `pre-write` is exercised by `owns:selftest` through the manifest. In Open Code none of the ten has yet fired on live work: `subagent-stop` is called by a real Open Code in the CI job `receipt-gate`, and `pdkit doctor` sends `pre-bash` and `pre-write` their probes through the bridge's own runner rather than through the host | The self-test spawns the handler the way the host does, which proves the handler works and not that the host calls it. `post-write`, `post-bash`, `post-read`, `post-claim`, `pre-compact` and `prompt-submit` have never been seen fired by the host; `prompt-submit` shipped in 0.6.0, `post-bash`, `post-read` and `post-claim` after 0.12.0. The receipt handler shows what that costs: it passed every test for four months while registered on `TaskCompleted`, an event subagents never raise. On 18832 a session *did* write plan and task files through the host's `Write` tool, so `post-write` was almost certainly called — and left no trace either way, because a handler that passes silently is indistinguishable from one that was never wired up. That is the same shape as the flake verdict below, and it is why this row needs an artefact rather than an absence of complaints |
-| **`cascade`, and rebasing dependents.** Two slices with a stacked base ran end to end on 18967 — cut, verified, materialized, preflighted from the predecessor's branch, published — so that half of the row is closed. `cascade` itself has now run once, on 18967 on 2026-10-16, and stopped: `slice-regressed from #1: rebased none; conflicts on #2`. #19002 was then withdrawn by amendment A7 and closed unmerged, so no dependent has yet been carried through a rebase, and there is still no `slice-cascade` event | What the run found is in [the section above](04-contracts/pr.md#pdpr--the-only-place-that-writes-to-github): the graph carried a base the publish route could not express, and nothing between `slice set` and `gh` compared the two. Both ends now do. What remains untested is a review fix landing in a slice something else is stacked on, which is what `cascade` is for, and it needs a reviewer rather than a fixture |
-| **`replyToThread` with both GraphQL mutations.** `pr-sync` itself has now run against real threads | Narrower than it was and no easier. On #18889 `pr threads` read four threads from two reviewers, `pd-thread-resolver` produced fixes for two of them, and two became approved amendments — everything up to the reply. The replies themselves were posted by the human, by choice, so `addPullRequestReviewThreadReply` and the resolve mutation are still unexecuted. That last step is the one that writes into somebody else's pull request, which is exactly why it will not be closed with synthetic material |
+| **Ten of the twenty-four skills**, in the Claude Code version: `editor`, `open`, `knowledge`, `pr-status`, `reset`, `resume`, `review-pr`, and `package-map`, `upstream-rules`, `worktree-kit`, which trigger by meaning. Fourteen were invoked through a session; the row above lists them. In Open Code the twelve not run on a real model are another twelve — `pr-status` has run there, and `doctor`, `sync` and `close` have not; [Run in Open Code](#run-in-open-code-with-its-evidence) names them | Each skill body is prose, and prose is the half of this plugin that is not covered by anything. A skill that names a flag `pdkit` no longer has fails at the moment somebody is depending on it, and two of these were caught doing it: `/pd:preflight`, which ran, advised standing on a branch the graph had invented; `/pd:pr`, which did not run but was read and followed, documented a base `pr create` could not open against. **Not invoked is not the same as not exercised**, and the ten divide on it. `close --finish` finished 18248 and 18832, the `quickfix` route ran three times, `review fetch` and `review render` produced two reports, `pr list` and `drift` are routine — all through `pdkit` in a terminal, with the skill that wraps them never loaded (`close` and `quickfix` have since run as skills too). What is untested there is the prose: the part that says what to do with the output, in what order, and when to stop and ask |
+| **Three of the ten hook events**, in the Claude Code version. `pre-bash` has genuine firings in the journal, `subagent-stop` has host firings recorded as `agent-done` and watched by `pdkit doctor`, `session-start` has host firings in session transcripts (the row above), and `pre-write` is exercised by `owns:selftest` through the manifest. In Open Code three have decided on live work — `pre-bash`, `pre-write` and `subagent-stop` ([Run in Open Code](#run-in-open-code-with-its-evidence)). The other seven, `session-start` among them, are registered in every session, which `pdkit doctor` reports, and what they add has not been checked | The self-test spawns the handler the way the host does, which proves the handler works and not that the host calls it. `post-write`, `post-bash`, `post-read`, `post-claim`, `pre-compact` and `prompt-submit` have never been seen fired by the host; `prompt-submit` shipped in 0.6.0, `post-bash`, `post-read` and `post-claim` after 0.12.0. The receipt handler shows what that costs: it passed every test for four months while registered on `TaskCompleted`, an event subagents never raise. On 18832 a session *did* write plan and task files through the host's `Write` tool, so `post-write` was almost certainly called — and left no trace either way, because a handler that passes silently is indistinguishable from one that was never wired up. That is the same shape as the flake verdict below, and it is why this row needs an artefact rather than an absence of complaints |
+| **`cascade`, and rebasing dependents.** Two slices with a stacked base ran end to end on 18967 — cut, verified, materialized, preflighted from the predecessor's branch, published — so that half of the row is closed. `cascade` itself has now run once, on 18967 on 2026-10-16, and stopped: `slice-regressed from #1: rebased none; conflicts on #2`. #19002 was then withdrawn by amendment A7 and closed unmerged, so no dependent has yet been carried through a rebase, and there is still no `slice-cascade` event. In Open Code a stacked pair has been cut, verified and approved, and only the first slice published, so `cascade` has not run there at all | What the run found is in [the section above](04-contracts/pr.md#pdpr--the-only-place-that-writes-to-github): the graph carried a base the publish route could not express, and nothing between `slice set` and `gh` compared the two. Both ends now do. What remains untested is a review fix landing in a slice something else is stacked on, which is what `cascade` is for, and it needs a reviewer rather than a fixture |
+| **`replyToThread` with both GraphQL mutations**, against podman-desktop. `pr-sync` itself has run against real threads there. In Open Code both mutations have run, against the copy ([Run in Open Code](#run-in-open-code-with-its-evidence)) | Narrower than it was and no easier. On #18889 `pr threads` read four threads from two reviewers, `pd-thread-resolver` produced fixes for two of them, and two became approved amendments — everything up to the reply. The replies themselves were posted by the human, by choice, so `addPullRequestReviewThreadReply` and the resolve mutation never ran in the Claude Code version. In Open Code they have, on a pull request of the copy and a review from a second account — which shows the calls work, and not what they do in a thread a maintainer opened. That last step is the one that writes into somebody else's pull request, which is exactly why it will not be closed with synthetic material |
 | **The `redo` route carried through to code** | The facts of a previous attempt are now collected correctly and `archaeology.json` is written by a real query, but no redo has reached a diff: that is a separate issue, not a separate task |
 | **[Scenarios 12 and 13](10-scenarios.md#scenarios-the-brief-did-not-name) on our own work** | Run against somebody else's diff, and that is the boundary: `--from-pr` is verified from fetch to graph, while materializing a foreign PR hit the repository's own pre-commit hook on an old checkout. Branches from a foreign diff, and thread migration into new pull requests, remain unexecuted |
 | **`pd-conflict-analyst`.** The conflicts it exists to classify have now happened | 18832's rebase produced one of each kind and both are journaled, so the material this row waited on arrived — but the session classified them itself rather than dispatching the agent, so what the agent does with a real conflict is still unknown. The narrower question that replaces this row: does a fresh-context read reach the same verdict as the session that wrote the code, on a conflict where the dangerous half never appeared as a conflict at all |
