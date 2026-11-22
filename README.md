@@ -15,12 +15,14 @@ this one carries on from it, state included — see
 It is built around one fact — **you do not own the repository you are opening
 pull requests against** — and most of what follows is a consequence of that.
 
-> **Status: pre-1.0, not yet run on a live issue in Open Code.** The Claude Code
-> version was used on thirteen podman-desktop issues and carried seven of them
-> all the way to `merged`. In Open Code, the test suite, the plugin loading and
-> the receipt gate are checked in CI; no issue has yet gone through it. Pre-1.0,
-> a minor release may still change a command or the state machine — see
-> [RELEASING.md](RELEASING.md).
+> **Status: pre-1.0; in Open Code, run on copies of podman-desktop issues, not
+> yet on a live one.** The Claude Code version was used on thirteen
+> podman-desktop issues and carried seven of them all the way to `merged`. In
+> Open Code, the `quickfix` route, the `standard` route as far as its first pull
+> request, and `pr-sync` have run on real models, against a private copy of
+> podman-desktop on GitHub. Nothing has been pushed, opened or answered in
+> podman-desktop itself. Pre-1.0, a minor release may still change a command or
+> the state machine — see [RELEASING.md](RELEASING.md).
 > [Status and limitations](#status-and-limitations) has the full accounting.
 
 ## Why it exists
@@ -384,7 +386,7 @@ not.
 Stated in full, because "the plugin is tested" should not be read more widely
 than it is.
 
-**In Open Code.** What runs in CI on every change:
+**In Open Code, in CI.** What runs on every change:
 
 | What | How |
 |---|---|
@@ -394,12 +396,54 @@ than it is.
 
 The last two do not block a change yet.
 
-Never executed in Open Code: an issue worked in it. Not the `quickfix` route, not
-`standard`, not `pr-sync` against a real review thread, not a run with planning
-and implementation on models of different providers — which is what the
-defaults now name — and not the gate or the ownership hook in a live session in
-the fork. Until they have run, what follows
-is the Claude Code version's, and none of it is evidence for this one.
+**In Open Code, live, against a copy of podman-desktop.** On macOS, in Open
+Code 2.3.0, on real models of the three providers the defaults name, with the
+plugin in the global config. The gate and the ownership hook were tried in a
+clone of a podman-desktop fork, with nothing able to leave it. The routes ran
+against a private copy on GitHub — an upstream repository with podman-desktop's
+history and one quick check for CI, a fork of it, issues copied from
+podman-desktop's without their links and mentions, and a second account to
+review — and every push, pull request, review and reply went there. **No
+podman-desktop issue has been worked in Open Code yet**: nothing has been
+pushed, opened or answered there.
+
+| What | How far |
+|---|---|
+| The gate | Asked to in a session in the fork, a model tried `git push`, `gh pr create`, `gh issue comment`, `git add -A`, a force push and a commit with `--no-verify`. Each was refused before it ran, in the Claude Code version's words. With no `node` on the server's PATH, and with a hook that never answered, it refused rather than let a command through. On the copy, a push and `pdkit pr create` went through on consent, and a second push on that consent was refused; replies to a review went through on a reply token for that pull request |
+| The ownership hook | In an issue's worktree, `write`, `edit` and `patch` from models of two providers — with no task running, with a task that owns files, and with one that owns none. Each call was let through or refused as the Claude Code version's hook decides the same write, and the files `patch` deletes or moves were checked as well |
+| The `quickfix` route | One issue: `/pd:triage`, `/pd:quickfix`, `/pd:preflight`, `/pd:pr` with its self-review, a push and a pull request on consent, then `/pd:pr-status` |
+| The `standard` route | One issue: `/pd:triage`; `/pd:plan` and two rounds of `/pd:plan-review`; `/pd:exec`, the receipt gate holding implementers that stopped without a receipt; `/pd:validate` without the Playwright server, which ended `unverified`; `/pd:audit`, whose finding went back through an amendment, two reviews of it and `/pd:exec` again, to `audited`; `/pd:slice` into two slices, the second stacked on the first; `/pd:pr` for the first, published by `pdkit publish`. The second slice was never published: its self-review still had findings open after the third round, the limit, and the person stopped there |
+| `pr-sync` | A review from the second account on the `quickfix` pull request: four threads, one of them already answered by the author, and a request in its body. `/pd:pr-sync` had three fixed and the request deferred, pushed on consent, replied on a reply token, and resolved two threads |
+| Models of different providers | Those issues ran on the defaults: the plan by an OpenAI model, the code by a Claude one, preflight on DeepSeek. `pdkit cost` measured them by issue, by model and by planning round, and set them beside a snapshot taken in Claude Code, saying the two scales differ |
+| Installing | 0.16.0 from npm with `opencode plugin add opencode-pdkit`, then [First run](#first-run) as written, in a fork whose `$PDKIT_HOME` the Claude Code version had used, after the steps in [Moving from the Claude Code version](#moving-from-the-claude-code-version-and-back): `init` kept the config it found, and the self-test passed |
+
+Not run in Open Code, or not on a real model:
+
+- **Anything in podman-desktop itself**, and so whatever the copy lacks: its CI,
+  other people's open pull requests to tell a flaky check from a real failure,
+  its maintainers and review bot, branch protection and the review decision
+  GitHub reports with it, and history that links to its issues and pull
+  requests.
+- **A stack of slices published from a fork.** The run stopped before the
+  stacked slice went out; what the plugin does about a base that exists only in
+  the fork was seen by calling its code, not in a session. **`slice join`** has
+  not run in Open Code.
+- **A compaction.** None of the sessions was compacted: neither `pre-compact`
+  nor whether a command's instructions outlast a provider's own compaction has
+  been seen.
+- **Nine of the twenty-one commands** — `/pd:doctor` (its report ran as
+  `pdkit doctor`), `/pd:sync`, `/pd:editor`, `/pd:open`, `/pd:resume`,
+  `/pd:review-pr`, `/pd:close`, `/pd:reset` and `/pd:knowledge` — and the three
+  skills that trigger by meaning ran in Open Code only on a scripted model,
+  while they were ported. `pd-archaeologist`, which only the `redo` route calls,
+  and `pd-conflict-analyst` have not run in Open Code, nor has the `redo` route.
+- **Seven of the ten hook events.** `pre-bash`, `pre-write` and `subagent-stop`
+  are the ones seen deciding in a live session. The other seven are registered
+  in every session, which `pdkit doctor` reports, but what they add was not
+  checked there.
+- **Windows, beyond CI.** On a Windows 11 machine, on a scripted model, the
+  plugin loaded, `pdkit` ran from PowerShell, cmd.exe and Git Bash, and the gate
+  refused what it must. No issue has been worked on Windows.
 
 The receipt gate rests on a hook Open Code calls experimental,
 `experimental.idle`. A version that renames or reshapes it switches the gate off
@@ -407,16 +451,17 @@ without a word. The CI check above notices, and so does `pdkit doctor`, on its
 `hooks:agent-done` line, once subagents have stopped and none of their stops was
 recorded.
 
-**In the Claude Code version, before the port.** Used on thirteen podman-desktop
-issues: fifteen pull requests published upstream, seven of them merged, and seven
-issues carried all the way to `merged` — four on the `standard` route, three on
-`quickfix`. One issue went out as a two-slice graph into two pull requests;
-another as three slices that review asked to be one, rejoined by `slice join`
-into a single pull request that superseded the three. Fourteen of the twenty-four
-skills ran as `/pd:*` in a session; `editor`, `knowledge`, `open`, `pr-status`,
-`reset`, `resume` and `review-pr` did not, nor did the three that trigger by
-meaning. [Section 13 of `docs/specification/`](docs/specification/13-status.md)
-keeps that accounting, with the evidence per line, as the history of 0.15.0.
+**In the Claude Code version, before the port** — evidence about that version,
+not about this one. Used on thirteen podman-desktop issues: fifteen pull
+requests published upstream, seven of them merged, and seven issues carried all
+the way to `merged` — four on the `standard` route, three on `quickfix`. One
+issue went out as a two-slice graph into two pull requests; another as three
+slices that review asked to be one, rejoined by `slice join` into a single pull
+request that superseded the three. Fourteen of the twenty-four skills ran as
+`/pd:*` in a session; `editor`, `knowledge`, `open`, `pr-status`, `reset`,
+`resume` and `review-pr` did not, nor did the three that trigger by meaning.
+[Section 13 of `docs/specification/`](docs/specification/13-status.md) keeps
+that accounting, with the evidence per line, as the history of 0.15.0.
 
 ## Documentation
 
