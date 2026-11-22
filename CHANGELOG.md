@@ -14,6 +14,19 @@ and their links go into the repository they were released from.
 
 ## [Unreleased]
 
+### Changed
+
+- **`pdkit doctor`'s `mcp:playwright` line says what `/pd:validate` does
+  without the server.** With no server, one Open Code reports down, or
+  `pd-validator` not offered its tools, the line said validation "produces a
+  checklist instead of a run and never sets PASS". Neither holds: the
+  application is still launched, built first when the tree is stale, and
+  whether a step passes is decided by what is attached to it, not by the
+  server. The line now says that `pd-validator` gets no browser tools, that a
+  step it cannot back with an artefact stays `unverified`, as a checklist for a
+  human, and that PASS needs an artefact either way. `/pd:doctor` describes the
+  line in the same words.
+
 ## [0.16.0] - 2026-11-22
 
 **Ported from podman-desktop-kit 0.15.0.** The same kit — the state machine,
