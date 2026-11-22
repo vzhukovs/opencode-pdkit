@@ -42,11 +42,11 @@ jobs:
       publish: ${{ steps.registry.outputs.publish }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
 
@@ -177,14 +177,19 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
+          # setup-node restores a dependency cache by itself once package.json
+          # names npm as its package manager. Nothing here installs anything,
+          # and a cache that another run saved has no place in the one job
+          # that can publish.
+          package-manager-cache: false
 
       # Below these, npm does not do the OIDC exchange and asks for a token
       # the job does not have. Better said here than as an auth error.
