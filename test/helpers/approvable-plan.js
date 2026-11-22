@@ -61,6 +61,10 @@ export async function approvablePlan(issue, options) {
   }
   const ids = record.requirements.ids.join(', ') || 'R1';
 
+  // The plan as `/pd:plan` writes it now: the four sections that answer the
+  // review, and a task that owns code with its tests and a Done when that
+  // typechecks and lints its file. Its cases ride in the block, the shape an
+  // amendment's task has, so that a suite gets no task file it did not write.
   const text = await render(
     'plan',
     {
@@ -69,19 +73,25 @@ export async function approvablePlan(issue, options) {
       e2eCoverage: 'no — a fixture',
       sliceCount: slices,
       context: '- `packages/main/src/index.ts:1` — the file the fixture task owns',
+      reuse: 'searched: `fixture` in packages/main/src -> 0',
+      modes: 'none: a fixture',
       interfaces: 'none',
       tasks: [
         '### T1: a fixture task',
         `- Satisfies: ${ids}`,
         '- Owns: packages/main/src/index.ts',
-        '- Done when: `pnpm test:main`',
+        '- Done when: `pnpm typecheck:main && pnpm exec eslint packages/main/src/index.ts && pnpm test:main`',
         '- Intent: stands in for the plan the suite is not about',
+        '- Tests:',
+        '  | the fixture behavior | always | it holds | the fixture task is not done |',
       ].join('\n'),
+      gates: '- T1: `typecheck:main`, eslint on its file, `test:main`',
       spdx: 'no new files',
       schemas: 'no',
       extensionApi: 'no',
       scope: 'main',
       sliceHypothesis: slices === 1 ? 'One slice.' : `${slices} slices.`,
+      bodyMustDisclose: 'none',
       decisions: 'none',
     },
     { home },

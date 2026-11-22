@@ -27,7 +27,7 @@
 import { test, describe, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,6 +35,7 @@ import { promisify } from 'node:util';
 
 import { parseAmendment, parsePlan } from '../lib/artefacts.js';
 import { allocateRequirement, freezeRequirements } from '../lib/ids.js';
+import { render } from '../lib/render.js';
 import { transition } from '../lib/state.js';
 import { amendmentProblems, problemsOf, reachOf } from '../lib/stops.js';
 
@@ -219,6 +220,33 @@ describe('the flow, through the CLI', () => {
     assert.notEqual(half.code, 0);
     assert.match(half.stderr, /leaves a stop report half settled/);
     assert.match(half.stderr, /names T16 as well/);
+  });
+
+  // In a plan whose tasks list their tests, the replacement of a task that
+  // owns code carries the cases of the task it replaces and asks for the ones
+  // the change adds: approval refuses it without them. A task that owns only
+  // tests carries none, as in the plan.
+  test('in a plan that lists tests, the draft copies the replaced task\'s and asks for the new ones', async () => {
+    const ROW = '| the runner reads the option | `--retries 2` | two retries | the option is ignored |';
+    const full = PLAN.replace('- Owns: tests/playwright/src/runner/runner-options.ts', '- Owns: packages/main/src/runner-options.ts')
+      .replace('## Tasks', '## Reuse\nsearched: `retries` in packages/main/src -> 0\n\n## Modes\nnone: one runner\n\n## Tasks')
+      .replace('## Slice hypothesis', '## Gates\n- T11: its eslint and its typecheck\n\n## Slice hypothesis')
+      .replace('## Open decisions', '## Body must disclose\nnone\n\n## Open decisions');
+    await writeFile(file('plan.md'), full);
+    await mkdir(file('tasks'), { recursive: true });
+    const values = { taskId: 'T11', title: 'runner option', issue: String(ISSUE), satisfies: 'R1', status: 'pending', attempts: '0', ownedFiles: ['- packages/main/src/runner-options.ts'], command: TSC, expected: 'OK', context: '—', tests: ROW, steps: '—', notes: '—' };
+    await writeFile(file('tasks', 'T11.md'), await render('task', values));
+
+    assert.equal((await stopT11({ ...FINDING, affects: ['T16'] })).code, 0);
+    const draftPath = join(home, 'draft.json');
+    const drafted = await pdkit('amendment', 'draft', '--issue', String(ISSUE), '--out', draftPath);
+    assert.equal(drafted.code, 0, drafted.stderr);
+    const [t17, t18] = JSON.parse(await readFile(draftPath, 'utf8')).slices.split('\n\n');
+
+    assert.match(t17, /^### T17 \(replaces T11\): runner option$/m);
+    assert.ok(t17.includes(`- Tests:\n  ${ROW}\n  [FILL IN: the cases the change below adds, in the same rows — or delete this line]\n- Steps:`), t17);
+    assert.match(t18, /^### T18 \(replaces T16\): product\.json helper$/m);
+    assert.doesNotMatch(t18, /- Tests:/);
   });
 
   test('a cleared report frees its tasks, and needs a reason', async () => {

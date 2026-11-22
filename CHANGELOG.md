@@ -16,6 +16,40 @@ and their links go into the repository they were released from.
 
 ### Changed
 
+- **A plan answers in writing what its review, its implementer and the
+  self-review would ask.** `plan.md` gains `## Reuse` (what exists that a task
+  could reuse or would copy, each search with what it found), `## Modes` (each
+  mode the code runs in, rendering and async among them, and how the plan
+  handles it), `## Gates` (the typecheck, lint and tests of each task, and the
+  gate that checks again a file a later task changes) and `## Body must
+  disclose`; a task file gains `## Tests`, a row per case with the condition,
+  the assertion and why it fails without the change. `/pd:plan` reads sections
+  1 to 10 of the maintainer's rules and decides the design by them — the shape
+  of the state, where logic lives, how a behavior is tested — and reads its plan
+  against the critic's checklist before `pdkit plan check`.
+- **`pdkit plan check` refuses a task that owns code with no `## Tests`, and
+  one whose `Done when` does not typecheck and lint its files**; it warns about
+  a task that changes code whose `Done when` already passes on the base, before
+  the change it is meant to prove. The approval reads the plan the same way. A
+  plan written before the new sections is read as it was, and the check says
+  so in one line, so the plans and tasks of issues already under way go on as
+  they were. In a plan that lists its tests, a task an amendment adds lists its
+  own and gates its files too, and `pdkit amendment draft` copies the tests of
+  the task it replaces.
+- **Reconnaissance runs once.** `/pd:triage` writes its scouts' map to
+  `research.md`, and `/pd:plan` sends a scout only for what that map leaves
+  open, rather than three more on the same questions.
+- **A second plan-review round reads only what changed, a structural change
+  included**: a task added since is read whole, a task removed is named with
+  what to check of it, and a rewritten slice hypothesis is a part to check;
+  `pdkit plan brief --mode delta` no longer refuses one. `pd-plan-critic` holds
+  the design to sections 1 to 10 of the maintainer's rules, leaving their syntax
+  to the implementer, checks the plan's written answers rather than searching
+  again, and its coverage map gains the columns Tests and Maintainer's rules.
+- **`pd-implementer` writes exactly the cases `## Tests` lists**, where it can
+  before the code they test, and names in its report every test it adds;
+  `/pd:quickfix` lists its tests in `issue.md` before the fix.
+
 - **`pdkit doctor`'s `mcp:playwright` line says what `/pd:validate` does
   without the server.** With no server, one Open Code reports down, or
   `pd-validator` not offered its tools, the line said validation "produces a

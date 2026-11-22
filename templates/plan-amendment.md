@@ -31,10 +31,17 @@
        ### T5 (replaces T2 and T3): <title>
        - Satisfies: R1, R7
        - Owns: packages/main/src/index.ts
-       - Done when: `npx vitest run packages/main/src/index.spec.ts` -> exit 0
+       - Done when: `pnpm typecheck:main && pnpm exec eslint packages/main/src/index.ts && npx vitest run packages/main/src/index.spec.ts` -> exit 0
        - After: T4
+       - Tests:
+         | <case> | <when> | <asserts> | <fails without the change because> |
        - Steps:
          1. <step>
+
+     In a plan whose task files list their tests, a task here that owns code
+     lists its own under `- Tests:`, in the rows of a task file's `## Tests`,
+     and runs the typecheck and the lint of its files in its `Done when`;
+     approval refuses one that does not.
 
      A replacement takes the place in the order of the first task it replaces,
      and an `After` elsewhere that names a replaced task means its replacement.
