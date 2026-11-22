@@ -79,7 +79,7 @@ All detected by `pdkit doctor`, all degrading gracefully when absent:
 
 | Server | Used by | Without it |
 |---|---|---|
-| Playwright | `/pd:validate` | validation produces a human checklist instead of evidence, and does not mark PASS |
+| Playwright | `/pd:validate` | `pd-validator` gets no browser tools. `/pd:validate` still launches the application; a step the validator cannot back with an artefact stays `unverified`, as a checklist for a human, and PASS needs an artefact either way |
 | context7 | planning and review, for questions about someone else's library | the answer comes from the model's own knowledge of that library's versions, which goes out of date without saying so |
 
 The plugin declares no MCP server on purpose: one declared by a plugin would load

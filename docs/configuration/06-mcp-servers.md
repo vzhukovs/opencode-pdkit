@@ -8,7 +8,7 @@ mandatory. Configure them yourself.
 
 | Server | Used by | Absent |
 |---|---|---|
-| Playwright | `/pd:validate` | a human checklist instead of evidence, and no PASS is recorded |
+| Playwright | `/pd:validate` | no browser tools for `pd-validator`; the application is still launched, and a step the validator cannot back with an artefact stays `unverified`, as a checklist for a human — no PASS without an artefact |
 | context7 | questions about someone else's library, in planning and in review | the answer comes from the model's own knowledge of that library's versions, which goes out of date without saying so |
 
 A server belongs to the session, not to an agent. Which of the plugin's agents
@@ -86,10 +86,15 @@ prints the endpoint. That is the shape upstream's own runner uses
 also the answer to whether an Electron podman-desktop can be driven at all: it
 has been, in their CI, all along. Verified end to end on 2026-08-02 against the
 development build, with the Claude Code version — `browser_snapshot` came back
-with the real accessibility tree. In Open Code, `pd-validator` has not driven
-the application yet; what has been checked is the wiring: the server's tools by
-Open Code's names, offered to `pd-validator` and to no other agent of the
-plugin.
+with the real accessibility tree. In Open Code the server has not yet been
+attached to the application; what has been checked of it is the wiring: its
+tools by Open Code's names, offered to `pd-validator` and to no other agent of
+the plugin. `/pd:validate` has run in Open Code without the server
+([status](../specification/13-status.md#run-in-open-code-with-its-evidence)):
+`pd-validator` built and launched the application itself with `pdkit validate
+launch --build`, drove it over CDP with Playwright as a library from `shell`,
+and attached a screenshot to two of its four steps; `validate finish` recorded
+the run `unverified`.
 
 "No Playwright" and "nothing to point Playwright at" are different problems.
 `doctor` reports the second separately, as `validate:app` — a perfectly
