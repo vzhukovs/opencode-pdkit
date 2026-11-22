@@ -169,10 +169,19 @@ GIT_NO_REPLACE_OBJECTS=1 git push origin v0.16.1
 gh run list --workflow publish.yml -L 1        # the run the tag started
 gh run watch <its id> --exit-status
 
-# 10. npm has it; then the GitHub release, from the changelog.
+# 10. npm has it: this prints the version, if not always at once (below).
+#     Then the GitHub release, from the changelog. The section's links are
+#     relative to the repository, and a release page would resolve them
+#     against itself, where there is nothing, so each one goes into the tag:
+#     a file at its path there, an anchor in the tag's CHANGELOG.md.
 npm view opencode-pdkit@0.16.1 version
-gh release create v0.16.1 --verify-tag --title "0.16.1" \
-  --notes-file <(sed -n '/^## \[0\.16\.1\]/,/^## \[/p' CHANGELOG.md | sed '$d')
+notes="$(mktemp)"
+blob=https://github.com/vzhukovs/opencode-pdkit/blob/v0.16.1
+sed -n '/^## \[0\.16\.1\]/,/^## \[/p' CHANGELOG.md | sed '$d' |
+  sed -E -e "s,]\(#,]($blob/CHANGELOG.md#,g" \
+         -e "s,]\(([^)#:]+)([#)]),]($blob/\1\2,g" > "$notes"
+grep -E ']\((#|[^):]+[#)])' "$notes"   # prints nothing: all are absolute
+gh release create v0.16.1 --verify-tag --title "0.16.1" --notes-file "$notes"
 ```
 
 A pull request does as well as the push in step 7, merged by rebase like any
@@ -216,6 +225,14 @@ version. If `receipt-gate` was skipped — the run had no key — run the check 
 hand on the minimum before the tag. The publish workflow reads the jobs the same
 way, and warns that it cannot tell whether a skipped check was run by hand.
 
+Step 10's `npm view` may answer `E404` for a while after `publish` has passed.
+npm kept the first version, 0.16.0, out of sight for about four minutes after
+it was published, while the version's page on npmjs.com said "Validating:
+Automated review hasn't finished"; whether it does so with every version is not
+known yet. Ask again until it prints the version, and do not re-run the publish
+workflow meanwhile: its `verify` asks npm the same question, and an `E404` would
+send `publish` after a version npm already has.
+
 ## The publish workflow
 
 [`.github/workflows/publish.yml`](.github/workflows/publish.yml) runs on a tag
@@ -232,7 +249,9 @@ order:
    the run fails it, so a job renamed in `ci.yml` is renamed there too;
 3. whether npm has this version already. If it has — the first release,
    published by hand, or a re-run after a publish that went through — the run
-   says so and publishes nothing, and `publish` shows as skipped.
+   says so and publishes nothing, and `publish` shows as skipped. It asks
+   with `npm view`, which does not see a version npm is still validating (see
+   step 10).
 
 `publish` runs `npm publish` by trusted publishing: npm exchanges the job's OIDC
 token for a one-time publish, so no npm token is kept in the repository's
@@ -285,20 +304,32 @@ workflow publishes from the second on.
    [0.16.0]: https://github.com/vzhukovs/opencode-pdkit/releases/tag/v0.16.0
    ```
 
-4. **Publish by hand**, from that commit with a clean tree. npm asks for the
-   second factor.
+4. **Publish by hand**, from that commit with a clean tree, in a terminal: npm
+   asks for the second factor there. Started where no terminal can answer — a
+   shell an agent runs for you, such as Claude Code's `!` — `npm publish`
+   prints a link to sign in with and stops at once with `EOTP`, having
+   published nothing. `npm publish --otp=<code>` takes a code from an
+   authenticator app on the command line instead.
 
    ```bash
    git status --porcelain        # empty
    npm publish
-   npm view opencode-pdkit@0.16.0 version
+   npm view opencode-pdkit@0.16.0 version    # again, until it prints 0.16.0
    ```
+
+   The version did not appear at once. npm first put up a placeholder,
+   `0.0.0-stage` ("Temporary package placeholder for staged publishing"), with
+   `latest` on it, while the version's page said "Validating: Automated review
+   hasn't finished" and `npm stage list` showed nothing staged. About four
+   minutes after the publish, `npm view` found 0.16.0, and `latest` had moved
+   to it. The placeholder stays in the package's list of versions.
 
    This one version carries no provenance: npm makes provenance only in a
    cloud CI.
 
-5. **The tag**, as in step 9. The publish workflow runs on it, finds 0.16.0 on
-   npm, and publishes nothing.
+5. **The tag**, as in step 9, once `npm view` prints the version. The publish
+   workflow runs on it, finds 0.16.0 on npm, and publishes nothing; tagged
+   earlier, it would find no version and send `publish` after it.
 
 6. **The GitHub release**, as in step 10.
 
