@@ -23,9 +23,11 @@ Stated here rather than discovered later.
    lines. Hence `prefer-independent` as the default; a stack is the exception and
    every stacked slice must carry a justification.
 
-4. **`validate` without Playwright is a checklist, not a check.** The plugin must
-   not pretend it validated. The rule is explicit in the skill: PASS may never be
-   set from reading source.
+4. **What `validate` cannot show without Playwright is a gap, not a pass.**
+   Without the server `pd-validator` has no browser tools, and a step it cannot
+   back with an artefact stays `unverified`, a checklist for a human. The plugin
+   must not pretend it validated. The rule is explicit in the skill: PASS may
+   never be set from reading source.
 
 5. **Overhead on small things is the main risk of the whole idea.** The
    `quickfix` threshold is a defense against ceremony, not an optimization: if

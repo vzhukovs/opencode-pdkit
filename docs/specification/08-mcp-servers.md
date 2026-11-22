@@ -17,8 +17,10 @@ point of failure.
 **The plugin declares no MCP server, and that is the point:** a server declared
 by the plugin would load for everyone who installs it, which would make optional
 servers mandatory. `/pd:doctor` checks what is present and degrades gracefully —
-no Playwright means `/pd:validate` produces a human checklist instead of a run,
-and says explicitly that PASS was not recorded.
+no Playwright means `pd-validator` has no browser tools. `/pd:validate` still
+launches the application; a step the validator cannot back with an artefact
+stays `unverified`, listed for a human as a checklist, and PASS is never
+recorded without an artefact.
 
 **Where the person connects a server: once per machine, in Open Code's global
 config.** A server is an entry under `mcp.servers` of
@@ -97,12 +99,17 @@ Claude Code version. `validate launch` brought up the development build
 (`PodmanDesktop/1.30.0-next Electron/42.3.3`), CDP answered on
 `/json/version`, `@playwright/mcp` with `--cdp-endpoint` attached, and
 `browser_snapshot` returned an 11.9 KB real accessibility tree — navigation
-buttons, search. In Open Code that half — `pd-validator` driving the
-application — has not run yet ([section 13](13-status.md)); what has been
-checked is the wiring: the server's tools by Open Code's names, offered to
-`pd-validator` and to no other agent of the plugin.
+buttons, search. In Open Code that half — the server attached to the
+application — has not run yet; what has been checked of it is the wiring: its
+tools by Open Code's names, offered to `pd-validator` and to no other agent of
+the plugin. What has run in Open Code is `/pd:validate` without the server
+([section 13](13-status.md#run-in-open-code-with-its-evidence)): `pd-validator`
+built and launched the application itself with `validate launch --build`, drove
+it over CDP with Playwright as a library from `shell`, and attached a screenshot
+to two of its four steps; `validate finish` recorded the run `unverified`.
 
-Two findings came with it. **Pointing the server at nothing is safe:** a server
+Two findings came with the end-to-end check.
+**Pointing the server at nothing is safe:** a server
 with a `--cdp-endpoint` leading nowhere starts normally and offers all its tools,
 because it connects lazily on the first call — Open Code reports it connected
 with no browser behind it. So it can be registered once per
