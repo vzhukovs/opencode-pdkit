@@ -21,7 +21,8 @@ all**.
 2. **Dedup**: open pull requests referencing the issue; closed ones (a revert
    means the `redo` route, and `pd-archaeologist`).
 3. Two or three `pd-scout` runs in parallel locate the affected packages. Reading
-   the code wholesale is forbidden — a map only.
+   the code wholesale is forbidden — a map only. The maps are written, merged,
+   to `research.md`, which `/pd:plan` reads before it sends a scout of its own.
 4. Nature and size. The `trivial` threshold: an estimated diff of ≤ 20 lines,
    ≤ 3 files, no `packages/extension-api`, no schema changes, no new dependencies.
 5. A draft R-set with a **source tag** on every requirement: `[issue]` verbatim,
