@@ -71,6 +71,11 @@ Not run in Open Code, or not on a real model:
   stacked slice went out; what the plugin does about a base that exists only in
   the fork was seen by calling its code, not in a session. Neither `cascade`
   nor `slice join` has run in Open Code.
+- **The Playwright server driving the application.** The live `/pd:validate`
+  ran with no server: `pd-validator` drove the application with Playwright as a
+  library from `shell`. The server, attached with `--cdp-endpoint`, has run in
+  Open Code only on a scripted model, against a headless browser standing in
+  for podman-desktop.
 - **A compaction.** None of the sessions was compacted: neither `pre-compact`
   nor whether a command's instructions outlast a provider's own compaction has
   been seen.
