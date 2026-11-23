@@ -23,7 +23,7 @@ as a command a person types, and the model is never offered it.
 | `/pd:plan-review <issue>` | issue | `plan-review.md` | — | opus#high, fresh | — |
 | `/pd:exec <issue> [T*]` | issue/task | code, commits, `receipts/*` | `implemented` | sonnet#high + sonnet workers | — |
 | `/pd:validate <issue>` | issue | `validation.md` + artefacts | `validated` | terra#medium | — |
-| `/pd:audit <issue>` | issue | `audit.md` | `audited` | opus#high + sol auditor, fresh | — |
+| `/pd:audit <issue>` | issue | `audit.md`, the review of the whole branch in `self-review.json`, commits for its fixes | `audited` | opus#high + sol auditor and the four review axes, fresh; sonnet implementer for a fix | — |
 | `/pd:slice <issue>` | issue | `slices.md` — the PR graph | `sliced` | opus#high + opus slicer, fresh | human: approval |
 | `/pd:preflight <issue\|slice>` | issue/slice | pass/fail + output | `preflight-green` | flash#low | — |
 | `/pd:pr <issue> [slice]` | issue | branches, PR bodies, open PRs | `pr-open` | sonnet#medium | **push gate** |

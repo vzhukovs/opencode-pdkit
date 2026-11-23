@@ -56,7 +56,7 @@ a handful of modules that reach nothing beyond one another — the `LEAVES` of
 | `amendment.js` | reconciliation with amendments: what each one ended up as, and what an approved one changes in the requirement set, `plan.md` and the task files; writes through `state.js`, `render.js`, `journal.js`, prints nothing |
 | `archaeology.js` | facts about a previous attempt; owns `archaeology.json`; reaches no verdict |
 | `attempts.js` | how many times a task has been tried; **derived** from the journal, never stored |
-| `audit.js` | facts for `pd-auditor`, including every file changed outside every `Owns`; no verdict |
+| `audit.js` | facts for `pd-auditor`, including every file changed outside every `Owns`, and what the review of the whole branch reads besides the diff: the plan, and the `## Tests` each live task owes; no verdict |
 | `backlog.js` | facts about a set of candidate issues; produces an order, not a choice |
 | `repo.js` | package map from `pnpm-workspace.yaml`, git primitives |
 | `scripts.js` | which of the repository's scripts a diff needs (scoped tests, the whole typecheck) and the command that runs one; shared by `slice verify`, validation and preflight |
@@ -71,7 +71,7 @@ a handful of modules that reach nothing beyond one another — the `LEAVES` of
 | `validation.js` | validation steps and their evidence: read and save, attaching, codifying, recording a run, superseding, finishing; owns `validation.json`, and is the facade that re-exports `validation/` under the names callers know |
 | `validation/` | `verdict.js` (the derived status of a step, the outcome of a record, the green streak of the e2e series — a leaf the others import directly), `app.js` (launching and stopping the app under CDP), `e2e.js` (what is waiting to be validated, the single-spec command, the run series), `format.js` (validation.md and the terminal); none names `validation.json` — reading and saving the record, and the facade's functions that do so, are handed over by `validation.js` |
 | `review.js` | facts about somebody else's pull request; no verdict |
-| `self-review.js` | what the review axes found on our own pull request, tied to the commit and body they read; which findings are open is derived from their labels (an `issue:`, an unanswered `question:`); how many commits in a row were reviewed without a clean review is derived from the journal (a round starts at `self-review target`), and past `review.self_review_rounds` a new round waits for a person's `self-review continue`; owns `self-review.json` |
+| `self-review.js` | what the review axes found on our own pull request, tied to the commit and body they read, and on the whole branch when `/pd:audit` read it, with no body yet; which findings are open is derived from their labels (an `issue:`, an unanswered `question:`); how many commits in a row were reviewed without a clean review is derived from the journal (a round starts at `self-review target`; the audit's review counts its own), and past `review.self_review_rounds` a new round waits for a person's `self-review continue`; owns `self-review.json` |
 | `knowledge.js` | revision of `knowledge/`: dead links, drift from the package map, entry shape |
 | `drift.js` | composition: a slice's branch point, upstream commits after it, overlap with lines the plan cites |
 | `gh.js` | `gh` wrappers (REST + GraphQL), read-only by default |
@@ -198,7 +198,7 @@ $PDKIT_HOME/                     # default: ~/.pdkit/podman-desktop
 │   ├── validation.json / .md    # steps, evidence, e2e run series; .md is rendered
 │   ├── validation/V1.md …       # raw run output, receipt format
 │   ├── audit.md
-│   ├── self-review.json         # the review axes on our own PR: commit, body digest, findings
+│   ├── self-review.json         # the review axes on our own PR: commit, body digest, findings; and on the branch, in /pd:audit
 │   ├── findings.md              # for an issue whose deliverable is an answer
 │   ├── slices.json / .md        # the PR graph; .md is rendered from .json
 │   ├── verify/S1.md …           # raw slice-verification output, receipt format

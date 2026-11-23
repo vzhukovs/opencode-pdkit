@@ -5,15 +5,15 @@
 | Agent | Model | Tools | Role |
 |---|---|---|---|
 | `pd-scout` | sonnet#high | Read, Grep, Glob, Bash (ro) | reconnaissance, ≤ 40 lines (50 with local rules and modes of the environment), every claim `file:line`, proposes nothing |
-| `pd-implementer` | sonnet#high | everything except push/gh | one task, only files from `Owns`, the tests its `## Tests` lists and those it adds named, a receipt with real output |
-| `pd-auditor` | sol#high | Read, Grep, Glob, Bash (ro) | diff against plan, fresh context |
+| `pd-implementer` | sonnet#high | everything except push/gh | one task, only files from `Owns`, the tests its `## Tests` lists and those it adds named, a receipt with real output; or one review finding, fixed inside the files of the task that owns it |
+| `pd-auditor` | sol#high | Read, Grep, Glob, Bash (ro) | diff against plan, fresh context; the maintainer's rules are the review axes' |
 | `pd-plan-critic` | opus#high | Read, Grep, Glob | adversarial review of the **plan**, before code: the whole plan, some of its areas, or one axis across it; checks the plan's written answers and the design it settles against the maintainer's rules 1–10 |
 | `pd-slicer` | opus#high | Read, Grep, Bash | the slice graph, from the finished diff |
 | `pd-validator` | terra#medium | Bash + Playwright MCP tools | drives the built application, collects evidence |
 | `pd-archaeologist` | sol#high | Read, Bash (git log/blame) | history: reverts, regressions, who and why |
 | `pd-conflict-analyst` | opus#high | Read, Grep, Bash | mechanical conflict or semantic |
 | `pd-thread-resolver` | sonnet#high | Read, Edit, Bash | one review thread → fix + draft reply |
-| `pd-review-architecture`, `pd-review-tests` | sol#high | Read, Grep, Glob | two of the review axes |
+| `pd-review-architecture`, `pd-review-tests` | sol#high | Read, Grep, Glob | two of the review axes: someone else's pull request, the whole branch in `/pd:audit`, our own pull request before a push |
 | `pd-review-api-compat` | opus#high | Read, Grep, Glob | the third |
 | `pd-review-product` | sonnet#high | Read, Grep, Glob | the fourth |
 | `pd-review-synth` | opus#medium | Read | synthesis into one verdict |

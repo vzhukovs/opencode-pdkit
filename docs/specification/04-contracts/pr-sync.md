@@ -40,7 +40,9 @@
    receipted, and `pdkit audit` lists it as withdrawn rather than as missing.
    Tasks that do not parse, reuse a live ID or claim a live task's file keep
    the amendment proposed.
-6. `pd-thread-resolver` per thread, in parallel, each within its own files.
+6. `pd-thread-resolver` per thread, in parallel, each within its own files. A row
+   of our own findings goes to `pd-implementer` instead: no reply to draft, and
+   it reads the maintainer's rules whole before it writes.
 7. Cascade: if a fix touched a slice others are stacked on, `pdkit slice cascade`
    rebases the dependents and re-runs verification; whatever stopped being
    standalone is flagged.

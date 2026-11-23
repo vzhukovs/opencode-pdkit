@@ -61,7 +61,7 @@ What you type, session by session — `/clear` starts the next one:
 | Step | Session | Default model | Subagents |
 |---|---|---|---|
 | `/pd:validate 12345` | **new** · issue tree | `terra#medium` | `pd-validator` · `terra#medium` |
-| next: `/pd:audit 12345` | **new** · issue tree | `opus#high` | `pd-auditor` · `sol#high` |
+| next: `/pd:audit 12345` | **new** · issue tree | `opus#high` | `pd-auditor` · `sol#high`; the four `pd-review-*` · `sol#high` for architecture and tests, `opus#high` for api-compat, `sonnet#high` for product, `pd-review-synth` · `opus#medium`; `pd-implementer` · `sonnet#high` for a fix |
 
 Playwright MCP is a server of the session, not of the agent, and comes from
 Open Code's global config: added there once with `--global`, every session has

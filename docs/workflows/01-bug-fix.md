@@ -8,7 +8,7 @@
 /pd:plan-review 12345 → adversarial review of the plan
 /pd:exec 12345        → implementation, one task per worker, receipts
 /pd:validate 12345    → evidence from the running application
-/pd:audit 12345       → diff against plan, fresh context
+/pd:audit 12345       → diff against plan, one review of the branch
 /pd:slice 12345       → usually one slice                        [you approve]
 /pd:preflight 12345   → deterministic gates
 /pd:pr 12345          → branch, PR body, PR                      [you confirm push]
@@ -89,11 +89,11 @@ pdkit state 12345 --to slices-approved   your approval
 | approve: `pdkit ids freeze`, `pdkit state --to plan-approved` | the plan-review session, or **terminal** | — | — |
 | `/pd:exec 12345` | **new** · main checkout, then the skill moves it into `DESKTOP-12345` | `sonnet#high` | `pd-implementer` · `sonnet#high`, one per task |
 | `/pd:validate 12345` | **new** · issue tree | `terra#medium` | `pd-validator` · `terra#medium` |
-| `/pd:audit 12345` | **new** · issue tree | `opus#high` | `pd-auditor` · `sol#high` |
+| `/pd:audit 12345` | **new** · issue tree | `opus#high` | `pd-auditor` · `sol#high`; the four `pd-review-*` · `sol#high` for architecture and tests, `opus#high` for api-compat, `sonnet#high` for product, `pd-review-synth` · `opus#medium`; `pd-implementer` · `sonnet#high` for a fix |
 | `/pd:slice 12345` | **new** · issue tree | `opus#high` | `pd-slicer` · `opus#high` |
 | approve: `pdkit state --to slices-approved` | the slice session, or **terminal** | — | — |
 | `/pd:preflight 12345` | **new** · issue tree | `flash#low` | — |
-| `/pd:pr 12345` | **new** · issue tree, one per slice | `sonnet#medium` | — |
+| `/pd:pr 12345` | **new** · issue tree, one per slice | `sonnet#medium` | the four `pd-review-*` and `pd-review-synth`, for the self-review; `pd-implementer` · `sonnet#high` for a fix |
 
 No model to type on this path. Each command switches the session to its own —
 `astra#high` for the plan, `sonnet#high` for `/pd:exec`, and so on down the

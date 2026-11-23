@@ -52,7 +52,7 @@ What you type, session by session — `/clear` starts the next one:
 |---|---|---|---|
 | `/pd:sync` | **new** · main checkout | `flash#low` | — |
 | `/pd:resume 12345` | **new** · issue tree | `opus#high` | `pd-conflict-analyst` · `opus#high` |
-| `/pd:pr-sync <pr#>` | **new** · issue tree | `opus#high` | `pd-thread-resolver` · `sonnet#high` |
+| `/pd:pr-sync <pr#>` | **new** · issue tree | `opus#high` | `pd-thread-resolver` · `sonnet#high`; `pd-implementer` · `sonnet#high` for our own findings |
 | `/pd:preflight 12345` | **new** · issue tree | `flash#low` | — |
 | `/pd:pr 12345` | **new** · issue tree | `sonnet#medium` | — |
 

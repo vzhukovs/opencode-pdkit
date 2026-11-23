@@ -50,7 +50,7 @@ gates nothing at all: that is the `plugin` line of `doctor`.
 /pd:plan-review <n>  → adversarial review              [you approve the plan]
 /pd:exec <n>         → implementation, a receipt per task
 /pd:validate <n>     → evidence from the running application
-/pd:audit <n>        → diff against plan, fresh context
+/pd:audit <n>        → diff against plan, one review of the branch
 /pd:slice <n>        → graph of pull requests          [you approve the graph]
 /pd:preflight <n>    → the deterministic gates
 /pd:pr <n>           → branch, body, pull request      [you confirm the push]
@@ -126,7 +126,7 @@ the reporter still has to confirm.
 | `/pd:plan-review <n>` | a plan exists | `planned` | must-change findings; repeat until clean → **you approve** → `plan-approved` | `opus#high` |
 | `/pd:exec <n> [task]` | the plan is approved | `plan-approved` | code, one worker per task, a receipt each → `implemented` | `sonnet#high` |
 | `/pd:validate <n>` | the code is written | `implemented` | evidence from the running app → `validated` | `terra#medium` |
-| `/pd:audit <n>` | validation is done | `validated` | the diff against the plan, in fresh context → `audited` | `opus#high` |
+| `/pd:audit <n>` | validation is done | `validated` | the diff against the plan and one review of the whole branch, in fresh context; fixes by `pd-implementer` → `audited` | `opus#high` |
 | `/pd:slice <n>` | the audit is clean | `audited` | a verified slice graph → `sliced` → **you approve** → `slices-approved` | `opus#high` |
 | `/pd:preflight <n>` | before every push | the slice branch cut | twenty-four checks, in two passes → `preflight-green` | `flash#low` |
 | `/pd:pr <n> [slice]` | preflight is green | `preflight-green` and a body | push and pull request → `pr-open`. **You confirm, per branch** | `sonnet#medium` |
@@ -232,6 +232,9 @@ pdkit validate supersede <Vk> --issue <n> --by <Vn> --reason <t>
                                            # set aside for one that showed the change
 pdkit drift <n>                            # what landed upstream under this work
 pdkit audit <n> --base main                # facts, no verdict
+pdkit self-review target --issue <n> --audit   # the whole branch for the review axes, with the plan and each task's ## Tests
+pdkit self-review record --issue <n> --audit --findings <f.json>
+                                           # no body; names the task that owns each open finding's file
 ```
 
 **Publish**
