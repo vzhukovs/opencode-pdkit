@@ -3,7 +3,7 @@ name: plan
 description: "Plan an issue: scout the code, resolve the open choices, and produce a plan with executable done-criteria."
 argument-hint: "<issue-number>"
 disable-model-invocation: true
-model: openai/gpt-6-astra#high
+model: openai/gpt-6-astra#xhigh
 ---
 
 The plan is the only artefact that carries intent to the implementer. Three

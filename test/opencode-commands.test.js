@@ -102,7 +102,7 @@ const DEFAULTS = Object.freeze({
   exec: 'claude-agent/sonnet#high',
   knowledge: 'claude-agent/opus#medium',
   open: 'deepseek/deepseek-flash#none',
-  plan: 'openai/gpt-6-astra#high',
+  plan: 'openai/gpt-6-astra#xhigh',
   'plan-review': 'claude-agent/opus#high',
   pr: 'claude-agent/sonnet#medium',
   'pr-status': 'deepseek/deepseek-flash#low',
@@ -114,7 +114,7 @@ const DEFAULTS = Object.freeze({
   'review-pr': 'claude-agent/opus#high',
   slice: 'claude-agent/opus#high',
   sync: 'deepseek/deepseek-flash#low',
-  triage: 'openai/gpt-6.1-sol#high',
+  triage: 'openai/gpt-6.1-sol#xhigh',
   validate: 'openai/gpt-6.1-terra#medium',
 });
 
