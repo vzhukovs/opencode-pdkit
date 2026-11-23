@@ -61,8 +61,8 @@ and in one cycle the model changes here, with nothing typed for it:
 ```
 cd <fork> && opencode          ──► the model you chose, until the first command
 
-/pd:triage                                 sol#xhigh
-/pd:plan                                   astra#xhigh
+/pd:triage                                 sol#high
+/pd:plan                                   astra#high
 /pd:plan-review                            opus#high
 /pd:exec                                   sonnet#high
 /pd:validate                               terra#medium

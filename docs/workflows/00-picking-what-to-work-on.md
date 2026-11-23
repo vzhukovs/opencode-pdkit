@@ -44,9 +44,9 @@ pdkit issue list --label "area/terminal" --limit 20
 
 | Step | Session | Default model | Subagents |
 |---|---|---|---|
-| `/pd:triage`, no number | **new** · main checkout | `sol#xhigh` | — |
+| `/pd:triage`, no number | **new** · main checkout | `sol#high` | — |
 | `pdkit issue list …` | **terminal** | — | — |
-| `/pd:triage <n>` for the one picked | **new** · main checkout | `sol#xhigh` | `pd-scout` · `sonnet#high` |
+| `/pd:triage <n>` for the one picked | **new** · main checkout | `sol#high` | `pd-scout` · `sonnet#high` |
 
 The shortlist has nothing the triage of one issue needs: it is re-read from
 GitHub there. Pick in one session, triage in the next.

@@ -95,8 +95,8 @@ verdict.
 
 | Default | Where | What is decided there |
 |---|---|---|
-| `openai/gpt-6-astra#xhigh` | `pd:plan` | how to build it. `pd-plan-critic` reviews the plan before any code, and a person approves it |
-| `openai/gpt-6.1-sol#xhigh` | `pd:triage` | what the issue is and which route it takes. The person agrees the requirements before they are allocated |
+| `openai/gpt-6-astra#high` | `pd:plan` | how to build it. `pd-plan-critic` reviews the plan before any code, and a person approves it |
+| `openai/gpt-6.1-sol#high` | `pd:triage` | what the issue is and which route it takes. The person agrees the requirements before they are allocated |
 | `openai/gpt-6.1-sol#high` | `pd-auditor` | acceptance of the finished diff against the plan. `pdkit audit` settles ownership, receipts and orphans first; the rest is the agent's verdict, and no machine re-checks it |
 | `openai/gpt-6.1-sol#high` | `pd-archaeologist` | what the history says: reverts, regressions, why an earlier attempt failed. Findings, not a verdict |
 | `openai/gpt-6.1-sol#high` | `pd-review-architecture`, `pd-review-tests` | two of the four axes of a review |

@@ -14,6 +14,19 @@ and their links go into the repository they were released from.
 
 ## [Unreleased]
 
+### Changed
+
+- **`/pd:triage` and `/pd:plan` think at `high` by default again**, on the
+  same models, `openai/gpt-6.1-sol` and `openai/gpt-6-astra`: at `xhigh` the
+  two phases used up an account's usage limits too fast to carry an issue
+  through. What they leave to a machine and to people stays as it was:
+  `pdkit plan check` settles the plan's mechanics — exclusive Owns, a command
+  for every Done when, every requirement closed — `pdkit plan probe` runs each
+  Done when on the base, `pd-plan-critic` reviews the rest before a person
+  approves, and the person agrees triage's requirements before they are
+  allocated. To keep either at `xhigh`, name it in the plugin's `models`
+  option (`"pd:plan": "openai/gpt-6-astra#xhigh"`).
+
 ### Fixed
 
 - **After `pdkit reset`, a review's decisions were taken as already in the

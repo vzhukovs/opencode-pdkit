@@ -100,9 +100,9 @@ pdkit issue unblock 18833 --by <new issue>
 | Step | Session | Default model | Subagents |
 |---|---|---|---|
 | `pdkit issue rework …` | **terminal**, or the `/pd:pr-sync` session that read the rejection | — | — |
-| next: `/pd:plan 12345` | **new** · main checkout | `astra#xhigh` | `pd-scout` · `sonnet#high` |
+| next: `/pd:plan 12345` | **new** · main checkout | `astra#high` | `pd-scout` · `sonnet#high` |
 | `pdkit issue draft-blocker`, `pdkit issue block` | **terminal**, or the `/pd:pr-sync` session | — | — |
-| `/pd:triage <new issue>` | **new** · main checkout | `sol#xhigh` | `pd-scout` · `sonnet#high` |
+| `/pd:triage <new issue>` | **new** · main checkout | `sol#high` | `pd-scout` · `sonnet#high` |
 | `pdkit issue unblock`, then `/pd:resume 18833` | **terminal**, then **new** · issue tree | `opus#high` | `pd-conflict-analyst` · `opus#high` |
 | `pdkit checkpoint list`, `pdkit rollback` | **terminal**, or the session of the phase being undone | — | — |
 

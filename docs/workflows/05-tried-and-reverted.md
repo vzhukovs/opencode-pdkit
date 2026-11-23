@@ -49,9 +49,9 @@ pdkit issue history 12775
 
 | Step | Session | Default model | Subagents |
 |---|---|---|---|
-| `/pd:triage 12775` | **new** · main checkout | `sol#xhigh` | `pd-archaeologist` · `sol#high`, `pd-scout` · `sonnet#high` |
+| `/pd:triage 12775` | **new** · main checkout | `sol#high` | `pd-archaeologist` · `sol#high`, `pd-scout` · `sonnet#high` |
 | `pdkit issue history 12775` | **terminal**, or the triage session | — | — |
-| next: `/pd:plan 12775` | **new** · main checkout | `astra#xhigh` | `pd-scout` · `sonnet#high` |
+| next: `/pd:plan 12775` | **new** · main checkout | `astra#high` | `pd-scout` · `sonnet#high` |
 
 ---
 

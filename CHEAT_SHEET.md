@@ -121,8 +121,8 @@ the reporter still has to confirm.
 | `/pd:sync` | "where am I" | — | fork vs upstream, every worktree. Read-only | `flash#low` |
 | `/pd:editor [<n>]` | to work in the issue's tree | its worktree; `editor.path` set | the worktree opened in your IDE. Without a number, the current branch's issue | `flash#none` |
 | `/pd:open home\|issue\|tree [<n>]` | to look at the files | — | `$PDKIT_HOME`, `issues/<n>`, or the worktree in the file manager | `flash#none` |
-| `/pd:triage <n>` | a new issue — or no number, to pick one. Anything typed after the first line is recorded as prior context | — | route, drafted requirements → `triaged` | `sol#xhigh` |
-| `/pd:plan <n>` | the route is standard | `triaged` | scouts, `research.md`, `plan.md`, task files → `planned` | `astra#xhigh` |
+| `/pd:triage <n>` | a new issue — or no number, to pick one. Anything typed after the first line is recorded as prior context | — | route, drafted requirements → `triaged` | `sol#high` |
+| `/pd:plan <n>` | the route is standard | `triaged` | scouts, `research.md`, `plan.md`, task files → `planned` | `astra#high` |
 | `/pd:plan-review <n>` | a plan exists | `planned` | must-change findings; repeat until clean → **you approve** → `plan-approved` | `opus#high` |
 | `/pd:exec <n> [task]` | the plan is approved | `plan-approved` | code, one worker per task, a receipt each → `implemented` | `sonnet#high` |
 | `/pd:validate <n>` | the code is written | `implemented` | evidence from the running app → `validated` | `terra#medium` |

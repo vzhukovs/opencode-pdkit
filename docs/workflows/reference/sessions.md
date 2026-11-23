@@ -70,8 +70,8 @@ defaults, one cycle runs like this:
 ```
 cd <fork> && opencode          ──► the model you chose, until the first command
 
-/pd:triage                                 sol#xhigh
-/pd:plan                                   astra#xhigh
+/pd:triage                                 sol#high
+/pd:plan                                   astra#high
 /pd:plan-review                            opus#high
 /pd:exec                                   sonnet#high
 /pd:validate                               terra#medium
@@ -158,8 +158,8 @@ restart, not a limit.
 | `/pd:doctor` | new · anywhere in the fork | `flash#low` | — | — |
 | `/pd:sync` | new · main checkout | `flash#low` | — | — |
 | `/pd:editor`, `/pd:open` | anywhere | `flash#none` | — | — |
-| `/pd:triage` | new · main checkout | `sol#xhigh` | `pd-scout` · `sonnet#high`, `pd-archaeologist` · `sol#high` on `redo` | 40 |
-| `/pd:plan` | new · main checkout | `astra#xhigh` | `pd-scout` · `sonnet#high` | 60 |
+| `/pd:triage` | new · main checkout | `sol#high` | `pd-scout` · `sonnet#high`, `pd-archaeologist` · `sol#high` on `redo` | 40 |
+| `/pd:plan` | new · main checkout | `astra#high` | `pd-scout` · `sonnet#high` | 60 |
 | `/pd:plan-review` | new · main checkout | `opus#high` | `pd-plan-critic` · `opus#high` | — |
 | `/pd:exec` | new · main checkout or the issue tree; it moves itself into the tree | `sonnet#high` | `pd-implementer` · `sonnet#high`, one per task | 80 per task |
 | `/pd:quickfix` | new · the checkout that will carry the branch | `sonnet#high` | — | — |
