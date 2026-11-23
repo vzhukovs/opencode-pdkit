@@ -18,8 +18,8 @@ as a command a person types, and the model is never offered it.
 | `/pd:sync` | — | fork and worktree status | — | flash#low | — |
 | `/pd:editor [<issue>]` | issue, or the current branch's | the issue's worktree opened in `editor.path` | — | flash#none | — |
 | `/pd:open home\|issue\|tree [<issue>]` | target, issue | `$PDKIT_HOME`, `issues/<n>` or the worktree opened in the file manager | — | flash#none | — |
-| `/pd:triage [<issue>]` | number/URL on the first line, any further lines as prior context; or nothing | with a number: `issue.md` including what came with the command, draft R-set, route, and the scouts' map in `research.md`. Without: a backlog shortlist, and nothing is written | `triaged` / — | sol#high | — |
-| `/pd:plan <issue>` | issue | `research.md`, `plan.md`, open questions | `planned` | astra#high + sonnet scouts | human: approval |
+| `/pd:triage [<issue>]` | number/URL on the first line, any further lines as prior context; or nothing | with a number: `issue.md` including what came with the command, draft R-set, route, and the scouts' map in `research.md`. Without: a backlog shortlist, and nothing is written | `triaged` / — | sol#xhigh | — |
+| `/pd:plan <issue>` | issue | `research.md`, `plan.md`, open questions | `planned` | astra#xhigh + sonnet scouts | human: approval |
 | `/pd:plan-review <issue>` | issue | `plan-review.md` | — | opus#high, fresh | — |
 | `/pd:exec <issue> [T*]` | issue/task | code, commits, `receipts/*` | `implemented` | sonnet#high + sonnet workers | — |
 | `/pd:validate <issue>` | issue | `validation.md` + artefacts | `validated` | terra#medium | — |
