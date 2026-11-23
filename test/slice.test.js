@@ -691,7 +691,9 @@ describe('verify', () => {
     // against a base the build never saw (18835).
     assert.equal(result.verification.base, 'main');
     assert.equal(result.verification.baseCommit, await git(['rev-parse', 'main'], repo));
-    assert.match(result.verification.command, /npm run typecheck && npm run lint:check && npm run test:unit/);
+    // Lint beside the typecheck and the tests, not after them: two parts at the
+    // same time, one receipt.
+    assert.equal(result.verification.command, 'npm run typecheck && npm run test:unit & npm run lint:check');
 
     // The evidence is a receipt in the same format, and it validates — which
     // is what stops the output block being edited into a green one afterwards.

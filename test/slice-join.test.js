@@ -28,11 +28,14 @@
 
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 
 import { approvablePlan } from './helpers/approvable-plan.js';
 import { auditReviewed } from './helpers/audit-review.js';
 import { cleanup, commitAll, git, initRepo, packageMap, seedWorkspace, writeFiles } from './helpers/repo-fixture.js';
+import { issueDir } from '../lib/config.js';
+import { validateReceipt } from '../lib/evidence.js';
 import * as slice from '../lib/slice.js';
 import * as state from '../lib/state.js';
 
@@ -288,6 +291,12 @@ describe('a joined slice, materialized', () => {
     assert.equal(result.checks.length, 1);
     assert.equal(result.checks[0].subject, 'refactor(main): exec takes a theme');
     assert.equal(result.checks[0].evidence, 'verify/S1-c1.md');
+    // Whether the commit builds is the question, and the typecheck answers it;
+    // lint and the tests are the slice's, as a whole.
+    assert.equal(result.checks[0].command, 'npm run typecheck');
+    const evidence = validateReceipt(await readFile(join(issueDir(home, ISSUE), 'verify', 'S1-c1.md'), 'utf8'));
+    assert.equal(evidence.ok, true, evidence.reason);
+    assert.equal(evidence.command, 'npm run typecheck');
 
     const stored = (await slice.read(ISSUE, { home })).slices[0];
     assert.equal(stored.commitChecks.length, 1);

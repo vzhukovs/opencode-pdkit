@@ -48,7 +48,7 @@ import * as preflightRecord from '../lib/preflight/record.js';
 import * as slice from '../lib/slice.js';
 import * as state from '../lib/state.js';
 import { staleCopyright } from '../lib/preflight/checks/maintainer-rules.js';
-import { candidatesFor, offDisk, runScript, scopedScripts, typecheckScripts, unrunnable } from '../lib/preflight/scope.js';
+import { candidatesFor, covers, offDisk, runScript, scopedScripts, typecheckScripts, unrunnable } from '../lib/preflight/scope.js';
 import { buildPackageMap } from '../lib/repo.js';
 
 const execFileAsync = promisify(execFile);
@@ -1696,6 +1696,12 @@ describe('a sliced issue', () => {
   // 600-second tool timeout.
   test('scripts the verification already ran on this very commit are not run again', async () => {
     await gitIn(['checkout', `DESKTOP-${ISSUE}/1-api`], sliced);
+    // As recorded before trees were kept, so the branch is built rather than
+    // taken from the change set's run, and its receipt names this commit.
+    const graphPath = join(slicedHome, 'issues', String(ISSUE), 'slices.json');
+    const recorded = JSON.parse(await readFile(graphPath, 'utf8'));
+    for (const entry of recorded.slices) if (entry.verification) delete entry.verification.tree;
+    await writeFile(graphPath, JSON.stringify(recorded, null, 2));
     await slice.verifyAll({ issue: ISSUE, repoRoot: sliced, home: slicedHome, config: config(), packageMap: packageMap(sliced) });
     const receipt = await readFile(join(slicedHome, 'issues', String(ISSUE), 'verify', 'S1.md'), 'utf8');
     const head = (await gitIn(['rev-parse', 'HEAD'], sliced)).trim();
@@ -1717,6 +1723,54 @@ describe('a sliced issue', () => {
     } finally {
       await writeFile(path, original);
     }
+  });
+
+  // A reworded message or a squash makes a new commit of the same tree, and a
+  // branch materialized from the verified change set is that build's tree to
+  // the byte. The receipt of either names another commit: the old one, or the
+  // base the change set was built on. Matched by commit only, a slice's first
+  // preflight ran again what its verification had just run.
+  test('a green verification of this very tree counts too, and says it was the tree', async () => {
+    await gitIn(['checkout', `DESKTOP-${ISSUE}/1-api`], sliced);
+    const was = (await gitIn(['rev-parse', 'HEAD'], sliced)).trim();
+    const graphPath = join(slicedHome, 'issues', String(ISSUE), 'slices.json');
+    const original = await readFile(graphPath, 'utf8');
+    await gitIn(['commit', '--amend', '-q', '-m', 'feat(extension-api): add RunOptions, reworded'], sliced);
+
+    try {
+      const head = (await gitIn(['rev-parse', 'HEAD'], sliced)).trim();
+      const tree = (await gitIn(['rev-parse', 'HEAD^{tree}'], sliced)).trim();
+      assert.notEqual(head, was);
+      assert.equal(JSON.parse(original).slices[0].verification.tree, tree, 'the fixture has to hold a verification of this tree');
+
+      const report = await run(await on(), await loadChecks(['tests', 'lint', 'typecheck']));
+      for (const result of report.results) {
+        assert.equal(result.status, 'pass', `${result.id}: ${result.summary}`);
+        assert.match(result.summary, new RegExp(`passed in slice verify on the same tree \\(${tree.slice(0, 11)}\\)`), result.id);
+        assert.equal(result.measured.head, null, `${result.id}: the receipt's commit is not this tree's`);
+      }
+
+      // Green is the condition: a record of this tree that is not green answers nothing.
+      const red = JSON.parse(original);
+      red.slices[0].verification.ok = false;
+      await writeFile(graphPath, JSON.stringify(red, null, 2));
+      const again = await run(await on(), await loadChecks(['lint']));
+      assert.doesNotMatch(again.results[0].summary, /passed in slice verify/);
+    } finally {
+      await writeFile(graphPath, original);
+      await gitIn(['reset', '-q', '--hard', was], sliced);
+    }
+  });
+
+  test('a part set beside another is a step, as a chained one is', () => {
+    const run_ = { command: 'npm run typecheck && npm run test:unit & npm run lint:check' };
+
+    assert.equal(covers(run_, ['typecheck']), true);
+    assert.equal(covers(run_, ['test:unit']), true);
+    assert.equal(covers(run_, ['lint:check']), true);
+    assert.equal(covers(run_, ['test:unit', 'lint:check']), true);
+    assert.equal(covers(run_, ['test:main']), false);
+    assert.equal(covers({ command: 'npm run typecheck && npm run lint:check && npm run test:unit' }, ['lint:check']), true);
   });
 
   // The file checks follow the slice's branch wherever the tree stands; the
