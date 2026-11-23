@@ -14,6 +14,24 @@ and their links go into the repository they were released from.
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-11-23
+
+### Upgrading
+
+```bash
+opencode plugin update
+```
+
+Then, in the fork, `pdkit doctor --gate-selftest`. Nothing to change in your
+config.
+
+- An issue at `planned`, reset once before, whose review decisions
+  `pdkit next` sent to another `/pd:plan-review`: `pdkit next <n>` names
+  `/pd:plan <n>` now. Run that, with nothing after the number; the revision
+  reads the decisions from `plan-review.md`.
+- To keep `/pd:triage` or `/pd:plan` at `xhigh`, name it in the plugin's
+  `models` option, as below.
+
 ### Changed
 
 - **`/pd:triage` and `/pd:plan` think at `high` by default again**, on the
@@ -3644,7 +3662,8 @@ found by a unit test.
   gate strips wrapper programs because hooks on the Bash tool are global, not
   because any particular tool exists.
 
-[Unreleased]: https://github.com/vzhukovs/opencode-pdkit/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/vzhukovs/opencode-pdkit/compare/v0.17.1...HEAD
+[0.17.1]: https://github.com/vzhukovs/opencode-pdkit/compare/v0.17.0...v0.17.1
 [0.17.0]: https://github.com/vzhukovs/opencode-pdkit/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/vzhukovs/opencode-pdkit/releases/tag/v0.16.0
 [0.15.0]: https://github.com/vzhukovs/podman-desktop-kit/compare/v0.14.1...v0.15.0
