@@ -100,6 +100,12 @@
 {{bodyMustDisclose}}
 
 ## Open decisions
-<!-- [NEEDS DECISION] here blocks approval. An unasked question does not
+<!-- What was decided, and what is still waiting. Each choice put to the
+     person, with the answer; each open question of the triage record, with
+     how the plan settles it. `pdkit self-review target` quotes this section
+     to the review axes after the code is written, so a question answered here
+     is not asked of the person again.
+
+     [NEEDS DECISION] here blocks approval. An unasked question does not
      disappear; it becomes an assumption nobody agreed to. -->
 {{decisions}}

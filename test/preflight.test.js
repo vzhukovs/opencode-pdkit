@@ -274,6 +274,37 @@ describe('the runner', () => {
     assert.match(text, /1 blocking failure\./);
     assert.match(text, /→ fix them/);
   });
+
+  // The first pass is where a body is written from: a check that waits for the
+  // body says what it will hold the body to, and that list is what step 4 of
+  // /pd:pr writes from — the lines a plan decided the body must disclose, the
+  // screenshots the validation took. Printed for those, and only for those: a
+  // failing check's output is a run's, and --json carries it.
+  test('format lists what a check waiting for the body will hold it to, and only that', () => {
+    const text = format({
+      ok: true,
+      results: [
+        {
+          id: 'ui-evidence',
+          status: 'skip',
+          blocking: true,
+          summary: `1 component(s) changed, 1 screenshot(s) in validation — ${BODY_NOT_DRAFTED}`,
+          remedy: 'show the change',
+          output: 'packages/renderer/src/lib/Card.svelte\nV1 the card (R1) — /home/issues/1/validation/artefacts/V1.png',
+          waitingFor: 'body',
+        },
+        { id: 'ci-blind-spots', status: 'skip', blocking: true, summary: BODY_NOT_DRAFTED, output: 'packaging\n  build/x\n\nbuild configuration\n  vite.config.ts', waitingFor: 'body' },
+        { id: 'tests', status: 'pass', blocking: true, summary: 'test:main', output: 'the whole run, which --json has' },
+      ],
+    });
+
+    assert.match(
+      text,
+      /^ {2}· ui-evidence {12}1 component\(s\) changed, 1 screenshot\(s\) in validation — the PR body is not drafted yet\n {6}packages\/renderer\/src\/lib\/Card\.svelte\n {6}V1 the card \(R1\) — \/home\/issues\/1\/validation\/artefacts\/V1\.png\n {6}→ show the change$/m,
+    );
+    assert.match(text, /^ {6}packaging\n {8}build\/x\n {6}build configuration\n {8}vite\.config\.ts$/m, 'blank lines dropped, indentation kept');
+    assert.doesNotMatch(text, /the whole run/);
+  });
 });
 
 describe('script scoping', () => {
@@ -983,6 +1014,24 @@ describe('the artefact checks', () => {
 
       assert.equal(result.status, 'skip');
       assert.match(result.remedy, /has to read it/);
+    });
+
+    // A screenshot goes in as the link GitHub writes for it, and a link is
+    // not something a reviewer reads: the budget is for the words around it.
+    test('the markup of an image or a video is not counted, and its caption is', async () => {
+      const shown = (ui) => sized().replace('n/a — no UI change.', ui);
+      const images = [
+        'Before, and after: the platform is chosen.',
+        '![before](https://github.com/user-attachments/assets/00000000-0000-4000-8000-000000000001)',
+        '<img width="1109" height="840" alt="after" src="https://github.com/user-attachments/assets/00000000-0000-4000-8000-000000000002" />',
+        'https://github.com/user-attachments/assets/00000000-0000-4000-8000-000000000003',
+        '<video src="https://github.com/user-attachments/assets/00000000-0000-4000-8000-000000000004"></video>',
+      ].join('\n\n');
+
+      const result = await only('pr-body-size', { prBody: shown(images) });
+      assert.equal(result.status, 'pass', result.output);
+      const counted = (await only('pr-body-size', { prBody: shown(images.replace('the platform is chosen.', 'x'.repeat(240))) })).output;
+      assert.match(counted, /! UI evidence {2}2\d\d\/200/, 'the caption still counts');
     });
   });
 
@@ -2213,5 +2262,177 @@ describe('a tree preflight has already tested', () => {
     const again = await pass(['working-tree', 'tests']);
     assert.doesNotMatch(again.result('tests').summary, /not run again/);
     assert.equal((await ran()).length, before + 1);
+  });
+});
+
+// What the plan decided a body has to say, and what a pull request changed on
+// screen: the two checks that hold a body to them. The first pass lists what
+// the body is to carry — the plan's lines for this pull request, the
+// components it changes and the screenshots the validation took — and the
+// second holds the body to it, as far as a grep can see. Whether the notes say
+// each line is the self-review's to judge: the plan and the body say the same
+// thing in different words.
+describe('body-must-disclose and ui-evidence', () => {
+  const ISSUE = 5001;
+  const COMPONENT = 'packages/renderer/src/lib/image/PullImage.svelte';
+  const LINES = [
+    '- S1: the pull spec stops asserting a platform it never chose',
+    '- S2: a default pull now sends linux/<desktop arch> instead of leaving the platform to the engine',
+  ];
+
+  let dHome;
+
+  /**
+   * @param {string} id
+   * @param {object} overrides
+   */
+  async function only(id, overrides = {}) {
+    const checks = await loadChecks([id]);
+    const prepared = await prepare({ issue: ISSUE, repoRoot: repo, home: dHome });
+    return (await run({ ...prepared, route: 'standard', ...overrides }, checks)).results[0];
+  }
+
+  /** A body with the two sections these checks read. */
+  const body = ({ ui = 'n/a — no UI change.', notes = '' } = {}) =>
+    `### What does this PR do?\n\nIt chooses the platform.\n\n### Screenshot / video of UI\n\n${ui}\n\n` +
+    `### What issues does this PR fix or reference?\n\nCloses #5001\n\n### How to test this PR?\n\n1. Pull an image → it pulls\n\n` +
+    `**Notes for reviewers**\n${notes}\n\n- [ ] Tests are covering the bug fix or the new feature\n\n` +
+    '<sub>Prepared with podman-desktop-kit (OpenCode Plugin)</sub>\n';
+
+  /** The plan, with these lines under Body must disclose; `predates` renames the four answer sections. */
+  async function writePlan(lines, { predates = false } = {}) {
+    const path = await approvablePlan(ISSUE, { home: dHome, slices: 2 });
+    let text = (await readFile(path, 'utf8')).replace(/(^## Body must disclose\n<!--[\s\S]*?-->\n)none$/m, `$1${lines.join('\n') || 'none'}`);
+    if (predates) text = text.replace(/^## (Reuse|Modes|Gates|Body must disclose)[ \t]*$/gm, '## Earlier $1');
+    await writeFile(path, text);
+  }
+
+  before(async () => {
+    dHome = await mkdtemp(join(tmpdir(), 'pdkit-preflight-disclose-'));
+  });
+
+  beforeEach(async () => {
+    await rm(join(dHome, 'issues'), { recursive: true, force: true });
+  });
+
+  after(async () => {
+    await rm(dHome, { recursive: true, force: true });
+  });
+
+  describe('body-must-disclose', () => {
+    test('skips the quickfix route, an issue with no plan, and a plan written before the section', async () => {
+      assert.match((await only('body-must-disclose', { route: 'quickfix' })).summary, /^the quickfix route has no plan$/);
+      assert.match((await only('body-must-disclose')).summary, /^no plan\.md: nothing the plan decided for the body$/);
+
+      await writePlan(LINES, { predates: true });
+      const old = await only('body-must-disclose', { slice: 2, prBody: body() });
+      assert.equal(old.status, 'skip');
+      assert.equal(old.summary, 'the plan predates ## Body must disclose');
+    });
+
+    test('passes without the body when the plan names nothing for this pull request', async () => {
+      await writePlan([LINES[0]]);
+      const result = await only('body-must-disclose', { slice: 2, prBody: null });
+
+      assert.equal(result.status, 'pass');
+      assert.equal(result.summary, 'the plan names nothing for this pull request to disclose; 1 line(s) name other slices');
+    });
+
+    test('lists, before the body, each line this pull request has to say', async () => {
+      await writePlan(LINES);
+      const result = await only('body-must-disclose', { slice: 2, prBody: null });
+
+      assert.equal(result.status, 'skip');
+      assert.equal(result.waitingFor, 'body');
+      assert.equal(result.summary, `1 line(s) of the plan's Body must disclose name this pull request — ${BODY_NOT_DRAFTED}`);
+      assert.equal(result.output, '- S2: a default pull now sends linux/<desktop arch> instead of leaving the platform to the engine');
+      assert.match(result.remedy, /^say each in Notes for reviewers, in a sentence of the reviewer's words, then run preflight again$/);
+    });
+
+    test('fails a body whose Notes for reviewers is empty or n/a, and passes one that says something', async () => {
+      await writePlan(LINES);
+
+      const empty = await only('body-must-disclose', { slice: 2, prBody: body() });
+      assert.equal(empty.status, 'fail');
+      assert.equal(empty.blocking, true);
+      assert.equal(empty.summary, 'the plan asks this body to disclose 1 thing(s), and Notes for reviewers is empty');
+      assert.match(empty.remedy, /what changes without being asked for, what is duplicated on purpose, what the person decided/);
+
+      const na = await only('body-must-disclose', { slice: 2, prBody: body({ notes: 'n/a — nothing CI cannot judge.' }) });
+      assert.equal(na.status, 'fail');
+      assert.equal(na.summary, 'the plan asks this body to disclose 1 thing(s), and Notes for reviewers says n/a');
+
+      const said = await only('body-must-disclose', { slice: 2, prBody: body({ notes: 'A default pull now sends the platform of this machine, on purpose.' }) });
+      assert.equal(said.status, 'pass');
+      assert.equal(said.summary, "1 line(s) of the plan's Body must disclose; Notes for reviewers is written — whether it says each is the self-review's to judge");
+    });
+
+    test('a single pull request owes every line', async () => {
+      await writePlan(LINES);
+      const result = await only('body-must-disclose', { slice: undefined, prBody: null });
+      assert.match(result.summary, /^2 line\(s\) of the plan's Body must disclose name this pull request/);
+    });
+  });
+
+  describe('ui-evidence', () => {
+    /** A validation with a screenshot of V1 and a captured run of V2. */
+    async function validated() {
+      const shot = join(dHome, 'platform.png');
+      await writeFile(shot, 'png bytes');
+      await validation.attach({ issue: ISSUE, home: dHome, title: 'Host default and single platform selection', requirements: ['R1', 'R3'], evidence: shot, observed: 'arm64 is checked' });
+      await validation.attach({ issue: ISSUE, home: dHome, title: 'the spec passes', run: await capture({ command: emits('ok\n') }) });
+    }
+
+    test('nothing to show when no component changed, body or not', async () => {
+      const result = await only('ui-evidence', { changedFiles: ['packages/main/src/x.ts'], prBody: null });
+      assert.equal(result.status, 'pass');
+      assert.equal(result.summary, 'nothing to show: no component changed');
+    });
+
+    test('lists, before the body, the components and the screenshots the validation took', async () => {
+      await validated();
+      const result = await only('ui-evidence', { changedFiles: [COMPONENT, 'packages/renderer/src/lib/image/PullImage.spec.ts'], prBody: null });
+
+      assert.equal(result.status, 'skip');
+      assert.equal(result.waitingFor, 'body');
+      assert.equal(result.summary, `1 component(s) changed, 1 screenshot(s) in validation — ${BODY_NOT_DRAFTED}`);
+      assert.equal(
+        result.output,
+        [COMPONENT, `V1 Host default and single platform selection (R1, R3) — ${join(dHome, 'issues', String(ISSUE), 'validation', 'artefacts', 'V1.png')}`].join('\n'),
+      );
+      assert.match(result.remedy, /drags each screenshot into a comment box on GitHub/);
+
+      const quick = await only('ui-evidence', { route: 'quickfix', changedFiles: [COMPONENT], prBody: null });
+      assert.equal(quick.summary, `1 component(s) changed — ${BODY_NOT_DRAFTED}`, 'the quickfix route validates nothing');
+    });
+
+    test('passes a body that shows an image or a video, and fails one that promises it for later', async () => {
+      const shown = await only('ui-evidence', {
+        changedFiles: [COMPONENT],
+        prBody: body({ ui: 'After: arm64 checked by default.\n\n![after](https://github.com/user-attachments/assets/00000000-0000-4000-8000-000000000002)' }),
+      });
+      assert.equal(shown.status, 'pass');
+      assert.equal(shown.summary, '1 component(s) changed; Screenshot / video of UI shows 1 image(s) or video(s)');
+
+      const later = await only('ui-evidence', { changedFiles: [COMPONENT], prBody: body({ ui: 'Images are in the description.' }) });
+      assert.equal(later.status, 'fail');
+      assert.equal(later.summary, '1 component(s) changed, and Screenshot / video of UI shows nothing and says no n/a');
+      assert.match(later.remedy, /a screenshot promised for later is one the reviewer does not have/);
+    });
+
+    test('fails a placeholder left in the body, even beside an image', async () => {
+      const result = await only('ui-evidence', {
+        changedFiles: [COMPONENT],
+        prBody: body({ ui: '![before](https://github.com/user-attachments/assets/00000000-0000-4000-8000-000000000005)\n**[SCREENSHOT V3 — the default: replace this line by dragging in V3.png]**' }),
+      });
+      assert.equal(result.status, 'fail');
+      assert.equal(result.summary, 'a screenshot placeholder is left in Screenshot / video of UI, and would be published as written');
+    });
+
+    test('warns on n/a when a component changed: whether nothing visible did is the review\'s', async () => {
+      const result = await only('ui-evidence', { changedFiles: [COMPONENT], prBody: body({ ui: 'n/a, no visible change: only the call underneath moved.' }) });
+      assert.equal(result.status, 'warn');
+      assert.equal(result.summary, '1 component(s) changed, and Screenshot / video of UI says n/a — the self-review judges whether nothing visible changed');
+    });
   });
 });

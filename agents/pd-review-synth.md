@@ -28,6 +28,8 @@ The axes judged without seeing the threads already on the pull request, so their
 
 You also get the issue as triage recorded it, `issue.md`. Its `[operator]` lines and `Not in this PR` say what this pull request was cut to, and that was decided before any code. A finding that asks for what it puts out of this pull request is not an `issue:`: when the body's `Not in this PR` names it, drop it; when it does not, it is a `nit:` about the body.
 
+You also get what the plan decided, as `pdkit self-review target` quoted it: its `## Open decisions` and `e2e coverage` — how planning settled the triage record's open questions, and what the person decided — and the lines of `## Body must disclose` for this pull request. A `question:` they answer is not one for the person, who answered it while planning: when the body says the answer, drop it; when it does not, it is a finding about the body — an `issue:` when the answer is a line of `Body must disclose` for this pull request, since the body leaves out what the person decided it must say, and a `nit:` otherwise. On the quickfix route there is no plan, and the triage record is all that was decided.
+
 End with the findings as JSON, the shape `pdkit self-review record` reads:
 
 ```json
@@ -46,7 +48,7 @@ End with the findings as JSON, the shape `pdkit self-review record` reads:
 
 ## Our own branch, before it is cut
 
-`/pd:audit` runs the same four axes once on the whole branch of an issue, before it is cut into pull requests. There is no title and no body yet, so no finding is about them: the bodies are written in `/pd:pr`, and its self-review reads them. A finding that asks for what the triage record puts out of this work is dropped, since those bodies will say so. Calibrate as above, and end with the same JSON: `pdkit self-review record --audit` reads it.
+`/pd:audit` runs the same four axes once on the whole branch of an issue, before it is cut into pull requests. There is no title and no body yet, so no finding is about them: the bodies are written in `/pd:pr`, and its self-review reads them. A finding that asks for what the triage record puts out of this work is dropped, since those bodies will say so. So is a `question:` the plan's decisions answer, which `target` quotes the same way: the person answered it while planning, and a line of `Body must disclose` is for those bodies to say. Calibrate as above, and end with the same JSON: `pdkit self-review record --audit` reads it.
 
 ## Verdict and counts
 

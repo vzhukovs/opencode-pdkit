@@ -28,18 +28,21 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import { writeReceipt } from '../lib/evidence.js';
 import { read as readJournal } from '../lib/journal.js';
+import { render } from '../lib/render.js';
 import { AUDIT_EVENTS, EVENTS } from '../lib/self-review.js';
-import { adopt, read as readState, setOwns, transition } from '../lib/state.js';
+import * as slice from '../lib/slice.js';
+import { adopt, allocateRequirement, freezeRequirements, read as readState, setOwns, transition } from '../lib/state.js';
 import { approvablePlan } from './helpers/approvable-plan.js';
-import { cleanup, commitAll, git, initRepo, writeFiles, writeTask } from './helpers/repo-fixture.js';
+import { auditReviewed } from './helpers/audit-review.js';
+import { cleanup, commitAll, git, initRepo, packageMap, seedWorkspace, writeFiles, writeTask } from './helpers/repo-fixture.js';
 
 const exec = promisify(execFile);
 const BIN = join(dirname(dirname(fileURLToPath(import.meta.url))), 'bin', 'pdkit');
@@ -339,6 +342,27 @@ describe('pdkit self-review --audit', () => {
     }
   });
 
+  test('quotes what the plan decided, and every line of Body must disclose for the bodies still to be written', async () => {
+    const result = await inBranch('self-review', 'target', '--issue', String(AUDITED), '--audit');
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /^decided: ## Open decisions and e2e coverage, as the plan wrote them:\n {2}e2e coverage: no — a fixture$/m);
+    assert.match(result.stdout, /^disclose: none — the plan's ## Body must disclose names nothing$/m);
+
+    const plan = join(home, 'issues', String(AUDITED), 'plan.md');
+    const original = await readFile(plan, 'utf8');
+    await writeFile(plan, original.replace(/(^## Body must disclose\n<!--[\s\S]*?-->\n)none$/m, '$1- S1: the fixture behavior changes\n- S2: a duplication kept on purpose'));
+    try {
+      const all = await inBranch('self-review', 'target', '--issue', String(AUDITED), '--audit');
+      assert.equal(all.code, 0, all.stderr);
+      assert.match(
+        all.stdout,
+        /^disclose: 2 line\(s\) of ## Body must disclose, for the bodies \/pd:pr writes:\n {2}- S1: the fixture behavior changes\n {2}- S2: a duplication kept on purpose$/m,
+      );
+    } finally {
+      await writeFile(plan, original);
+    }
+  });
+
   test('records the branch with no body, and names the task that owns each open finding', async () => {
     const findings = join(home, 'audit-findings.json');
     await writeFile(
@@ -438,5 +462,382 @@ describe('pdkit self-review --audit', () => {
     const fixed = await inBranch('self-review', 'target', '--issue', String(AUDITED), '--audit');
     assert.equal(fixed.code, 0, fixed.stderr);
     assert.match(fixed.stdout, /^grep: {3}none of the greppable maintainer rules hit$/m);
+  });
+});
+
+// What the plan decided, for the self-review of a pull request: the axes of a
+// sandbox issue's second slice asked what its plan had settled, and the person
+// answered on the pull request what they had decided while planning. `target`
+// quotes it now, beside the triage record — the Open decisions and the e2e
+// coverage, the lines of Body must disclose this pull request has to say, and
+// the tests its tasks owe — and says so when a plan predates the sections, or
+// when there is no plan at all.
+
+const DECISIONS = 'Asked and answered:\n- the fallback for an unknown host: linux/amd64, as Build does (operator)';
+const E2E = 'no — the operator chose unit tests alone';
+const DISCLOSE = [
+  '- S1: the pull spec stops asserting a platform it never chose',
+  '- S2: a default pull now sends linux/<desktop arch> instead of leaving the platform to the engine',
+  '- the Build page is untouched',
+].join('\n');
+
+/**
+ * Write a two-task plan of the present shape with what it decided, and the
+ * task files of its tasks, each owning one file and listing one test.
+ *
+ * @param {number} issue
+ * @param {{home: string, files: [string, string], slices?: number}} options
+ * @returns {Promise<string>} the path of the plan
+ */
+async function decidedPlan(issue, { home: where, files: [first, second], slices = 2 }) {
+  const gated = (file) => `\`pnpm typecheck && pnpm exec eslint ${file} && pnpm test:main\``;
+  const text = await render(
+    'plan',
+    {
+      issue,
+      requirementIds: 'R1, R2',
+      e2eCoverage: E2E,
+      sliceCount: slices,
+      context: `- \`${first}:1\` — the first file`,
+      reuse: 'searched: `RunOptions` in packages -> 0',
+      modes: 'none: a fixture',
+      interfaces: 'none',
+      tasks: [
+        '### T1: the first file',
+        '- Satisfies: R1',
+        `- Owns: ${first}`,
+        `- Done when: ${gated(first)}`,
+        '- Intent: the first change (R1)',
+        '',
+        '### T2: the second file',
+        '- Satisfies: R2',
+        `- Owns: ${second}`,
+        `- Done when: ${gated(second)}`,
+        '- Intent: the second change (R2)',
+      ].join('\n'),
+      gates: '- T1, T2: typecheck, eslint on its file, test:main',
+      spdx: 'no new files',
+      schemas: 'no',
+      extensionApi: 'no',
+      scope: 'main',
+      sliceHypothesis: 'S1, then S2.',
+      bodyMustDisclose: DISCLOSE,
+      decisions: DECISIONS,
+    },
+    { home: where },
+  );
+  const path = join(where, 'issues', String(issue), 'plan.md');
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, text);
+  await writeTask({ home: where, issue, id: 'T1', satisfies: ['R1'], owns: [first] });
+  await writeTask({ home: where, issue, id: 'T2', satisfies: ['R2'], owns: [second] });
+  await setOwns(issue, 'T1', [first], { home: where });
+  await setOwns(issue, 'T2', [second], { home: where });
+  return path;
+}
+
+/** The lines `target` printed from the one that starts with `name:` to the next label. */
+function block(stdout, name) {
+  const lines = stdout.split('\n');
+  const start = lines.findIndex((line) => line.startsWith(`${name}:`));
+  if (start === -1) return null;
+  const end = lines.findIndex((line, at) => at > start && /^[a-z]+:/.test(line));
+  return lines.slice(start, end === -1 ? undefined : end).join('\n');
+}
+
+describe('pdkit self-review target and what the plan decided', () => {
+  const DECIDED = 4250;
+  const FIRST = 'packages/main/src/options.ts';
+  const SECOND = 'packages/main/src/version.ts';
+  let planTree;
+  let planPath;
+
+  /** @param {...string} args */
+  const inPlan = (...args) => pdkitIn(planTree, ...args);
+
+  before(async () => {
+    planTree = await mkdtemp(join(tmpdir(), 'pdkit-self-review-plan-tree-'));
+    await rm(planTree, { recursive: true });
+    await git(['worktree', 'add', '-b', `DESKTOP-${DECIDED}/platform`, planTree], repo);
+    await writeFiles(planTree, { [SECOND]: 'export const VERSION = 2;\n' });
+    await commitAll(planTree, 'feat(main): name the version');
+
+    for (let i = 0; i < 2; i += 1) assert.ok((await allocateRequirement(DECIDED, { home })).ok);
+    assert.ok((await freezeRequirements(DECIDED, { home })).ok);
+    planPath = await decidedPlan(DECIDED, { home, files: [FIRST, SECOND] });
+  });
+
+  after(async () => {
+    await git(['worktree', 'remove', '--force', planTree], repo).catch(() => {});
+    await cleanup(planTree);
+  });
+
+  test('quotes what the plan decided and every line to disclose, and counts the tests of the tasks owning a file of the pull request', async () => {
+    const result = await inPlan('self-review', 'target', '--issue', String(DECIDED));
+    assert.equal(result.code, 0, result.stderr);
+
+    assert.equal(
+      block(result.stdout, 'plan'),
+      `plan:   ${planPath} — requirements R1, R2; what it decided is quoted below, and a question it answers is not the person's to answer again`,
+    );
+    assert.equal(
+      block(result.stdout, 'decided'),
+      [
+        'decided: ## Open decisions and e2e coverage, as the plan wrote them:',
+        '  Asked and answered:',
+        '  - the fallback for an unknown host: linux/amd64, as Build does (operator)',
+        `  e2e coverage: ${E2E}`,
+      ].join('\n'),
+    );
+    assert.equal(
+      block(result.stdout, 'disclose'),
+      [
+        'disclose: 3 line(s) of ## Body must disclose for this pull request — Notes for reviewers says each:',
+        '  - S1: the pull spec stops asserting a platform it never chose',
+        '  - S2: a default pull now sends linux/<desktop arch> instead of leaving the platform to the engine',
+        '  - the Build page is untouched',
+      ].join('\n'),
+    );
+    assert.equal(
+      block(result.stdout, 'tests'),
+      `tests:  T2 1 case(s) — ## Tests of the task files beside ${planPath}; a row is a test this pull request owes`,
+    );
+
+    const order = ['triage', 'plan', 'decided', 'disclose', 'tests', 'grep', 'round'].map((name) => result.stdout.split('\n').findIndex((line) => line.startsWith(`${name}:`)));
+    assert.deepEqual([...order].sort((a, b) => a - b), order, 'beside the triage record, before the grep and the round');
+
+    const json = JSON.parse((await inPlan('self-review', 'target', '--issue', String(DECIDED), '--json')).stdout);
+    assert.equal(json.plan, planPath);
+    assert.deepEqual(json.requirements, { plan: ['R1', 'R2'], pullRequest: null });
+    assert.deepEqual(json.decided, { openDecisions: DECISIONS, e2eCoverage: E2E });
+    assert.equal(json.disclose.predates, false);
+    assert.equal(json.disclose.lines.length, 3);
+    assert.deepEqual(json.tests.tasks.map((task) => [task.id, task.cases]), [['T2', 1]]);
+  });
+
+  test('a plan written before Body must disclose and ## Tests still says what it decided, and says it predates the rest', async () => {
+    const original = await readFile(planPath, 'utf8');
+    await writeFile(planPath, original.replace(/^## (Reuse|Modes|Gates|Body must disclose)[ \t]*$/gm, '## Earlier $1'));
+    try {
+      const result = await inPlan('self-review', 'target', '--issue', String(DECIDED));
+      assert.equal(result.code, 0, result.stderr);
+      assert.match(result.stdout, /^decided: ## Open decisions and e2e coverage, as the plan wrote them:$/m);
+      assert.match(result.stdout, /^ {2}- the fallback for an unknown host: linux\/amd64, as Build does \(operator\)$/m);
+      assert.match(result.stdout, /^disclose: none listed — the plan predates ## Body must disclose$/m);
+      assert.match(result.stdout, /^tests: {2}none listed — the plan predates ## Tests; the tests axis judges by section 2 alone$/m);
+    } finally {
+      await writeFile(planPath, original);
+    }
+  });
+
+  test('a plan that decided nothing for a body says so', async () => {
+    const original = await readFile(planPath, 'utf8');
+    await writeFile(planPath, original.replace(DISCLOSE, 'none').replace(DECISIONS, 'none').replace(`- e2e coverage: ${E2E}`, '- e2e coverage:'));
+    try {
+      const result = await inPlan('self-review', 'target', '--issue', String(DECIDED));
+      assert.equal(result.code, 0, result.stderr);
+      assert.match(result.stdout, /^decided: none written in ## Open decisions$/m);
+      assert.match(result.stdout, /^disclose: none — the plan's ## Body must disclose names nothing$/m);
+    } finally {
+      await writeFile(planPath, original);
+    }
+  });
+
+  test('with no plan, the triage record is all that was decided', async () => {
+    const aside = `${planPath}.aside`;
+    await rename(planPath, aside);
+    try {
+      const result = await inPlan('self-review', 'target', '--issue', String(DECIDED));
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(block(result.stdout, 'plan'), `plan:   none (${planPath}) — the axes have the triage record alone for what was decided`);
+      assert.equal(block(result.stdout, 'decided'), null);
+      assert.equal(block(result.stdout, 'disclose'), null);
+      assert.match(result.stdout, /^tests: {2}none listed — there is no plan; the tests axis judges by section 2 alone$/m);
+
+      const json = JSON.parse((await inPlan('self-review', 'target', '--issue', String(DECIDED), '--json')).stdout);
+      assert.equal(json.plan, null);
+      assert.equal(json.decided, null);
+      assert.equal(json.disclose, null);
+    } finally {
+      await rename(aside, planPath);
+    }
+  });
+});
+
+describe('pdkit self-review target on the quickfix route', () => {
+  const QUICK = 4251;
+  let quickTree;
+  let issueMd;
+
+  /** @param {...string} args */
+  const inQuick = (...args) => pdkitIn(quickTree, ...args);
+
+  before(async () => {
+    quickTree = await mkdtemp(join(tmpdir(), 'pdkit-self-review-quick-tree-'));
+    await rm(quickTree, { recursive: true });
+    await git(['worktree', 'add', '-b', `DESKTOP-${QUICK}/fix`, quickTree], repo);
+    await writeFiles(quickTree, { 'fix.ts': 'export const fixed = true;\n' });
+    await commitAll(quickTree, 'fix(main): the quick thing');
+    assert.ok((await adopt(QUICK, { home, state: 'quickfix', route: 'quickfix', reason: 'a fixture' })).ok);
+    issueMd = join(home, 'issues', String(QUICK), 'issue.md');
+  });
+
+  after(async () => {
+    await git(['worktree', 'remove', '--force', quickTree], repo).catch(() => {});
+    await cleanup(quickTree);
+  });
+
+  test('has no plan, and counts the tests issue.md lists, or says it lists none', async () => {
+    await writeFile(issueMd, '# ISSUE 4251: a fix\n\n## Verdict\nquickfix\n');
+    const none = await inQuick('self-review', 'target', '--issue', String(QUICK));
+    assert.equal(none.code, 0, none.stderr);
+    assert.equal(block(none.stdout, 'plan'), 'plan:   none — the quickfix route has no plan: the triage record is what was decided');
+    assert.equal(block(none.stdout, 'decided'), null);
+    assert.equal(block(none.stdout, 'disclose'), null);
+    assert.equal(block(none.stdout, 'tests'), `tests:  none listed — ${issueMd} has no ## Tests; the tests axis judges by section 2 alone`);
+
+    await writeFile(
+      issueMd,
+      '# ISSUE 4251: a fix\n\n## Verdict\nquickfix\n\n## Tests\n| Case | When | Asserts | Fails without the fix because |\n|---|---|---|---|\n| a | b | c | d |\n| e | f | g | h |\n',
+    );
+    const listed = await inQuick('self-review', 'target', '--issue', String(QUICK));
+    assert.equal(listed.code, 0, listed.stderr);
+    assert.equal(block(listed.stdout, 'tests'), `tests:  2 case(s) — ## Tests of ${issueMd}; a row is a test this pull request owes`);
+
+    const json = JSON.parse((await inQuick('self-review', 'target', '--issue', String(QUICK), '--json')).stdout);
+    assert.equal(json.plan, null);
+    assert.equal(json.decided, null);
+    assert.equal(json.disclose, null);
+    assert.deepEqual(json.tests, { issue: issueMd, listed: true, cases: 2 });
+  });
+});
+
+// A slice: the lines of Body must disclose that name it, or name none, and the
+// tests of the tasks owning its files. The graph here departs from the plan's
+// hypothesis of three, so a slice a line names is the plan's count, and the
+// line says so.
+describe('pdkit self-review target on a slice', () => {
+  const SLICED = 4252;
+  const API = 'packages/extension-api/src/api.ts';
+  const EXEC = 'packages/main/src/exec.ts';
+  let sliced;
+  let slicedHome;
+  let slicedTrees;
+  let slicedPlan;
+
+  const config = () => ({
+    repo: { base_branch: 'main', package_manager: 'npm' },
+    branches: { sliced: 'DESKTOP-{issue}/{index}-{slug}' },
+    slicing: { layer_order: ['extension-api', 'main', 'ui', 'tests'], verify: { install: 'never' } },
+    worktrees: { root: slicedTrees, copy_files: [] },
+  });
+
+  /** @param {...string} args */
+  async function inSliced(...args) {
+    try {
+      const { stdout, stderr } = await exec(process.execPath, [BIN, ...args], { cwd: sliced, env: { ...process.env, PDKIT_HOME: slicedHome }, encoding: 'utf8' });
+      return { code: 0, stdout, stderr };
+    } catch (error) {
+      return { code: error.code ?? 1, stdout: String(error.stdout ?? ''), stderr: String(error.stderr ?? '') };
+    }
+  }
+
+  before(async () => {
+    sliced = await initRepo('pdkit-self-review-sliced-');
+    slicedHome = await mkdtemp(join(tmpdir(), 'pdkit-self-review-sliced-home-'));
+    slicedTrees = join(sliced, '..', `${basename(sliced)}-trees`);
+    await writeFile(
+      join(slicedHome, 'config.yaml'),
+      [
+        'repo:',
+        '  fork: me/podman-desktop',
+        '  base_branch: main',
+        '  package_manager: npm',
+        'branches:',
+        "  sliced: 'DESKTOP-{issue}/{index}-{slug}'",
+        'slicing:',
+        '  layer_order: [extension-api, main, ui, tests]',
+        '  verify:',
+        '    install: never',
+        'worktrees:',
+        `  root: '${slicedTrees}'`,
+        '  copy_files: []',
+        '',
+      ].join('\n'),
+    );
+
+    await seedWorkspace(sliced);
+    await commitAll(sliced, 'chore: seed');
+    await git(['checkout', '-b', `DESKTOP-${SLICED}/work`], sliced);
+    await writeFiles(sliced, {
+      [API]: '// SPDX-License-Identifier: Apache-2.0\nexport interface RunOptions { env?: string }\n',
+      [EXEC]: '// SPDX-License-Identifier: Apache-2.0\nexport function exec() {}\nexport const EXEC_VERSION = 2;\n',
+    });
+    await commitAll(sliced, 'feat: change set');
+
+    await transition(SLICED, 'triaged', { home: slicedHome });
+    await transition(SLICED, 'planned', { home: slicedHome });
+    for (let i = 0; i < 2; i += 1) assert.ok((await allocateRequirement(SLICED, { home: slicedHome })).ok);
+    assert.ok((await freezeRequirements(SLICED, { home: slicedHome })).ok);
+    slicedPlan = await decidedPlan(SLICED, { home: slicedHome, files: [API, EXEC], slices: 3 });
+
+    const facts = await slice.facts({ issue: SLICED, repoRoot: sliced, home: slicedHome, config: config(), packageMap: packageMap(sliced) });
+    const stored = await slice.set({
+      issue: SLICED,
+      proposal: {
+        whyDeviates: 'two layers, so two slices rather than three',
+        slices: [
+          { slug: 'api', title: 'add RunOptions', files: [API], baseSlice: null },
+          { slug: 'exec', title: 'name the version', files: [EXEC], baseSlice: null },
+        ],
+      },
+      facts,
+      config: config(),
+      home: slicedHome,
+    });
+    assert.equal(stored.ok, true, JSON.stringify(stored.problems));
+    await slice.verifyAll({ issue: SLICED, repoRoot: sliced, home: slicedHome, config: config(), packageMap: packageMap(sliced) });
+    await auditReviewed(SLICED, { home: slicedHome });
+
+    for (const [index, subject] of [[1, 'feat(extension-api): add RunOptions'], [2, 'feat(main): name the version']]) {
+      for (const to of ['plan-approved', 'implemented', 'validated', 'audited', 'sliced', 'slices-approved']) {
+        await transition(SLICED, to, { home: slicedHome, approvedBy: 'test' });
+      }
+      const made = await slice.materialize({ issue: SLICED, index, repoRoot: sliced, subject, home: slicedHome, config: config() });
+      assert.equal(made.ok, true, made.error);
+    }
+  });
+
+  after(async () => {
+    await cleanup(sliced, slicedHome, slicedTrees);
+  });
+
+  test('quotes the lines that name the slice, or none, and counts the tests of the tasks owning its files', async () => {
+    const second = await inSliced('self-review', 'target', '--issue', String(SLICED), '--slice', '2');
+    assert.equal(second.code, 0, second.stderr);
+    assert.equal(
+      block(second.stdout, 'plan'),
+      `plan:   ${slicedPlan} — requirements R1, R2, this pull request R2 (the slice graph); what it decided is quoted below, and a question it answers is not the person's to answer again`,
+    );
+    assert.equal(
+      block(second.stdout, 'disclose'),
+      [
+        "disclose: 2 line(s) of ## Body must disclose for this pull request — Notes for reviewers says each (1 more for other slices); the cut departs from the plan's slice hypothesis, so the slice a line names is the plan's count:",
+        '  - S2: a default pull now sends linux/<desktop arch> instead of leaving the platform to the engine',
+        '  - the Build page is untouched',
+      ].join('\n'),
+    );
+    assert.equal(block(second.stdout, 'tests'), `tests:  T2 1 case(s) — ## Tests of the task files beside ${slicedPlan}; a row is a test this pull request owes`);
+
+    const json = JSON.parse((await inSliced('self-review', 'target', '--issue', String(SLICED), '--slice', '2', '--json')).stdout);
+    assert.deepEqual(json.requirements, { plan: ['R1', 'R2'], pullRequest: ['R2'] });
+    assert.deepEqual(json.disclose.lines, ['S2: a default pull now sends linux/<desktop arch> instead of leaving the platform to the engine', 'the Build page is untouched']);
+    assert.equal(json.disclose.others, 1);
+
+    const first = await inSliced('self-review', 'target', '--issue', String(SLICED), '--slice', '1');
+    assert.equal(first.code, 0, first.stderr);
+    assert.match(first.stdout, /^ {2}- S1: the pull spec stops asserting a platform it never chose$/m);
+    assert.doesNotMatch(first.stdout, /- S2: /);
+    assert.match(first.stdout, /^tests: {2}T1 1 case\(s\) — /m);
   });
 });

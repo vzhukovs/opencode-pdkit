@@ -40,6 +40,13 @@
      A description of a behavior change is not a screenshot. If it is visible,
      show it; if it is not, this is one line.
 
+     The screenshots to show are the ones the validation took: preflight lists
+     them, with their files. Nothing in the plugin can upload an image, so they
+     go in as the links GitHub writes when the person drags each file into a
+     comment box, and they go in before the self-review reads the body. Never
+     "in a comment" or "later": a screenshot promised for later is one the
+     reviewer does not have.
+
      Budget: 200 characters. -->
 {{uiEvidence}}
 
@@ -76,12 +83,18 @@
 {{steps}}
 
 **Notes for reviewers**
-<!-- Only what CI could not judge, and the platform you checked it on. That is
-     the whole purpose: CI passing on something it never exercised reads as
-     proof, which is worse than CI failing.
+<!-- What CI could not judge, and the platform you checked it on: CI passing on
+     something it never exercised reads as proof, which is worse than CI
+     failing. And what the plan decided this body has to disclose — each line
+     its `Body must disclose` names for this pull request, in a sentence of the
+     reviewer's words: a behavior that changes without being asked for, a
+     duplication kept on purpose, a decision the person made. A reviewer who is
+     not told asks, and the person answers on the pull request what was
+     settled before any code.
 
      Mandatory when preflight flagged build, packaging or platform-specific
-     behavior; one line or omitted otherwise.
+     behavior, or listed lines the plan's `Body must disclose` names for this
+     pull request; one line or omitted otherwise.
 
      What does NOT go here, and where it goes instead: the review history
      (the pull request conversation has it), residual risks and design
