@@ -16,6 +16,12 @@ and their links go into the repository they were released from.
 
 ### Changed
 
+- **`/pd:triage` and `/pd:plan` think at `xhigh` by default.** The same models,
+  `openai/gpt-6.1-sol` and `openai/gpt-6-astra`, at the variant `xhigh` instead
+  of `high`: triage decides what the issue is and which route it takes, the
+  plan how to build it, and every step after them works from what they wrote.
+  To keep either at `high`, name it in the plugin's `models` option
+  (`"pd:plan": "openai/gpt-6-astra#high"`).
 - **`slice verify` builds a tree once.** A slice whose tree is the one its last
   green verification built — the same kind of build, the same command, the
   same preparation — is taken from that run and says so, instead of spending

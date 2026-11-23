@@ -3,7 +3,7 @@ name: triage
 description: "Triage an upstream podman-desktop issue: dedup, classify, draft requirements, and pick a route. Without an issue number, shortlist what is worth taking."
 argument-hint: "[<issue-number|url>] [--label <a,b>] — further lines become prior context"
 disable-model-invocation: true
-model: openai/gpt-6.1-sol#high
+model: openai/gpt-6.1-sol#xhigh
 ---
 
 Decide whether planning is needed at all. Half the value of this plugin is
