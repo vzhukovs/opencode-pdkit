@@ -139,6 +139,106 @@ describe('pdkit self-review target', () => {
   });
 });
 
+// The grep before a round: maintainer-rules on the commit the axes would read.
+// A rule with no exception broken there is fixed first, and no round is spent
+// finding it; a rule with a condition of its own is the axes' to judge, so its
+// lines come with the rest of what they get.
+describe('pdkit self-review target and the grep', () => {
+  const GREPPED = 4248;
+  const SPEC = 'packages/renderer/src/lib/Card.spec.ts';
+  let grepTree;
+
+  /** @param {...string} args */
+  const inGrep = (...args) => pdkitIn(grepTree, ...args);
+
+  /** Commit the spec with these lines in it. */
+  async function spec(lines, message) {
+    await writeFiles(grepTree, { [SPEC]: `${lines.join('\n')}\n` });
+    return commitAll(grepTree, message);
+  }
+
+  before(async () => {
+    grepTree = await mkdtemp(join(tmpdir(), 'pdkit-self-review-grep-tree-'));
+    await rm(grepTree, { recursive: true });
+    await git(['worktree', 'add', '-b', `DESKTOP-${GREPPED}/card`, grepTree], repo);
+    const adopted = await adopt(GREPPED, { home, state: 'quickfix', route: 'quickfix', reason: 'a fixture' });
+    assert.ok(adopted.ok, adopted.error);
+  });
+
+  after(async () => {
+    await git(['worktree', 'remove', '--force', grepTree], repo).catch(() => {});
+    await cleanup(grepTree);
+  });
+
+  test('refuses a commit the grep fails, before a round starts', async () => {
+    const sha = await spec(
+      ["test('the card', () => {", "  vi.spyOn(window, 'getConfiguration');", '  const card = found as HTMLElement;', '});'],
+      'test(renderer): spy on it',
+    );
+
+    const refused = await inGrep('self-review', 'target', '--issue', String(GREPPED));
+    assert.equal(refused.code, 1);
+    assert.equal(refused.stdout, '', 'nothing for the axes to read');
+    assert.match(
+      refused.stderr,
+      new RegExp(
+        `^pdkit self-review target: maintainer-rules fails on ${sha.slice(0, 8)}: vi\\.spyOn ×1 \\(§2\\), as <Type> on a value ×1 \\(§4\\)\\. ` +
+          'What a grep sees is fixed before any axis reads the code, so no round has started\\n',
+      ),
+    );
+    assert.match(refused.stderr, /^ {2}vi\.spyOn — §2\n {4}packages\/renderer\/src\/lib\/Card\.spec\.ts: vi\.spyOn\(window, 'getConfiguration'\);$/m);
+    assert.match(refused.stderr, /^ {2}as <Type> on a value — §4\n {4}packages\/renderer\/src\/lib\/Card\.spec\.ts: const card = found as HTMLElement;$/m);
+    assert.match(refused.stderr, /fix the code, commit it, and run pdkit self-review target again/);
+    assert.deepEqual(await readJournal({ issue: GREPPED, event: EVENTS.started }, { home }), [], 'the refused round wrote nothing');
+  });
+
+  test('prints what the grep leaves to the axes, and starts the round', async () => {
+    const sha = await spec(["test('the card', () => {", "  const images = [{ Id: '1' } as ImageInfo];", '});'], 'test(renderer): a fixture');
+
+    const result = await inGrep('self-review', 'target', '--issue', String(GREPPED));
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(
+      result.stdout,
+      /^grep: {3}to judge: as <Type> on an object or array literal ×1 \(§4\) — rules with a condition of their own, which the axes rule on line by line:$/m,
+    );
+    assert.match(
+      result.stdout,
+      /^ {2}as <Type> on an object or array literal — §4\n {4}packages\/renderer\/src\/lib\/Card\.spec\.ts: const images = \[\{ Id: '1' \} as ImageInfo\];$/m,
+    );
+    const lines = result.stdout.split('\n');
+    assert.ok(lines.findIndex((line) => line.startsWith('grep:')) < lines.findIndex((line) => line.startsWith('round:')), 'the grep before the round');
+    const started = await readJournal({ issue: GREPPED, event: EVENTS.started }, { home });
+    assert.deepEqual(started.map((entry) => entry.detail), [sha.slice(0, 8)]);
+
+    const json = JSON.parse((await inGrep('self-review', 'target', '--issue', String(GREPPED), '--json')).stdout);
+    assert.equal(json.grep.status, 'warn');
+    assert.deepEqual(json.grep.hits.map((hit) => [hit.label, hit.strict, hit.path]), [['as <Type> on an object or array literal', false, SPEC]]);
+  });
+
+  test('says in one line when the grep found nothing', async () => {
+    await spec(["test('the card', () => {});"], 'test(renderer): plain');
+
+    const result = await inGrep('self-review', 'target', '--issue', String(GREPPED));
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /^grep: {3}none of the greppable maintainer rules hit$/m);
+
+    const json = JSON.parse((await inGrep('self-review', 'target', '--issue', String(GREPPED), '--json')).stdout);
+    assert.deepEqual(json.grep, { status: 'pass', summary: 'none of the greppable maintainer rules hit', hits: [] });
+  });
+
+  test('at the round limit says so, before anything the grep found', async () => {
+    // Two rounds so far, the fixture's and the plain one: a third, then a fourth that breaks a rule.
+    await spec(["test('the card', () => { expect(1).toBe(1); });"], 'test(renderer): a third');
+    assert.equal((await inGrep('self-review', 'target', '--issue', String(GREPPED))).code, 0);
+    await spec(["test('the card', () => {", "  vi.spyOn(window, 'getConfiguration');", '});'], 'test(renderer): spy again');
+
+    const refused = await inGrep('self-review', 'target', '--issue', String(GREPPED));
+    assert.equal(refused.code, 1);
+    assert.match(refused.stderr, /Stop and ask the person/);
+    assert.doesNotMatch(refused.stderr, /maintainer-rules/);
+  });
+});
+
 // `--audit`: the review of the whole branch, once, in `/pd:audit`. What the
 // axes get on top of a pull request's — the plan and each task's tests, since
 // there is no body yet — where it may run, and what it says about each open
@@ -301,5 +401,22 @@ describe('pdkit self-review --audit', () => {
     const foreign = await pdkit('self-review', 'target', '--issue', String(AUDITED), '--audit');
     assert.equal(foreign.code, 1);
     assert.match(foreign.stderr, new RegExp(`this tree is not DESKTOP-${AUDITED}'s`));
+  });
+
+  test('refuses a branch the grep fails, naming the task that owns each line', async () => {
+    await writeFiles(branchTree, { [OWNED]: 'export function platform(): number {\n  return 3;\n}\n' });
+    const sha = await commitAll(branchTree, 'feat(main): platform as a function');
+    const before = (await readJournal({ issue: AUDITED, event: AUDIT_EVENTS.started }, { home })).length;
+
+    const refused = await inBranch('self-review', 'target', '--issue', String(AUDITED), '--audit');
+    assert.equal(refused.code, 1);
+    assert.match(refused.stderr, new RegExp(`maintainer-rules fails on ${sha.slice(0, 8)}: export function in packages/main ×1 \\(§6\\)\\.`));
+    assert.match(refused.stderr, /^ {4}packages\/main\/src\/index\.ts: export function platform\(\): number \{ → T1$/m);
+    assert.equal((await readJournal({ issue: AUDITED, event: AUDIT_EVENTS.started }, { home })).length, before, 'no round started');
+
+    await nextAuditCommit(5);
+    const fixed = await inBranch('self-review', 'target', '--issue', String(AUDITED), '--audit');
+    assert.equal(fixed.code, 0, fixed.stderr);
+    assert.match(fixed.stdout, /^grep: {3}none of the greppable maintainer rules hit$/m);
   });
 });

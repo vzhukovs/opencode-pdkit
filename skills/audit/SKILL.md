@@ -63,8 +63,8 @@ evidential.
 
 Whether the added lines keep the maintainer's rules is not the auditor's
 question: the review in step 3 reads the whole branch for that. Both read the
-same commit, so dispatch the auditor once the grep in step 3 is green, beside
-the axes.
+same commit, so dispatch the auditor once `target` in step 3 has started the
+round, beside the axes.
 
 ## 3. The review: the whole branch, once
 
@@ -72,28 +72,20 @@ Upstream's review agent reads every pull request against
 `${CLAUDE_PLUGIN_ROOT}/knowledge/maintainer-rules.md`. Read the branch the same
 way now, while each fix is one task away.
 
-First what a grep sees, before any model reads the code:
-
-```
-pdkit preflight <n> --only maintainer-rules
-```
-
-A **fail** is a rule with no exception: fix it first, as step 4 fixes a
-finding, and run the check again. A warning is a rule with a condition of its
-own, and the axes rule on it: hand them its lines.
-
-Then:
-
 ```
 pdkit self-review target --issue <n> --audit
 ```
 
 It prints the diff of the whole branch against its base, the commit, the
 changed files, the triage record, the plan and each task's `## Tests`, and
-starts a round.
+starts a round. First it runs what a grep sees, `maintainer-rules`, on that
+commit. A **fail** is a rule with no exception, and no round starts until it
+is fixed: `target` names the task that owns each line, and step 4 fixes it as
+it fixes a finding. A warning is a rule with a condition of its own; `target`
+prints its lines, and the axes rule on them.
 
 - the four `pd-review-*` axes, in parallel. Each gets what `target` printed,
-  as it printed it, with the grep's warnings, and is told this is our own
+  as it printed it, the grep's warnings included, and is told this is our own
   branch before it is cut into pull requests: there is no title or body yet,
   and no threads. A row of a task's `## Tests` is a test the branch owes.
   Together they cover all twelve sections of the rules;
@@ -110,21 +102,21 @@ clean.** The record is what the review said.
 
 Every open finding — an `issue:`, a `question:` with no answer — on code this
 branch wrote is fixed here, and so is a step 2 finding answered `revert the
-code`. A `question:` can be answered instead: put the answer in the finding's
-`answer` field and record again, with the line of the plan, the triage record
-or the validation that answers it. An answer nothing on disk supports is a
-question for the person. A `nit:` is fixed only on lines the fix of an
-`issue:` changes anyway, never in a round of its own; a pre-existing one is
-left as it is.
+code`, and a line the grep in step 3 failed. A `question:` can be answered
+instead: put the answer in the finding's `answer` field and record again,
+with the line of the plan, the triage record or the validation that answers
+it. An answer nothing on disk supports is a question for the person. A `nit:`
+is fixed only on lines the fix of an `issue:` changes anyway, never in a round
+of its own; a pre-existing one is left as it is.
 
-A fix is never written in this session. Per task that `record` names, one at
-a time:
+A fix is never written in this session. Per task that `record` names — or
+`target`, for a line the grep failed — one at a time:
 
 1. `pdkit task start --issue <n> --task T<k>`. It accepts a task that is
    done; from here, writes outside its `Owns` are refused.
 2. A `pd-implementer`, briefed as "A finding to fix" in
    `${CLAUDE_PLUGIN_ROOT}/agents/pd-implementer.md`: its task file, and the
-   findings on its files as `record` printed them. Nothing else.
+   findings on its files as `record` or `target` printed them. Nothing else.
 3. `pdkit receipt write --issue <n> --task T<k>`. The receipt the task already
    has was captured before the fix, and the completion hook accepts it, so
    capturing again is yours.
