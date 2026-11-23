@@ -34,6 +34,29 @@ and scoped tests there. **Green standalone → the slice is independent and
 branches from `main`. Red → it needs a stack, and `base` is the preceding
 slice.** Independence is preferred; a stack is the exception.
 
+The three run in two parts at the same time: the typecheck and the tests chained
+with `&&`, and lint beside them — `<typecheck> && <tests> & <lint>` in the
+record. Lint needs neither of the others and takes as long as both together
+(on podman-desktop 135 of 239 seconds), so one after the other they cost the sum
+and side by side the longest: 175 seconds, the same checks, the whole of each.
+One capture and one receipt still: each part's output under its own `$` line,
+and the run is red when either part fails.
+
+**A tree is built once.** Before the command, the build names its tree —
+`git write-tree` after the slice is applied or the branch checked out. When the
+slice's stored verification is green and of that tree, of the same kind
+(standalone or stacked), the same command and the same
+`slicing.verify.prepare`, and its receipt still validates with exit 0, the
+command does not run: the record is written again for this build — its diff,
+digest, base and the patch coming off — with the time, command and receipt of
+the run that measured it, and `reusedAt`; the journal says
+`slice-verify-reused`, and verify prints "the same tree as the run of …, not
+built again". A red verification is never taken, and a record written before
+trees were kept has none and is built again. On a podman-desktop issue three
+builds of twelve had built a tree that had already passed: a slice nobody
+changed, built again by `--all` after another was re-cut, and a branch
+materialized from the change set just built.
+
 The typecheck is the whole repository's because a type error lands in the
 package that consumes a change. Scoped to the touched packages, it cleared a
 preload-only slice on DESKTOP-19818 that upstream CI's typecheck then failed in
@@ -45,7 +68,9 @@ two possible causes and they are not the same finding: the slice broke something
 or the base does not pass that command either. The second is a false accusation —
 the exact mirror of a false green — so it is measured rather than assumed:
 `baselineFor` resets the same tree to the base, prepares it the same way, runs the
-same command, and caches the answer per base, command **and preparation**. The
+same command, and caches the answer per base commit — the one it measured, not
+the slice branch it was asked from, so a fix on that branch does not measure the
+same base again — command **and preparation**. The
 verdict is then `inconclusive`, which `independenceProblems` excludes,
 `slices.md` renders as `⚠️`, `slice-standalone` downgrades to a warning, and the
 journal records as `slice-verify-inconclusive`.
@@ -74,10 +99,11 @@ do with slicing.
 partitions its files into an ordered list of `{subject, files}`: one pull
 request, a commit per layer, so main never sees half of it and a reviewer still
 reads each layer apart. `materialize` commits the groups in order;
-`slice verify --commits` builds each intermediate commit and records it as
+`slice verify --commits` typechecks each intermediate commit and records it as
 `commitChecks`, which gate nothing. Whether upstream wants every commit to build
-is an open question (podman-desktop#19798), and the slice as a whole is what
-preflight holds to green.
+is an open question (podman-desktop#19798), and that question is what a commit
+check answers: the whole typecheck on each prefix, not lint or tests, which
+belong to the slice as a whole — what preflight holds to green.
 
 The form a slice is verified and materialized through is one and the same:
 

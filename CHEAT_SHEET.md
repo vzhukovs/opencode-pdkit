@@ -223,9 +223,10 @@ pdkit rollback <n> --confirm               # ... and give it back
 
 ```bash
 pdkit preflight <n> [--slice <i>]          # minutes: it runs the real test, lint and typecheck
-pdkit slice verify --issue <n> --all       # builds each slice alone, from main
+pdkit slice verify --issue <n> --all       # builds each slice alone, from main; a tree
+                                           # that already passed is taken, not built again
 pdkit slice verify --issue <n> --slice <i> --commits
-                                           # each intermediate commit; information, not a gate
+                                           # each intermediate commit typechecked; information, not a gate
 pdkit validate steps --issue <n>           # what is waiting, and what is done
 pdkit validate supersede <Vk> --issue <n> --by <Vn> --reason <t>
                                            # a step that measured the environment,

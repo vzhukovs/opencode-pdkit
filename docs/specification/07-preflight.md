@@ -162,8 +162,12 @@ thing.
 
 **A run `slice verify` has just made is not made again.** `tests`, `lint` and
 `typecheck` reuse the slice verification's run when its receipt validates,
-exited 0, names this exact commit, covers every script the check would run, and
-the tree has no tracked change. The commit says what was verified while the
+exited 0, names this exact commit — or the verification is green and of this
+exact tree, which is what a branch materialized from the verified change set
+is — covers every script the check would run, and the tree has no tracked
+change. A match by tree is named as one: "passed in slice verify on the same
+tree (…)", since the commit in such a receipt is the base the build was
+prepared at. The commit says what was verified while the
 scripts run the working tree, which is why a tracked change disqualifies it.
 Verify and preflight back to back had outlived a 600-second timeout, running the
 same scripts on the same commit twice.

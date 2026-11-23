@@ -7,7 +7,8 @@ minutes, because it runs the repository's real scripts. Script names are resolve
 from the repository's own `package.json` — there is no `pnpm lint` there, and
 `pnpm test` drags in the e2e suite. A tree is tested once: after a squash or a
 reworded message, tests, lint, typecheck and schemas take the pass an earlier run
-of the issue made on the same tree, and say whose it was; a failure is always run
+of the issue made on the same tree, and say whose it was — and so do tests, lint
+and typecheck with a green `slice verify` of the same tree; a failure is always run
 again.
 
 Four results, and the difference between them matters:
