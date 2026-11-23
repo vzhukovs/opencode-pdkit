@@ -38,6 +38,13 @@ the gap from vanishing is the other end: `validation-evidence` in preflight refu
 a pull request body that does not name the undemonstrated steps under `Notes for
 reviewers`. An unverified step nobody mentions reads exactly like a verified one.
 
+**The screenshots go into the pull request that changes what they show.** On
+`/pd:pr`, `ui-evidence` lists them, with their files, beside the components the
+pull request changes. Nothing in the plugin can upload an image to GitHub, so you
+drag each into a comment box there and hand the session the link it writes,
+before the self-review reads the body; a placeholder left in, or a screenshot
+promised for later, does not pass.
+
 **A new e2e test runs three times in a row before it counts**, and the series is
 tied to a digest of the spec: edit the test afterwards and preflight fails asking
 for a re-run rather than passing on a stale series. A flake carried into someone

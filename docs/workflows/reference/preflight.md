@@ -2,7 +2,7 @@
 
 [Workflows](../README.md) › [Reference](README.md)
 
-`pdkit preflight <issue>` runs twenty-four checks, and on podman-desktop it takes
+`pdkit preflight <issue>` runs twenty-six checks, and on podman-desktop it takes
 minutes, because it runs the repository's real scripts. Script names are resolved
 from the repository's own `package.json` — there is no `pnpm lint` there, and
 `pnpm test` drags in the e2e suite. A tree is tested once: after a squash or a
@@ -29,10 +29,10 @@ diff that will not be pushed.
 
 ## The two passes
 
-Nine checks read the PR body, and the body depends on preflight — `Notes for
+Eleven checks read the PR body, and the body depends on preflight — `Notes for
 reviewers` is mandatory exactly when preflight flags something CI cannot judge, and
-equally when validation could not demonstrate a step. One pass cannot close that
-loop, so:
+equally when validation could not demonstrate a step, or the plan named what this
+pull request's body must disclose. One pass cannot close that loop, so:
 
 ```
 pdkit preflight 12345                                   # pass 1, no body
