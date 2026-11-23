@@ -14,6 +14,35 @@ and their links go into the repository they were released from.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-11-23
+
+### Upgrading
+
+```bash
+opencode plugin update
+```
+
+Then, in the fork, `pdkit doctor --gate-selftest`. Nothing to change in your
+config.
+
+- An open pull request whose branch adds a comment fails `maintainer-rules` at
+  its next `/pd:pr-sync`, and `pdkit self-review target` refuses a round on
+  it: remove the comments it names. A cast of a value or a typed `Mock` that
+  the branch adds to a unit spec fails the same check.
+- An open pull request that changes a `.svelte` file fails `ui-evidence` at its
+  next `/pd:pr-sync` unless its body shows an image, or says `n/a` and why,
+  under `Screenshot / video of UI`.
+- An issue at `validated` moves to `audited` only once `/pd:audit` has
+  reviewed the branch. Issues at `audited` or later are not affected.
+- The plans and tasks of issues already under way are read as they were:
+  `pdkit plan check` says so in one line and asks them for no `## Tests`.
+- To keep `/pd:triage` or `/pd:plan` at `high`, name it in the plugin's
+  `models` option, as below.
+
+MINOR rather than PATCH because preflight, `pdkit self-review target`,
+`pdkit plan check` and the move to `audited` start refusing what they used to
+accept.
+
 ### Changed
 
 - **`/pd:triage` and `/pd:plan` think at `xhigh` by default.** The same models,
@@ -3576,7 +3605,8 @@ found by a unit test.
   gate strips wrapper programs because hooks on the Bash tool are global, not
   because any particular tool exists.
 
-[Unreleased]: https://github.com/vzhukovs/opencode-pdkit/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/vzhukovs/opencode-pdkit/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/vzhukovs/opencode-pdkit/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/vzhukovs/opencode-pdkit/releases/tag/v0.16.0
 [0.15.0]: https://github.com/vzhukovs/podman-desktop-kit/compare/v0.14.1...v0.15.0
 [0.14.1]: https://github.com/vzhukovs/podman-desktop-kit/compare/v0.14.0...v0.14.1
