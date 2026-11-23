@@ -128,7 +128,7 @@ the reporter still has to confirm.
 | `/pd:validate <n>` | the code is written | `implemented` | evidence from the running app → `validated` | `terra#medium` |
 | `/pd:audit <n>` | validation is done | `validated` | the diff against the plan and one review of the whole branch, in fresh context; fixes by `pd-implementer` → `audited` | `opus#high` |
 | `/pd:slice <n>` | the audit is clean | `audited` | a verified slice graph → `sliced` → **you approve** → `slices-approved` | `opus#high` |
-| `/pd:preflight <n>` | before every push | the slice branch cut | twenty-four checks, in two passes → `preflight-green` | `flash#low` |
+| `/pd:preflight <n>` | before every push | the slice branch cut | twenty-six checks, in two passes → `preflight-green` | `flash#low` |
 | `/pd:pr <n> [slice]` | preflight is green | `preflight-green` and a body | push and pull request → `pr-open`. **You confirm, per branch** | `sonnet#medium` |
 | `/pd:pr-status` | any time | — | CI, threads and idleness across open PRs. Read-only | `flash#low` |
 | `/pd:pr-sync <pr>` | a reviewer answered | an open pull request | thread triage, the fixes, draft replies | `opus#high` |
@@ -232,7 +232,7 @@ pdkit validate supersede <Vk> --issue <n> --by <Vn> --reason <t>
                                            # set aside for one that showed the change
 pdkit drift <n>                            # what landed upstream under this work
 pdkit audit <n> --base main                # facts, no verdict
-pdkit self-review target --issue <n> --audit   # the whole branch for the review axes, with the plan and each task's ## Tests; refused while maintainer-rules fails
+pdkit self-review target --issue <n> --audit   # the whole branch for the review axes, with the plan, what it decided and each task's ## Tests; refused while maintainer-rules fails
 pdkit self-review record --issue <n> --audit --findings <f.json>
                                            # no body; names the task that owns each open finding's file
 ```
@@ -326,7 +326,7 @@ spelled command is not a fix.
 
 ## What preflight will ask of you
 
-Twenty-four checks. Every one blocks except the three marked `warn`.
+Twenty-six checks. Every one blocks except the three marked `warn`.
 
 | Check | | What satisfies it |
 |---|---|---|
@@ -350,17 +350,19 @@ Twenty-four checks. Every one blocks except the three marked `warn`.
 | `e2e-stability` | | a new Playwright spec passed three times in a row, on its current contents |
 | `e2e-environment` | | Notes for reviewers says what the test needs and where it will not run |
 | `validation-evidence` | | every validation step has an artefact, or the body explains |
+| `ui-evidence` | | a pull request that changes a component shows it: an image or a video in `Screenshot / video of UI`, or `n/a` and why (a warning, for the self-review); never a placeholder or a screenshot promised for later. The first pass lists the components and the validation's screenshots |
 | `debug-leftovers` | `warn` | no `console.log`, `.only`, `.skip`, `@ts-ignore`, bare `any` in added lines |
 | `maintainer-rules` | | added lines clear of the rules upstream's review agent applies that have no exception: `vi.spyOn` in a new test, `as unknown as`, `any`, `!`, `../` imports, `export function` in `packages/main`, a hardcoded product name or color — see `knowledge/maintainer-rules.md`, and of comments, which the plugin allows only where a rule asks for one (a new file's license header, extension-API JSDoc, the `eslint-disable` of an empty interface). A rule with its own condition (a `vi.mock` factory) only warns, and the self-review rules on it |
 | `self-review` | | the four review axes read this commit and this body, and left no `issue:` and no unanswered `question:` open (`pdkit self-review record`); a `nit:` stays in the record and does not block |
 | `ci-blind-spots` | | build, packaging or platform behavior CI cannot judge is named in the body |
+| `body-must-disclose` | | when the plan's `Body must disclose` names lines for this pull request, `Notes for reviewers` is written, not empty or `n/a`; whether it says each line is the self-review's. The first pass lists the lines |
 
-**It runs twice, and the second pass is not ceremony.** Nine checks read the
+**It runs twice, and the second pass is not ceremony.** Eleven checks read the
 pull request body, so on the first pass the ones that need it judge nothing.
 Draft the body, run the self-review on it, then:
 
 ```bash
-pdkit self-review target --issue <n> [--slice <i>]  # what the axes read: diff, commit, triage record; refused while maintainer-rules fails, else starts a round
+pdkit self-review target --issue <n> [--slice <i>]  # what the axes read: diff, commit, triage record, what the plan decided, the tests owed; refused while maintainer-rules fails, else starts a round
 pdkit self-review record --issue <n> [--slice <i>] --findings <f.json> --body <file>
 pdkit self-review continue --issue <n> --reason "<why>"  # past review.self_review_rounds: your sentence
 pdkit preflight <n> --body-only --body <file>

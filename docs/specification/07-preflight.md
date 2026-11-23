@@ -2,7 +2,7 @@
 
 [Specification](README.md) › Section 7
 
-`pdkit preflight [--slice N]` returns a machine-readable report. Twenty-four checks,
+`pdkit preflight [--slice N]` returns a machine-readable report. Twenty-six checks,
 in the order `CHECK_IDS` in `lib/preflight/index.js` runs them:
 
 | Check | How | Blocking |
@@ -21,16 +21,18 @@ in the order `CHECK_IDS` in `lib/preflight/index.js` runs them:
 | slice standalone | the `pdkit slice verify` result from `slices.json` plus a digest comparison. A stale result is `fail`, not `pass`; a red run against a red baseline is `warn`, marked inconclusive | ✅ for slices with `base: main` |
 | **merge order** | every merge order the body states — `#A → #B`, "depends on #A", "after #A merges" — between this issue's slices is a stack in the graph. An order between independent slices is a dependency nobody verified, and main is broken between those merges | ✅ |
 | branch name | matches `DESKTOP-<n>/[<i>-]<slug>` | ✅ |
-| **PR body from the template** | every section, fixed line and footer `templates/pr-body.md` declares is in the body. Nine checks read the body and each reads a part of it; this one asks whether it is the shape upstream's template wants at all | ✅ |
+| **PR body from the template** | every section, fixed line and footer `templates/pr-body.md` declares is in the body. Eleven checks read the body and each reads a part of it; this one asks whether it is the shape upstream's template wants at all | ✅ |
 | **PR body size** | each section of the body against its budget in characters, and the total. `How to test this PR?` is bounded by its heading and not counted: it is the one section a reviewer executes rather than reads | ⚠️ never blocks |
 | steps-to-check | ≥ 3 steps, each with an expected result. Applies on `quickfix` too | ✅ |
 | e2e stability | a new `tests/playwright` test passed `validation.e2e_stability_runs` times in a row; the series is tied to a digest of the spec, and a stale one is `fail` | ✅ if e2e was added |
 | e2e environment | a test needing an environment CI does not have requires a `Notes for reviewers` entry | ✅ |
 | **validation evidence** | a validation step with no attached artefact is named in `Notes for reviewers`. Skipped on `quickfix` and when `validation.require_evidence: false` | ✅ |
+| **UI evidence** | a pull request that changes a component (a `.svelte` file in its diff) shows it in `Screenshot / video of UI`: an image or a video — a markdown image, an `<img>` or `<video>` tag, the link GitHub writes for an uploaded file. A screenshot placeholder left in the body, or a section that shows nothing and says no `n/a`, fails; `n/a` beside a changed component warns, for the self-review to judge whether nothing visible changed. The first pass lists the components and the validation's screenshots with their files: nothing in the plugin can upload an image, so the person does | ✅ |
 | debug leftovers | `console.log`, `.only`, `.skip`, `@ts-ignore`, `any` in the diff | ⚠️ warn, listing them |
 | **maintainer rules** | the greppable part of `knowledge/maintainer-rules.md` in the added lines, each pattern scoped to the files its rule covers. **Strict** patterns are rules with no exception: `vi.spyOn`, `Object.defineProperty(window)`, `vi.stubGlobal`, `clearAllMocks`, `afterEach`, a real `setTimeout` sleep, `toBeDefined()`, a typed `Mock` (`: Mock`, `: MockInstance<…>`, `as Mock`) and a cast of a value (`card as HTMLElement`; not `as const`) in unit specs; `as unknown as`, `any`, `!`, `eslint-disable` (bar the empty-interface exception section 4 names), `*Sync(`, an empty `catch`, `void` on a promise, `../` imports, built-ins without `node:`; an exported or file-scope function and `app.name` in `packages/main`; `<style>`, `$:`, `tick()` and Node types in renderer code; a hardcoded "Podman Desktop", a hex color in the color registry; a copyright year other than this one; **a comment the branch adds**, the plugin's own rule (below). **Judged** patterns are rules with a condition a grep cannot see: a `vi.mock` factory, `vi.hoisted`, `vi.importActual`, `mockImplementation(async () =>`, a cast of an object or array literal in a unit spec (a fixture), `sort()`, `await import()`. `pdkit self-review target` runs this check on the commit it hands the review axes and refuses one it fails, before a round starts | ✅ on a strict hit; ⚠️ warn on a judged one, which the self-review rules on |
 | **self-review** | the four review axes and the synthesis read this commit and this body (`pdkit self-review record`, keyed by slice in `self-review.json`), and nothing they found that upstream's agent rejects a pull request for is open: no `issue:`, no unanswered `question:`. A `nit:`, on new code or old, stays in the record and is counted in the summary, and does not block — upstream's agent accepts a pull request with nits. A review of another commit or another body is a `fail`. After `review.self_review_rounds` commits in a row reviewed without a clean review — a round starts at `pdkit self-review target` — the remedy is to stop and ask the person rather than to run another round. Reads the body | ✅ |
 | CI blind spots | the diff touches build, packaging, platform-specific behavior or the **dependency graph** — CI will not check it; a `Notes for reviewers` entry is required, worded per the area that fired | ✅ |
+| **body must disclose** | the plan's `## Body must disclose` names lines for this pull request — a line naming `S<i>` is slice `i`'s, one naming none is every pull request's — and `Notes for reviewers` is written: not empty, not `n/a`. Whether it says each line a grep cannot tell, and the summary says so; the self-review judges it. The first pass lists the lines. Skipped on `quickfix`, with no plan, and for a plan written before the section | ✅ |
 
 Four results, and the difference between them matters: **pass** (the check ran
 and was satisfied), **skip** (it did not run, and the summary says why), **warn**
@@ -92,15 +94,22 @@ and silence about it reads as checked.
 
 Both of those read the PR body, and both must say so by exporting `needsBody`,
 which puts them among the checks in `BODY_DEPENDENT` that the second pass runs —
-all eight: `extension-api`, `merge-order`, `pr-body-template`, `pr-body-size`,
-`steps-to-check`, `ci-blind-spots`, `e2e-environment`, `validation-evidence`. A
-check that depends on the body without declaring it stays forever at its
-first-pass result, `skip` — the worst possible outcome, because it looks like a
-check that ran. Not every one of the eight needs the body on every diff, so the
-note after pass one counts only those that actually skipped for lack of it, and
-names them. It knows them by the field `waitingFor: 'body'` on the result — not
-by the summary's wording, which each check is free to change — and the field
-stays out of `--json`.
+all eleven: `extension-api`, `merge-order`, `pr-body-template`, `pr-body-size`,
+`steps-to-check`, `ci-blind-spots`, `e2e-environment`, `validation-evidence`,
+`self-review`, `ui-evidence`, `body-must-disclose`. A check that depends on the
+body without declaring it stays forever at its first-pass result, `skip` — the
+worst possible outcome, because it looks like a check that ran. Not every one of
+the eleven needs the body on every diff, so the note after pass one counts only
+those that actually skipped for lack of it, and names them. It knows them by the
+field `waitingFor: 'body'` on the result — not by the summary's wording, which
+each check is free to change — and the field stays out of `--json`.
+
+Under each check that waits for the body, the report of pass one prints what it
+lists for the body: the areas CI cannot judge, the validation steps with no
+artefact, the lines the plan's `Body must disclose` names for this pull request,
+the components it changes and the screenshots the validation took. The body is
+written from that list. Any other check's output is a run's, and stays in
+`--json`.
 
 Pass two reads the body from `--body <file>`, or, for a pull request that is
 already open, from `--body-from-pr <k>` — after a rebase or a review round, where

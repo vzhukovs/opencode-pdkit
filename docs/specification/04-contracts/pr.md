@@ -45,13 +45,14 @@ files, +130/−2 — and opened against `main` at four files, +435/−10, with a
 that said it changed no product code. Every check had judged a different diff
 from the one the reviewer got.
 
-**Why two passes.** Nine checks read the PR body, and the body depends on
+**Why two passes.** Eleven checks read the PR body, and the body depends on
 preflight — `Notes for reviewers` is mandatory exactly when preflight flagged
-something CI cannot judge. One pass cannot close that loop. The break is in the
+something CI cannot judge, or listed what the plan decided this pull request's
+body must disclose. One pass cannot close that loop. The break is in the
 ordering: pass 1 does not see the body and honestly returns `skip` with a reason
 for those checks (not `pass` — a check reporting success where it checked nothing
 devalues the entire gate). Its findings go into the body. Pass 2 sees the body,
-and all six become real. **`preflight-green` is set only by pass 2**, and that is
+and all of them become real. **`preflight-green` is set only by pass 2**, and that is
 the state `gate open` issues from.
 
 The body is built as a tool for the reviewer, but **inside upstream's frame
@@ -62,9 +63,9 @@ them hunt.
 | Upstream section | What goes inside |
 |---|---|
 | `What does this PR do?` | what changed and why + `Where to look` + `Not in this PR` |
-| `Screenshot / video of UI` | `/pd:validate` artefacts. No UI change means an explicit `n/a` with a reason, not an empty section |
+| `Screenshot / video of UI` | `/pd:validate` screenshots, as the links GitHub writes when the person uploads them — before the self-review reads the body; a placeholder, or a screenshot promised for later, fails `ui-evidence`. No UI change means an explicit `n/a` with a reason, not an empty section |
 | `What issues does this PR fix or reference?` | `Closes #N` (last slice of a stack) or `Part of #N` + the R-ID coverage table |
-| `How to test this PR?` | `Steps to check` + `Notes for reviewers` + upstream's test-coverage checkbox |
+| `How to test this PR?` | `Steps to check` + `Notes for reviewers` (what CI cannot judge, and each line of the plan's `Body must disclose` for this pull request) + upstream's test-coverage checkbox |
 
 The body closes with an attribution line naming the plugin and the person who
 reviewed it before it was opened. The login is resolved from the fork slug the
