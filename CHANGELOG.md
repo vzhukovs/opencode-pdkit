@@ -16,6 +16,21 @@ and their links go into the repository they were released from.
 
 ### Changed
 
+- **`slice verify` builds a tree once.** A slice whose tree is the one its last
+  green verification built — the same kind of build, the same command, the
+  same preparation — is taken from that run and says so, instead of spending
+  minutes on the same build again; a red verification is never taken. Preflight
+  takes a green `slice verify` of the same tree too, not only of the same
+  commit, so a slice's first preflight no longer runs again the tests, lint and
+  typecheck its verification has just run. The base a red slice is compared
+  with is kept by the commit it measured, so a fix on a slice branch no longer
+  measures the same base again.
+- **`slice verify` runs lint beside the typecheck and the tests.** The same
+  checks, the whole of each, at the same time, in one receipt: on podman-desktop
+  a build of a slice takes about three minutes instead of four.
+- **`slice verify --commits` typechecks each intermediate commit.** That is the
+  question the commit checks answer — whether each commit builds; lint and the
+  tests stay with the slice as a whole, which is what preflight holds to green.
 - **The self-review reads what the plan decided.** `pdkit self-review target`
   quotes, after the triage record, the plan's `## Open decisions` and `e2e
   coverage`, the lines of `## Body must disclose` for the pull request it

@@ -29,7 +29,7 @@ import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { capture, digest, fence, transcript, validateReceipt, writeReceipt } from '../lib/evidence.js';
+import { capture, captureTogether, digest, fence, transcript, validateReceipt, writeReceipt } from '../lib/evidence.js';
 
 // `node -e "…"` rather than `echo`, `printf`, `pwd` and `sleep`.
 //
@@ -312,5 +312,77 @@ describe('validateReceipt refuses what is not a capture', () => {
 
     assert.equal(checked.ok, false);
     assert.match(checked.reason, /does not open with the command/);
+  });
+});
+
+// `slice verify` runs lint beside the typecheck and the tests. Side by side is
+// the whole point, and so is still being one capture: a receipt is evidence
+// because capture() spawned what it records, and a second way of making one
+// must not become a way of handing it text.
+describe('captureTogether', () => {
+  let home;
+
+  // Prints its name, when it started and when it ended, then exits with `code`.
+  const sleeper = (name, ms, code = 0) =>
+    `node -e "const t=Date.now();setTimeout(()=>{console.log('${name}',t,Date.now());process.exit(${code})},${ms})"`;
+
+  before(async () => {
+    home = await mkdtemp(join(tmpdir(), 'pdkit-together-'));
+  });
+
+  after(async () => {
+    await rm(home, { recursive: true, force: true });
+  });
+
+  test('runs the commands at the same time, as one capture', async () => {
+    const run = await captureTogether({ commands: [sleeper('first', 400), sleeper('second', 400)] });
+
+    assert.equal(run.exitCode, 0);
+    assert.equal(run.complete, true);
+    assert.equal(run.command, `${sleeper('first', 400)} & ${sleeper('second', 400)}`);
+    const [, firstStart, firstEnd] = /first (\d+) (\d+)/.exec(run.stdout).map(Number);
+    const [, secondStart, secondEnd] = /second (\d+) (\d+)/.exec(run.stdout).map(Number);
+    assert.ok(firstStart < secondEnd && secondStart < firstEnd, `they ran one after the other:\n${run.stdout}`);
+    assert.deepEqual(run.parts.map((part) => part.exitCode), [0, 0]);
+    assert.ok(Date.parse(run.at) > 0);
+  });
+
+  test('each part keeps its own lines, under its own command, in the order given', async () => {
+    const run = await captureTogether({ commands: [sleeper('slow', 300), sleeper('fast', 10)] });
+
+    assert.ok(run.stdout.startsWith(`$ ${sleeper('slow', 300)}\n`), run.stdout);
+    const fast = run.stdout.indexOf(`$ ${sleeper('fast', 10)}\n`);
+    assert.ok(fast > run.stdout.indexOf('slow '), run.stdout);
+  });
+
+  test('the exit code is the first failing part, in the order given', async () => {
+    const run = await captureTogether({ commands: [sleeper('ok', 10), sleeper('two', 10, 2), sleeper('three', 10, 3)] });
+
+    assert.equal(run.exitCode, 2);
+    assert.deepEqual(run.parts.map((part) => part.exitCode), [0, 2, 3]);
+  });
+
+  test('a part that was killed leaves the run without an exit code, and incomplete', async () => {
+    const run = await captureTogether({ commands: [sleeper('quick', 10), sleeper('slow', 20000)], timeoutMs: 1500 });
+
+    assert.equal(run.exitCode, null);
+    assert.equal(run.complete, false);
+    assert.match(run.incompleteBecause, /killed/);
+  });
+
+  test('its receipt validates, and opens with the whole command', async () => {
+    const run = await captureTogether({ commands: [sleeper('a', 10), sleeper('b', 10)] });
+    const written = await writeReceipt({ issue: 7, taskId: 'S1 standalone', path: 'verify/S1.md', run, home });
+
+    const checked = validateReceipt(await readFile(written.path, 'utf8'));
+    assert.equal(checked.ok, true, checked.reason);
+    assert.equal(checked.command, run.command);
+    assert.equal(checked.exitCode, 0);
+    assert.match(written.digest, /^sha256:[0-9a-f]{64}$/);
+  });
+
+  test('no command, or an empty one, is refused rather than run', async () => {
+    await assert.rejects(captureTogether({ commands: [] }), /no command given/);
+    await assert.rejects(captureTogether({ commands: ['node -e 0', ' '] }), /no command given/);
   });
 });

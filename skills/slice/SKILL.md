@@ -158,20 +158,32 @@ touched packages' own, because a type error lands in the consumer: a
 preload-only slice can pass `typecheck:preload` and still break the renderer's
 typecheck on upstream CI (`preflight.typecheck_scope`).
 
+Lint runs beside the typecheck and the tests, not after them: the same three
+checks, the whole of each, at the same time. The run is one receipt, and a
+failure in any part is red.
+
+**A tree is built once.** A slice whose tree is the one its last green
+verification built — the same kind of build, the same command, the same
+`slicing.verify.prepare` — is taken from that run rather than built again,
+and verify says so: "green — the same tree as the run of …, not built again".
+A red verification is never taken. So re-running `--all` after a `slice set`
+that changed one slice builds that slice and takes the rest.
+
 **Contract** dependence is invisible to the build as well, and `slice set` has
 already refused the kind it can see (IPC channels). A slice that only works once
 another merges is not independent because its build is green.
 
-A slice with `commits` can also have each intermediate commit built:
+A slice with `commits` can also have each intermediate commit typechecked:
 
 ```
 pdkit slice verify --issue <n> --slice <i> --commits
 ```
 
 That is information for the person, recorded as `commitChecks` and shown in
-`slice show`; it gates nothing. Whether upstream wants every commit of a pull
-request to build is an open question upstream, and the slice as a
-whole is what preflight holds to green.
+`slice show`; it gates nothing. It asks the question upstream left open —
+whether every commit of a pull request builds — and so it runs the whole
+typecheck on each prefix, not lint or tests. The slice as a whole is what
+preflight holds to green.
 
 **Green standalone → the slice branches from `main`. Red → it needs a stack,
 and the red run is the evidence for the stack, not something to hide.** Move it

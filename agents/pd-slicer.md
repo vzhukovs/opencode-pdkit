@@ -135,8 +135,8 @@ commit under the subject it was published with, and records which pull requests
 the joined one replaces. It refuses a slice branch that review moved away from
 the change set and prints the command that brings the work back. Run that
 command; do not drop the work. Then `slice verify`, and on a multi-commit slice
-`slice verify --slice <i> --commits` as well. The commit checks are information
-for the person, not a gate.
+`slice verify --slice <i> --commits` as well. The commit checks typecheck each
+prefix; they are information for the person, not a gate.
 
 ## The whole pass is yours
 

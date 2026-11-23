@@ -63,7 +63,8 @@ pass of an earlier run of this issue on the same tree — a squash or an amended
 message makes a new commit, not a new tree — when that run had nothing
 uncommitted, covered the same scripts, and nothing tracked has changed since;
 the summary names the commit and the time. A red result is never taken: the
-scripts run again, and so they do after any change to the code.
+scripts run again, and so they do after any change to the code. A green `slice
+verify` of the same tree counts the same way, and the summary names it.
 
 ## Next
 
