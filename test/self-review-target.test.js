@@ -192,6 +192,26 @@ describe('pdkit self-review target and the grep', () => {
     assert.deepEqual(await readJournal({ issue: GREPPED, event: EVENTS.started }, { home }), [], 'the refused round wrote nothing');
   });
 
+  // The rule against comments is the plugin's own, stricter than section 4,
+  // so the refusal names the file that made it strict rather than sending the
+  // reader to a section that only asks for useless comments to go.
+  test('refuses a comment, and names the file that made the rule strict', async () => {
+    const sha = await spec(["test('the card', () => {", '  // keep in sync with the list', '  expect(cards).toEqual([]);', '});'], 'test(renderer): a note');
+
+    const refused = await inGrep('self-review', 'target', '--issue', String(GREPPED));
+    assert.equal(refused.code, 1);
+    assert.match(refused.stderr, new RegExp(`^pdkit self-review target: maintainer-rules fails on ${sha.slice(0, 8)}: a comment ×1 \\(§4\\)\\. `));
+    assert.match(
+      refused.stderr,
+      /^ {2}a comment — §4, made strict by agents\/pd-implementer\.md\n {4}packages\/renderer\/src\/lib\/Card\.spec\.ts: \/\/ keep in sync with the list$/m,
+    );
+    assert.match(
+      refused.stderr,
+      /Each is a rule with no exception \(knowledge\/maintainer-rules\.md, the section named; the plugin's own where a file made it strict\): fix the code, commit it, and run pdkit self-review target again/,
+    );
+    assert.deepEqual(await readJournal({ issue: GREPPED, event: EVENTS.started }, { home }), [], 'the refused round wrote nothing');
+  });
+
   test('prints what the grep leaves to the axes, and starts the round', async () => {
     const sha = await spec(["test('the card', () => {", "  const images = [{ Id: '1' } as ImageInfo];", '});'], 'test(renderer): a fixture');
 

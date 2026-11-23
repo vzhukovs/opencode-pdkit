@@ -16,6 +16,17 @@ and their links go into the repository they were released from.
 
 ### Changed
 
+- **`maintainer-rules` fails on a comment the branch adds**, in any code file
+  of the repository: `//`, `/* */`, JSDoc, `<!-- -->` in Svelte and HTML, a
+  directive such as `@ts-expect-error` or `svelte-ignore` included. It passes
+  only the comments a rule asks for — a new file's license header, JSDoc in
+  `packages/extension-api`, the `eslint-disable` section 4 allows on an empty
+  interface — and a comment that moves with its code. `pd-implementer` was
+  told to write none; now the check refuses one, and `pdkit self-review
+  target` refuses the round with it. The maintainer only asks that comments
+  adding nothing be removed: this rule is the plugin's own. An open pull
+  request that carries comments fails the check at its next `/pd:pr-sync`.
+
 - **`pdkit self-review target` runs `maintainer-rules` before it starts a
   round, and refuses a commit the grep fails**, for a pull request and for the
   audit's review of the branch alike: what a grep sees is fixed before any
