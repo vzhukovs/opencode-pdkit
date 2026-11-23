@@ -249,6 +249,25 @@ describe('the flow, through the CLI', () => {
     assert.doesNotMatch(t18, /- Tests:/);
   });
 
+  // A task synced and then dropped before the approval keeps no file and no
+  // claim, and its ID is the one the draft would hand out next. The task
+  // counter is what still remembers it.
+  test('the draft does not hand out again the ID of a task dropped before approval', async () => {
+    await mkdir(file('tasks'), { recursive: true });
+    await writeFile(file('tasks', 'T17.md'), `# T17: a dropped task\n\n- Issue: ${ISSUE}\n- Satisfies: R1\n\n## Owns\n- tests/playwright/src/dropped.ts\n`);
+    assert.equal((await pdkit('task', 'sync', '--issue', String(ISSUE))).code, 0);
+    await rm(file('tasks', 'T17.md'));
+    const synced = await pdkit('task', 'sync', '--issue', String(ISSUE));
+    assert.match(synced.stdout, /^T17 {2}no task file: dropped from the plan before approval — owns nothing$/m);
+
+    assert.equal((await stopT11({ ...FINDING, affects: ['T16'] })).code, 0);
+    const drafted = await pdkit('amendment', 'draft', '--issue', String(ISSUE));
+    assert.equal(drafted.code, 0, drafted.stderr);
+    const { slices } = JSON.parse(drafted.stdout);
+    assert.match(slices, /^### T18 \(replaces T11\): runner option$/m);
+    assert.match(slices, /^### T19 \(replaces T16\): product\.json helper$/m);
+  });
+
   test('a cleared report frees its tasks, and needs a reason', async () => {
     assert.equal((await stopT11({ ...FINDING, affects: ['T16'] })).code, 0);
     const bare = await pdkit('task', 'clear', '--issue', String(ISSUE), '--report', 'T11-1');

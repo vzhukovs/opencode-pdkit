@@ -31,7 +31,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { amendmentOutcomes, describeSynced, readAmendments, syncTasks, withdrawalFor, withdrawnMessage } from '../lib/amendment.js';
-import { transition, withdrawTask } from '../lib/state.js';
+import { read as readState, transition, withdrawTask } from '../lib/state.js';
 
 const ISSUE = 18915;
 
@@ -98,6 +98,10 @@ describe('describeSynced', () => {
     assert.equal(describeSynced({ task: 'T2', owns: [], withdrawn: { amendment: 'A1', replacedBy: ['T5'] } }), 'T2  withdrawn by A1 — owns nothing');
     assert.equal(describeSynced({ task: 'T2', owns: [], withdrawn: { amendment: null, replacedBy: [] } }), 'T2  withdrawn — owns nothing');
   });
+
+  test('a task whose file is gone says it was dropped, and owns nothing', () => {
+    assert.equal(describeSynced({ task: 'T4', owns: [], withdrawn: null, dropped: true }), 'T4  no task file: dropped from the plan before approval — owns nothing');
+  });
 });
 
 describe('withdrawnMessage', () => {
@@ -151,6 +155,23 @@ describe('reading off disk', () => {
 
   test('syncTasks with no tasks directory is null, not an empty sync', async () => {
     assert.equal(await syncTasks(ISSUE, home), null);
+  });
+
+  // A draft had T4, its tasks were synced, and the plan was rewritten without
+  // it. A file whose heading does not parse is still a task, and keeps its claim.
+  test('syncTasks forgets a task whose file is gone, before the approval', async () => {
+    const task = (id, owns) => `# ${id}: a task\n\n- Issue: ${ISSUE}\n- Satisfies: R1\n\n## Owns\n- ${owns}\n`;
+    await mkdir(issueFile('tasks'), { recursive: true });
+    await writeFile(issueFile('tasks', 'T1.md'), task('T1', 'src/a.ts'));
+    await writeFile(issueFile('tasks', 'T4.md'), task('T4', 'src/registry.ts'));
+    await writeFile(issueFile('tasks', 'T5.md'), task('T5', 'src/b.ts'));
+    await syncTasks(ISSUE, home);
+    await rm(issueFile('tasks', 'T4.md'));
+    await writeFile(issueFile('tasks', 'T5.md'), 'not a task heading\n');
+
+    const synced = await syncTasks(ISSUE, home);
+    assert.deepEqual(synced?.map(describeSynced), ['T1  src/a.ts', 'T4  no task file: dropped from the plan before approval — owns nothing']);
+    assert.deepEqual(Object.keys((await readState(ISSUE, { home })).owns), ['T1', 'T5']);
   });
 
   test('withdrawalFor: neither the record nor the file says so', async () => {

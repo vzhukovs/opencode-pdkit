@@ -41,6 +41,7 @@ import {
   amendRequirements,
   amendedRequirements,
   canTransition,
+  dropTasks,
   exists,
   freezeRequirements,
   nextSkill,
@@ -468,6 +469,31 @@ describe('allocation', () => {
   test('owns is recorded per task', async () => {
     await setOwns(303, 'T1', ['packages/main/src/a.ts'], { home });
     assert.deepEqual((await read(303, { home })).owns.T1, ['packages/main/src/a.ts']);
+  });
+
+  // A draft synced T4, a revision deleted it, and its claim stayed for the
+  // rest of the cycle: self-review named T4 as an owner of a file another
+  // task had. The claim was also the last trace of the ID, so the counter
+  // takes it over.
+  test('a task dropped before the approval loses its files, and its ID stays spent', async () => {
+    await transition(307, 'triaged', { home, route: 'standard' });
+    await setOwns(307, 'T1', ['packages/main/src/a.ts'], { home });
+    await setOwns(307, 'T4', ['packages/main/src/b.ts'], { home });
+
+    assert.deepEqual(await dropTasks(307, ['T4', 'T9'], { home }), { dropped: ['T4'] });
+    const record = await read(307, { home });
+    assert.deepEqual(record.owns, { T1: ['packages/main/src/a.ts'] });
+    assert.deepEqual(await allocateCounter(307, 'task', { home }), { ok: true, value: 5 });
+    assert.deepEqual(await dropTasks(307, ['T4'], { home }), { dropped: [] });
+  });
+
+  test('after the approval nothing is dropped: a task leaves the plan by withdrawal', async () => {
+    await setOwns(308, 'T2', ['packages/main/src/c.ts'], { home });
+    const record = await read(308, { home });
+    await writeFile(join(home, 'issues', '308', 'state.json'), JSON.stringify({ ...record, state: 'plan-approved' }));
+
+    assert.deepEqual(await dropTasks(308, ['T2'], { home }), { dropped: [] });
+    assert.deepEqual((await read(308, { home })).owns, { T2: ['packages/main/src/c.ts'] });
   });
 });
 

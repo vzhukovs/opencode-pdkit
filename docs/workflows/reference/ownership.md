@@ -16,6 +16,12 @@ pdkit task stop
 task, and the hook allows every write while saying so — which reads as nothing
 having happened.
 
+It also lets go. A task the plan dropped before its approval, its file deleted
+the way `/pd:plan` drops one, loses its ownership at the next `task sync`, which
+says so on a line of its own; its ID stays spent, and is not handed out again.
+After the approval a task leaves the plan only by withdrawal, through an
+amendment, and `task sync` drops nothing.
+
 Two allowances are deliberate. With no active task nothing is constrained: the rule
 belongs to executing a planned task, not to having the plugin installed. And with a
 task whose ownership was never synced, the write goes through with a message naming

@@ -28,6 +28,17 @@ and their links go into the repository they were released from.
   say that the last round's decisions had not reached the plan. Only the
   entries since the last reset count now, as they already did for
   `pdkit plan reviewed`.
+- **A task dropped from a plan before its approval kept its files.**
+  `pdkit task sync` recorded what each task file owns and never let go of a
+  task whose file had been deleted, which is how a draft or a revision drops
+  one. The plan check and the write hook were not misled, since they read the
+  plan and the running task, but `pdkit self-review` and the mapping of review
+  threads named the dropped task as an owner beside the task that has the file
+  now. Sync now forgets such a task while the issue is `triaged` or `planned`,
+  says so on a line of its own, and moves the task counter past its ID, so
+  that neither `pdkit ids task` nor `pdkit amendment draft` hands the ID out
+  again; the draft reads the counter for that. After the approval sync drops
+  nothing: a task leaves the plan by withdrawal.
 
 ## [0.17.0] - 2026-11-23
 
