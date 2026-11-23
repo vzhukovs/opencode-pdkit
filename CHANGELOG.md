@@ -16,6 +16,28 @@ and their links go into the repository they were released from.
 
 ### Changed
 
+- **`pdkit self-review target` runs `maintainer-rules` before it starts a
+  round, and refuses a commit the grep fails**, for a pull request and for the
+  audit's review of the branch alike: what a grep sees is fixed before any
+  review axis reads the code, and no round is spent on it. It names the task
+  that owns each failing line, and prints the warnings — rules with a
+  condition of their own — for the axes to rule on. `/pd:audit` no longer runs
+  the check as a step of its own before it.
+- **`maintainer-rules` holds unit specs to two more of the maintainer's
+  rules**: a cast of a value (`card as HTMLElement`, `icon as never`) and a
+  typed `Mock` (`let stats: Mock`, `: MockInstance<…>`, `as Mock`) fail —
+  `assert()`, `vi.mocked()` and `vi.fn<…>()` say the same with a check — and a
+  cast of an object or array literal, a fixture, warns, for the review to
+  judge. `as const`, renamed imports and casts in production code are left
+  alone.
+- **Preflight tests a tree once.** `tests`, `lint`, `typecheck` and `schemas`
+  take the pass of an earlier run of the issue on the same tree — after a
+  squash or an amended message — when that run had nothing uncommitted and
+  covered the same scripts, and say whose pass it was; a red result is always
+  run again. `preflight.json` records each run's tree and the scripts each
+  check ran; runs recorded before have neither, and their scripts run as
+  before.
+
 - **`/pd:audit` reviews the whole branch once, before it is cut into pull
   requests.** The four review axes and the synthesis read it against every
   section of the maintainer's rules — `pdkit self-review target --audit`

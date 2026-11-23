@@ -12,7 +12,9 @@ reports and, where a failure is unambiguous, offers to fix it.
 ## Steps
 
 1. `pdkit preflight <issue>` — the full set. It runs the repository's real
-   test, lint and typecheck scripts, so it takes minutes on podman-desktop.
+   test, lint and typecheck scripts, so it takes minutes on podman-desktop —
+   unless a run of this issue already passed them on the same tree, and then
+   the report names that run.
 2. Once a PR body exists: `pdkit preflight <issue> --body-only --body <file>`,
    or `--body-from-pr <k>` when the pull request is already open and its body
    on GitHub is the one to judge. Eight checks read the body, and re-running the whole suite to re-read a
@@ -55,6 +57,13 @@ blocks is failing, and the four that read the pull request body have seen one.
 So the two passes are not ceremony. The first, without a body, leaves those four
 having judged nothing; `--body-only --body <file>` is what completes them. Until
 it does, the transition refuses and the gate cannot open.
+
+**A tree is tested once.** `tests`, `lint`, `typecheck` and `schemas` take the
+pass of an earlier run of this issue on the same tree — a squash or an amended
+message makes a new commit, not a new tree — when that run had nothing
+uncommitted, covered the same scripts, and nothing tracked has changed since;
+the summary names the commit and the time. A red result is never taken: the
+scripts run again, and so they do after any change to the code.
 
 ## Next
 

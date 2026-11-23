@@ -50,9 +50,11 @@ merged together." Closing those is `/pd:pr-sync`'s job, after this one is open.
    just created. This surprises everybody exactly once.
 
 3. **Preflight, pass one.** `pdkit preflight <n>`. Runs the repository's real
-   test, lint and typecheck scripts — minutes, not seconds. Red stops
-   everything. Note what `ci-blind-spots` reports: it decides whether `Notes
-   for reviewers` is mandatory.
+   test, lint and typecheck scripts — minutes, not seconds, unless a run of
+   this issue already passed them on the same tree: the squash of step 2 makes
+   a new commit, not a new tree, and the report names the run it took. Red
+   stops everything. Note what `ci-blind-spots` reports: it decides whether
+   `Notes for reviewers` is mandatory.
 
    `maintainer-rules` fails on a rule from
    `${CLAUDE_PLUGIN_ROOT}/knowledge/maintainer-rules.md` that has no
@@ -120,15 +122,19 @@ merged together." Closing those is `/pd:pr-sync`'s job, after this one is open.
    ```
 
    It prints the diff, the commit that preflight will check and the triage
-   record, and starts a round. Then:
+   record, and starts a round. Before the round it runs `maintainer-rules` on
+   that commit and refuses one the grep fails: what a grep sees is fixed
+   before any axis reads the code, by an implementer, as an `issue:` is below.
+   A warning is a rule with a condition of its own; `target` prints its lines
+   for the axes. Then:
 
    - the four `pd-review-*` axes, in parallel. Each gets what `target`
-     printed, as it printed it — the diff command, the changed files and the
-     triage record, `issue.md`, not the issue on GitHub: its `[operator]`
-     lines and `Not in this PR` are the scope this pull request was cut to —
-     with the title and the body file, and is told this is our own pull
-     request before publishing, so there are no threads. Together they cover
-     all twelve sections of the rules;
+     printed, as it printed it — the diff command, the changed files, the
+     grep's warnings and the triage record, `issue.md`, not the issue on
+     GitHub: its `[operator]` lines and `Not in this PR` are the scope this
+     pull request was cut to — with the title and the body file, and is told
+     this is our own pull request before publishing, so there are no threads.
+     Together they cover all twelve sections of the rules;
    - wait for all four axis reports, then `pd-review-synth` on the four
      reports and the same triage record. It calibrates as the maintainer's
      agent does and ends with the findings as JSON;

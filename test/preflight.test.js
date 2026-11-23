@@ -44,6 +44,7 @@ import * as ids from '../lib/ids.js';
 import * as validation from '../lib/validation.js';
 import { BODY_DEPENDENT, BODY_NOT_DRAFTED, CHECK_IDS, format, loadChecks, prepare, run, skipForBody, waitingForBody } from '../lib/preflight/index.js';
 import * as pr from '../lib/pr.js';
+import * as preflightRecord from '../lib/preflight/record.js';
 import * as slice from '../lib/slice.js';
 import * as state from '../lib/state.js';
 import { staleCopyright } from '../lib/preflight/checks/maintainer-rules.js';
@@ -1176,6 +1177,110 @@ describe('maintainer-rules', () => {
     assert.deepEqual(labels(MAIN, '// eslint-disable-next-line @typescript-eslint/no-explicit-any'), ['eslint-disable']);
   });
 
+  // Section 4 holds no `as X` without a runtime check, and in a unit spec the
+  // check is always there to be had: assert() narrows, vi.mocked() types a
+  // mock. A cast of a literal is a fixture written short, which the
+  // calibration calls a test-only shortcut, a nit unless it empties the test,
+  // so it is the review's call. A typed Mock always has vi.mocked() or
+  // vi.fn<…>() to say the same.
+  test('a cast of a value and a typed Mock break a rule in a unit spec; a cast of a literal is judged', async () => {
+    const { scan } = await import('../lib/preflight/checks/maintainer-rules.js');
+    const hits = (file, line) => scan(file, [line], 2026).map((hit) => `${hit.strict ? 'strict' : 'judged'} ${hit.label}`);
+    const SPEC_FILE = 'packages/renderer/src/lib/image/Card.spec.ts';
+    const VALUE = 'strict as <Type> on a value';
+    const LITERAL = 'judged as <Type> on an object or array literal';
+    const MOCK = 'strict a typed Mock';
+
+    // A cast of a value.
+    assert.deepEqual(hits(SPEC_FILE, 'const card = defaultCard as HTMLElement;'), [VALUE]);
+    assert.deepEqual(hits(SPEC_FILE, "expect((input as HTMLInputElement).value).toBe('');"), [VALUE]);
+    assert.deepEqual(hits(SPEC_FILE, 'vi.mocked(createFromPath).mockReturnValue(icon as never);'), [VALUE]);
+    assert.deepEqual(hits(SPEC_FILE, 'const first = items[0] as ImageInfo;'), [VALUE]);
+    assert.deepEqual(hits(SPEC_FILE, 'const options = registry.getOptions() as RequestInit;'), [VALUE]);
+    assert.deepEqual(hits(SPEC_FILE, 'render(NavItem, { meta: options.meta as TinroRouteMeta });'), [VALUE]);
+    assert.deepEqual(hits('packages/main/src/a.test.ts', 'const port = (server.address() as AddressInfo).port;'), [VALUE]);
+
+    // A cast of a literal: a fixture.
+    assert.deepEqual(hits(SPEC_FILE, '} as ImageInfoUI;'), [LITERAL]);
+    assert.deepEqual(hits(SPEC_FILE, "containers.set([{ imageId: 'b' } as ContainerInfoUI]);"), [LITERAL]);
+    assert.deepEqual(hits(SPEC_FILE, '] as ImageInfo[];'), [LITERAL]);
+    assert.deepEqual(hits(SPEC_FILE, 'return [first, second] as Pair;'), [LITERAL]);
+
+    // A typed Mock, reported once where it is a cast as well.
+    assert.deepEqual(hits(SPEC_FILE, 'let statsMock: Mock;'), [MOCK]);
+    assert.deepEqual(hits(SPEC_FILE, 'const onPull: Mock<(name: string) => void> = vi.fn();'), [MOCK]);
+    assert.deepEqual(hits(SPEC_FILE, 'let warn: MockInstance<typeof console.warn>;'), [MOCK]);
+    assert.deepEqual(hits(SPEC_FILE, 'function stub(): MockedFunction<typeof fetch> {'), [MOCK]);
+    assert.deepEqual(hits(SPEC_FILE, 'const calls = (window.startReceiveLogs as Mock).mock.calls;'), [MOCK]);
+
+    // Left alone: what asserts no type, what renames, words, and the casts
+    // that have a pattern of their own.
+    assert.deepEqual(hits(SPEC_FILE, "const STATUSES = ['started', 'stopped'] as const;"), []);
+    assert.deepEqual(hits(SPEC_FILE, "import { render as renderComponent } from '@testing-library/svelte';"), []);
+    assert.deepEqual(hits(SPEC_FILE, "import * as fs from 'node:fs';"), []);
+    assert.deepEqual(hits(SPEC_FILE, '  render as renderComponent,'), []);
+    assert.deepEqual(hits(SPEC_FILE, 'export { helper as helperForTests };'), []);
+    assert.deepEqual(hits(SPEC_FILE, "test('shows the card as selected', async () => {"), []);
+    assert.deepEqual(hits(SPEC_FILE, '// a match on one tag keeps the others, as the raw object did'), []);
+    assert.deepEqual(hits(SPEC_FILE, ' * renders the list as Image rows'), []);
+    assert.deepEqual(hits(SPEC_FILE, 'type Getters<T> = { [K in keyof T as Capitalize<K & string>]: () => T[K] };'), []);
+    assert.deepEqual(hits(SPEC_FILE, 'const onPull = vi.fn<(name: string) => void>();'), []);
+    assert.deepEqual(hits(SPEC_FILE, 'const provider: MockProvider = new MockProvider();'), []);
+    assert.deepEqual(hits(SPEC_FILE, '} as unknown as ProviderInfo;'), ['strict as unknown as']);
+    assert.deepEqual(hits(SPEC_FILE, 'const x = y as any;'), ['strict any']);
+    // Production code may cast after a check a grep cannot see, and a
+    // Playwright spec keeps conventions of its own.
+    assert.deepEqual(hits('packages/main/src/config.ts', 'const config = JSON.parse(text) as Config;'), []);
+    assert.deepEqual(hits('packages/renderer/src/lib/Input.svelte', 'const value = (event.target as HTMLInputElement).value;'), []);
+    assert.deepEqual(hits('tests/playwright/src/flow.spec.ts', 'const card = locator as HTMLElement;'), []);
+    assert.deepEqual(hits('tests/playwright/src/flow.spec.ts', 'let stats: Mock;'), []);
+  });
+
+  test('a cast of a value or a typed Mock fails the check, and a cast of a fixture only warns', async () => {
+    const root = await initRepo('pdkit-maintainer-casts-');
+    try {
+      await writeFiles(root, { 'README.md': 'base\n' });
+      await commitAll(root, 'chore: base');
+      await gitIn(['checkout', '-q', '-b', 'work'], root);
+      await writeFiles(root, { 'packages/renderer/src/lib/Card.spec.ts': "const images = [{ Id: '1' } as ImageInfo];\n" });
+      await commitAll(root, 'test(renderer): a fixture');
+
+      const { run: check } = await import('../lib/preflight/checks/maintainer-rules.js');
+      const fixture = await check({ base: 'main', ref: 'HEAD', repoRoot: root });
+      assert.equal(fixture.status, 'warn');
+      assert.equal(fixture.summary, 'to judge: as <Type> on an object or array literal ×1 (§4)');
+      assert.deepEqual(fixture.hits, [
+        {
+          label: 'as <Type> on an object or array literal',
+          section: 4,
+          strict: false,
+          path: 'packages/renderer/src/lib/Card.spec.ts',
+          line: "const images = [{ Id: '1' } as ImageInfo];",
+        },
+      ]);
+
+      await writeFiles(root, {
+        'packages/renderer/src/lib/Card.spec.ts': "const images = [{ Id: '1' } as ImageInfo];\nlet stats: Mock;\nconst card = found as HTMLElement;\n",
+      });
+      await commitAll(root, 'test(renderer): casts');
+      const casts = await check({ base: 'main', ref: 'HEAD', repoRoot: root });
+      assert.equal(casts.status, 'fail');
+      assert.match(casts.summary, /a typed Mock ×1 \(§2\)/);
+      assert.match(casts.summary, /as <Type> on a value ×1 \(§4\)/);
+      assert.match(casts.summary, /; to judge: as <Type> on an object or array literal ×1 \(§4\)$/);
+      assert.deepEqual(
+        casts.hits.map((hit) => [hit.label, hit.strict]),
+        [
+          ['as <Type> on an object or array literal', false],
+          ['a typed Mock', true],
+          ['as <Type> on a value', true],
+        ],
+      );
+    } finally {
+      await cleanup(root);
+    }
+  });
+
   test('a copyright line is stale when it is a range or not this year', () => {
     assert.equal(staleCopyright(' * Copyright (C) 2026 Red Hat, Inc.', 2026), false);
     assert.equal(staleCopyright(' * Copyright (C) 2024 Red Hat, Inc.', 2026), true);
@@ -1892,5 +1997,220 @@ describe('the validation checks', () => {
 
     assert.equal(result.status, 'pass');
     assert.match(result.summary, /none needing anything special/);
+  });
+});
+
+// A squash, or a reworded message, makes a new commit and keeps the tree, and
+// the scripts measure the tree. On the quickfix route the same tree went
+// through the whole of preflight three times: at the end of /pd:quickfix, in
+// /pd:preflight, and in /pd:pr after its squash. A pass is taken from an
+// earlier run on the same tree, naming the run that measured it; a failure
+// never is.
+describe('a tree preflight has already tested', () => {
+  const ISSUE = 5401;
+  const SCRIPTED = ['tests', 'lint', 'typecheck', 'schemas'];
+  let root;
+  let treeHome;
+  let bin;
+
+  /** The scripts that ran, in order, as the counter wrote them down. */
+  const ran = async () => (await readFile(join(bin, 'runs.txt'), 'utf8').catch(() => '')).split('\n').filter(Boolean);
+
+  /** One pass the way `pdkit preflight` makes it: run the checks, then record the run. */
+  async function pass(only = ['working-tree', ...SCRIPTED]) {
+    const context = await prepare({ issue: ISSUE, repoRoot: root, home: treeHome });
+    const report = await run(context, await loadChecks(only));
+    await preflightRecord.write({ issue: ISSUE, report, context, bodyDependent: BODY_DEPENDENT, home: treeHome });
+    return { context, result: (id) => report.results.find((result) => result.id === id) };
+  }
+
+  /** A new commit holding the same tree: what a squash or a reworded message leaves. */
+  const reword = (message) => gitIn(['commit', '--amend', '-q', '-m', message], root);
+
+  /** A change to the code: the next tree. */
+  async function change(n) {
+    await writeFiles(root, { 'packages/main/src/added.ts': `export const added = ${n};\n` });
+    await commitAll(root, `feat(main): add, take ${n}`);
+  }
+
+  /** Rewrite the record as an earlier version, or another scope, would have left it. */
+  async function rewriteRecord(edit) {
+    const file = join(treeHome, 'issues', String(ISSUE), 'preflight.json');
+    const record = JSON.parse(await readFile(file, 'utf8'));
+    edit(record);
+    await writeFile(file, `${JSON.stringify(record, null, 2)}\n`);
+  }
+
+  before(async () => {
+    root = await initRepo('pdkit-preflight-tree-');
+    treeHome = await mkdtemp(join(tmpdir(), 'pdkit-preflight-tree-home-'));
+    bin = await mkdtemp(join(tmpdir(), 'pdkit-preflight-tree-bin-'));
+    // Each script writes its name down, and fails while a file named after it
+    // stands beside the counter.
+    await writeFile(
+      join(bin, 'count.mjs'),
+      [
+        "import { appendFileSync, existsSync } from 'node:fs';",
+        'const name = process.argv[2];',
+        "appendFileSync(new URL('./runs.txt', import.meta.url), `${name}\\n`);",
+        "if (existsSync(new URL(`./fail-${name.replaceAll(':', '-')}`, import.meta.url))) process.exit(1);",
+        '',
+      ].join('\n'),
+    );
+    const script = (name) => `node "${join(bin, 'count.mjs')}" ${name}`;
+    await writeFiles(root, {
+      'package.json': JSON.stringify(
+        {
+          name: 'root',
+          scripts: {
+            'lint:check': script('lint:check'),
+            'test:unit': script('test:unit'),
+            typecheck: script('typecheck'),
+            'generate:schemas': script('generate:schemas'),
+          },
+        },
+        null,
+        2,
+      ),
+      '.pdkit.yaml': 'repo:\n  package_manager: npm\n',
+      'packages/main/src/base.ts': 'export const base = 1;\n',
+    });
+    await commitAll(root, 'chore: base');
+    await gitIn(['checkout', '-q', '-b', `DESKTOP-${ISSUE}/work`], root);
+    await change(1);
+  });
+
+  after(async () => {
+    await cleanup(root, treeHome, bin);
+  });
+
+  test('a new commit on the same tree is not tested again, and the report names the run that tested it', async () => {
+    const first = await pass();
+    for (const id of SCRIPTED) assert.equal(first.result(id).status, 'pass', `${id}: ${first.result(id).summary}`);
+    const measured = await ran();
+    assert.deepEqual(measured.toSorted(), ['generate:schemas', 'lint:check', 'test:unit', 'typecheck']);
+
+    await reword('feat(main): add, reworded');
+    const second = await pass();
+    assert.notEqual(second.context.headSha, first.context.headSha);
+    assert.equal(second.context.tree, first.context.tree);
+    for (const id of SCRIPTED) {
+      assert.equal(second.result(id).status, 'pass', id);
+      assert.match(second.result(id).summary, new RegExp(`passed on ${first.context.headSha.slice(0, 11)} at \\S+, the same tree, not run again$`), id);
+    }
+    assert.deepEqual(await ran(), measured, 'no script ran a second time');
+
+    // Taken twice over, it still names the run that measured it.
+    await reword('feat(main): add, reworded again');
+    const third = await pass(['working-tree', 'tests']);
+    assert.match(third.result('tests').summary, new RegExp(`^test:unit — passed on ${first.context.headSha.slice(0, 11)} at `));
+    assert.deepEqual(await ran(), measured);
+
+    const { runs } = await preflightRecord.read(ISSUE, { home: treeHome });
+    assert.equal(runs[0].tree, first.context.tree);
+    assert.deepEqual(runs[0].results.find((result) => result.id === 'tests').scripts, ['test:unit']);
+    assert.deepEqual(runs[0].results.find((result) => result.id === 'lint').scripts, ['lint:check']);
+    assert.deepEqual(runs.at(-1).results.find((result) => result.id === 'tests').scripts, ['test:unit']);
+  });
+
+  test('a failure is never taken, and a change to the code is tested again', async () => {
+    const before = (await ran()).length;
+    await change(2);
+    await writeFile(join(bin, 'fail-test-unit'), '');
+    let red;
+    try {
+      red = await pass();
+    } finally {
+      await rm(join(bin, 'fail-test-unit'));
+    }
+    assert.equal(red.result('tests').status, 'fail');
+    assert.equal((await ran()).length, before + 4, 'a new tree runs every script');
+
+    await reword('feat(main): add, take 2, reworded');
+    const again = await pass(['working-tree', 'tests', 'lint']);
+    assert.equal(again.result('tests').status, 'pass');
+    assert.doesNotMatch(again.result('tests').summary, /not run again/);
+    assert.match(again.result('lint').summary, /the same tree, not run again$/, 'lint passed on this tree in the red run');
+    assert.deepEqual((await ran()).slice(before + 4), ['test:unit']);
+  });
+
+  test('a run with something uncommitted is not taken, nor a pass while something is', async () => {
+    await change(3);
+    const path = join(root, 'packages/main/src/base.ts');
+    await writeFile(path, 'export const base = 2;\n');
+    let dirty;
+    try {
+      dirty = await pass(['working-tree', 'tests']);
+    } finally {
+      await gitIn(['checkout', '--', 'packages/main/src/base.ts'], root);
+    }
+    assert.equal(dirty.result('working-tree').status, 'fail');
+    assert.equal(dirty.result('tests').status, 'pass');
+
+    const before = (await ran()).length;
+    const clean = await pass(['working-tree', 'tests']);
+    assert.doesNotMatch(clean.result('tests').summary, /not run again/, 'what the dirty run measured was not this tree');
+    assert.equal((await ran()).length, before + 1);
+
+    await writeFile(path, 'export const base = 3;\n');
+    try {
+      const now = await pass(['working-tree', 'tests']);
+      assert.doesNotMatch(now.result('tests').summary, /not run again/, 'the scripts would run what no commit holds');
+      assert.equal((await ran()).length, before + 2);
+    } finally {
+      await gitIn(['checkout', '--', 'packages/main/src/base.ts'], root);
+    }
+  });
+
+  test('a run recorded before trees were is not taken', async () => {
+    await change(4);
+    await pass(['working-tree', 'tests']);
+    await rewriteRecord((record) => {
+      for (const entry of record.runs) {
+        delete entry.tree;
+        for (const result of entry.results) delete result.scripts;
+      }
+    });
+
+    const before = (await ran()).length;
+    await reword('feat(main): add, take 4, reworded');
+    const again = await pass(['working-tree', 'tests']);
+    assert.equal(again.result('tests').status, 'pass');
+    assert.doesNotMatch(again.result('tests').summary, /not run again/);
+    assert.equal((await ran()).length, before + 1);
+  });
+
+  test('a pass of other scripts than this run needs is not taken', async () => {
+    await change(5);
+    await pass(['working-tree', 'tests']);
+    await rewriteRecord((record) => {
+      record.runs.at(-1).results.find((result) => result.id === 'tests').scripts = ['test:main'];
+    });
+
+    const before = (await ran()).length;
+    await reword('feat(main): add, take 5, reworded');
+    const again = await pass(['working-tree', 'tests']);
+    assert.doesNotMatch(again.result('tests').summary, /not run again/);
+    assert.equal((await ran()).length, before + 1);
+  });
+
+  test('a later red result stands against an earlier pass, even from a run that did not say the tree was clean', async () => {
+    await change(6);
+    await pass(['working-tree', 'tests']);
+    await rewriteRecord((record) => {
+      const later = structuredClone(record.runs.at(-1));
+      later.at = new Date().toISOString();
+      later.results = later.results.filter((result) => result.id !== 'working-tree');
+      const tests = later.results.find((result) => result.id === 'tests');
+      tests.status = 'fail';
+      delete tests.scripts;
+      record.runs.push(later);
+    });
+
+    const before = (await ran()).length;
+    await reword('feat(main): add, take 6, reworded');
+    const again = await pass(['working-tree', 'tests']);
+    assert.doesNotMatch(again.result('tests').summary, /not run again/);
+    assert.equal((await ran()).length, before + 1);
   });
 });

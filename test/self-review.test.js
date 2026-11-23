@@ -52,6 +52,8 @@ const THIRD = 'c'.repeat(40);
 const FOURTH = 'd'.repeat(40);
 const BODY = '### What does this PR do?\n\nFixes the thing.\n';
 const AXES = [...selfReview.AXES];
+/** What maintainer-rules says of a commit no rule a grep sees is broken in. */
+const GREEN = { status: 'pass', summary: 'none of the greppable maintainer rules hit' };
 
 let home;
 
@@ -304,7 +306,7 @@ describe('rounds of the self-review', () => {
   });
 
   test('a round starts where the axes start: three commits targeted and never recorded stop the fourth', async () => {
-    const start = (sha) => selfReview.startRound({ issue: ISSUE, sha, home });
+    const start = (sha) => selfReview.startRound({ issue: ISSUE, sha, grep: GREEN, home });
 
     assert.equal((await start(SHA)).ok, true);
     assert.equal((await start(OTHER)).ok, true);
@@ -327,7 +329,7 @@ describe('rounds of the self-review', () => {
   });
 
   test('starting the same commit again is the same round, and its record closes it', async () => {
-    const start = (sha) => selfReview.startRound({ issue: ISSUE, sha, home });
+    const start = (sha) => selfReview.startRound({ issue: ISSUE, sha, grep: GREEN, home });
     await start(SHA);
     await start(SHA);
     await open(SHA);
@@ -340,7 +342,7 @@ describe('rounds of the self-review', () => {
   });
 
   test('a clean record after started rounds starts the count over', async () => {
-    const start = (sha) => selfReview.startRound({ issue: ISSUE, sha, home });
+    const start = (sha) => selfReview.startRound({ issue: ISSUE, sha, grep: GREEN, home });
     await start(SHA);
     await start(OTHER);
     await start(THIRD);
@@ -368,6 +370,51 @@ describe('rounds of the self-review', () => {
     assert.equal(result.status, 'fail');
     assert.match(result.remedy, /run the axes on the new commit/);
     assert.doesNotMatch(result.remedy, /stop and ask/i);
+  });
+});
+
+// On a slice two rounds once started without preflight, and the axes spent one
+// of them finding `vi.spyOn` and `afterEach`, which maintainer-rules refuses on
+// a line of grep. A round now starts only on a commit that grep has read and
+// found no rule with no exception broken in.
+describe('the grep before a round', () => {
+  const RED = { status: 'fail', summary: 'vi.spyOn ×1 (§2)' };
+
+  test('a commit the grep fails starts no round, and nothing is written', async () => {
+    const refused = await selfReview.startRound({ issue: ISSUE, sha: SHA, grep: RED, home });
+
+    assert.equal(refused.ok, false);
+    assert.equal(refused.refused, 'grep');
+    assert.equal(
+      refused.error,
+      'maintainer-rules fails on aaaaaaaa: vi.spyOn ×1 (§2). What a grep sees is fixed before any axis reads the code, so no round has started',
+    );
+    assert.deepEqual(await readJournal({ issue: ISSUE }, { home }), []);
+  });
+
+  test('a warning starts the round: rules with a condition of their own are the axes\' to judge', async () => {
+    const started = await selfReview.startRound({ issue: ISSUE, sha: SHA, grep: { status: 'warn', summary: 'to judge: vi.hoisted ×1 (§2)' }, home });
+
+    assert.equal(started.ok, true);
+    assert.equal(started.rounds.rounds, 1);
+  });
+
+  test('a round the grep has not read is refused, for the audit as well', async () => {
+    for (const audit of [false, true]) {
+      const refused = await selfReview.startRound({ issue: ISSUE, audit, sha: SHA, home });
+      assert.equal(refused.ok, false);
+      assert.equal(refused.refused, 'grep');
+      assert.match(refused.error, /^maintainer-rules has not run on aaaaaaaa, and a round starts only on a commit the grep has read$/);
+    }
+    assert.deepEqual(await readJournal({ issue: ISSUE }, { home }), []);
+  });
+
+  test('at the limit the limit is what it says, before anything about the grep', async () => {
+    for (const sha of [SHA, OTHER, THIRD]) await selfReview.startRound({ issue: ISSUE, sha, grep: GREEN, home });
+
+    const refused = await selfReview.startRound({ issue: ISSUE, sha: FOURTH, grep: RED, home });
+    assert.equal(refused.refused, 'limit');
+    assert.match(refused.error, /Stop and ask the person/);
   });
 });
 
@@ -463,7 +510,7 @@ describe('the review of the whole branch, in the audit', () => {
   });
 
   test('writes its own events to the journal', async () => {
-    await selfReview.startRound({ issue: ISSUE, audit: true, sha: SHA, home });
+    await selfReview.startRound({ issue: ISSUE, audit: true, sha: SHA, grep: GREEN, home });
     await reviewed({ findings: [{ label: 'issue', text: 'x' }] });
     await selfReview.continueRounds({ issue: ISSUE, audit: true, reason: 'the plan was amended', home });
 
@@ -480,14 +527,14 @@ describe('the review of the whole branch, in the audit', () => {
   });
 
   test('counts its rounds apart from the pull requests, both ways', async () => {
-    for (const sha of [SHA, OTHER, THIRD]) await selfReview.startRound({ issue: ISSUE, audit: true, sha, home });
+    for (const sha of [SHA, OTHER, THIRD]) await selfReview.startRound({ issue: ISSUE, audit: true, sha, grep: GREEN, home });
 
     const branch = await selfReview.rounds({ issue: ISSUE, audit: true, home });
     assert.deepEqual([branch.rounds, branch.blocked], [3, true]);
     const single = await selfReview.rounds({ issue: ISSUE, home });
     assert.deepEqual([single.rounds, single.blocked], [0, false], 'the audit does not stop the pull request');
 
-    for (const sha of [SHA, OTHER, THIRD]) await selfReview.startRound({ issue: ISSUE, sha, home });
+    for (const sha of [SHA, OTHER, THIRD]) await selfReview.startRound({ issue: ISSUE, sha, grep: GREEN, home });
     await selfReview.continueRounds({ issue: ISSUE, audit: true, reason: 'amended', home });
     assert.equal((await selfReview.rounds({ issue: ISSUE, audit: true, home })).rounds, 0);
     assert.equal((await selfReview.rounds({ issue: ISSUE, home })).rounds, 3, 'a sentence for the audit does not start the pull request over');
@@ -496,7 +543,7 @@ describe('the review of the whole branch, in the audit', () => {
   test('stops at the limit, and says how to go on with --audit', async () => {
     for (const sha of [SHA, OTHER, THIRD]) await reviewed({ sha, findings: [{ label: 'issue', text: 'x' }] });
 
-    const refused = await selfReview.startRound({ issue: ISSUE, audit: true, sha: FOURTH, home });
+    const refused = await selfReview.startRound({ issue: ISSUE, audit: true, sha: FOURTH, grep: GREEN, home });
     assert.equal(refused.ok, false);
     assert.match(refused.error, new RegExp(`pdkit self-review continue --issue ${ISSUE} --audit --reason "`));
 
