@@ -10,7 +10,7 @@ pdkit checkpoint 19818 --phase slice
 pdkit slice join --issue 19818 --slices 1,2,3     one slice, a commit per old one
 pdkit state 19818 --to sliced --reason "review asked for one PR with a commit per layer"
 pdkit slice verify --issue 19818 --all
-pdkit slice verify --issue 19818 --slice 1 --commits     each commit, for information
+pdkit slice verify --issue 19818 --slice 1 --commits     each commit typechecked, for information
 pdkit slice render --issue 19818                                  [you approve]
 /pd:pr 19818                                       a new pull request    [you confirm]
 pdkit pr supersede 19829 --by <new> --body close.md      what would be posted

@@ -60,6 +60,11 @@ Upstream does not accept dead code staged for a future PR.
 the diff that was verified; preflight recomputes it and fails on a mismatch. On a
 materialized branch that doubles as proof the branch is what was verified.
 
+**A tree is built once.** A slice whose tree already passed — same kind of build,
+same command, same preparation — is taken from that run, and verify says so; a red
+one is built again. Preflight takes that run too when the slice's branch has the
+same tree, so a slice's first preflight does not run its scripts again.
+
 If a review fix lands in a slice that others are stacked on:
 
 ```
