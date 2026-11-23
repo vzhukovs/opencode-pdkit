@@ -28,7 +28,7 @@ in the order `CHECK_IDS` in `lib/preflight/index.js` runs them:
 | e2e environment | a test needing an environment CI does not have requires a `Notes for reviewers` entry | ✅ |
 | **validation evidence** | a validation step with no attached artefact is named in `Notes for reviewers`. Skipped on `quickfix` and when `validation.require_evidence: false` | ✅ |
 | debug leftovers | `console.log`, `.only`, `.skip`, `@ts-ignore`, `any` in the diff | ⚠️ warn, listing them |
-| **maintainer rules** | the greppable part of `knowledge/maintainer-rules.md` in the added lines, each pattern scoped to the files its rule covers. **Strict** patterns are rules with no exception: `vi.spyOn`, `Object.defineProperty(window)`, `vi.stubGlobal`, `clearAllMocks`, `afterEach`, a real `setTimeout` sleep and `toBeDefined()` in unit specs; `as unknown as`, `any`, `!`, `eslint-disable` (bar the empty-interface exception section 4 names), `*Sync(`, an empty `catch`, `void` on a promise, `../` imports, built-ins without `node:`; an exported or file-scope function and `app.name` in `packages/main`; `<style>`, `$:`, `tick()` and Node types in renderer code; a hardcoded "Podman Desktop", a hex color in the color registry; a copyright year other than this one. **Judged** patterns are rules with a condition a grep cannot see: a `vi.mock` factory, `vi.hoisted`, `vi.importActual`, `mockImplementation(async () =>`, `sort()`, `await import()` | ✅ on a strict hit; ⚠️ warn on a judged one, which the self-review rules on |
+| **maintainer rules** | the greppable part of `knowledge/maintainer-rules.md` in the added lines, each pattern scoped to the files its rule covers. **Strict** patterns are rules with no exception: `vi.spyOn`, `Object.defineProperty(window)`, `vi.stubGlobal`, `clearAllMocks`, `afterEach`, a real `setTimeout` sleep, `toBeDefined()`, a typed `Mock` (`: Mock`, `: MockInstance<…>`, `as Mock`) and a cast of a value (`card as HTMLElement`; not `as const`) in unit specs; `as unknown as`, `any`, `!`, `eslint-disable` (bar the empty-interface exception section 4 names), `*Sync(`, an empty `catch`, `void` on a promise, `../` imports, built-ins without `node:`; an exported or file-scope function and `app.name` in `packages/main`; `<style>`, `$:`, `tick()` and Node types in renderer code; a hardcoded "Podman Desktop", a hex color in the color registry; a copyright year other than this one. **Judged** patterns are rules with a condition a grep cannot see: a `vi.mock` factory, `vi.hoisted`, `vi.importActual`, `mockImplementation(async () =>`, a cast of an object or array literal in a unit spec (a fixture), `sort()`, `await import()`. `pdkit self-review target` runs this check on the commit it hands the review axes and refuses one it fails, before a round starts | ✅ on a strict hit; ⚠️ warn on a judged one, which the self-review rules on |
 | **self-review** | the four review axes and the synthesis read this commit and this body (`pdkit self-review record`, keyed by slice in `self-review.json`), and nothing they found that upstream's agent rejects a pull request for is open: no `issue:`, no unanswered `question:`. A `nit:`, on new code or old, stays in the record and is counted in the summary, and does not block — upstream's agent accepts a pull request with nits. A review of another commit or another body is a `fail`. After `review.self_review_rounds` commits in a row reviewed without a clean review — a round starts at `pdkit self-review target` — the remedy is to stop and ask the person rather than to run another round. Reads the body | ✅ |
 | CI blind spots | the diff touches build, packaging, platform-specific behavior or the **dependency graph** — CI will not check it; a `Notes for reviewers` entry is required, worded per the area that fired | ✅ |
 
@@ -140,6 +140,20 @@ the tree has no tracked change. The commit says what was verified while the
 scripts run the working tree, which is why a tracked change disqualifies it.
 Verify and preflight back to back had outlived a 600-second timeout, running the
 same scripts on the same commit twice.
+
+**A tree is tested once.** `tests`, `lint`, `typecheck` and `schemas` take the
+pass of an earlier run of the same issue on the same tree — `git rev-parse
+<commit>^{tree}` — when that run's `working-tree` found nothing uncommitted, its
+scripts cover every script the check would run now, and the tree has no tracked
+change. A squash or a reworded message makes a new commit, not a new tree, and
+on the quickfix route the same tree used to go through the whole of preflight
+three times: at the end of `/pd:quickfix`, in `/pd:preflight`, and in `/pd:pr`
+after its squash. The summary names the commit and the time of the run that
+measured the pass. The latest such run on the tree decides, so a failure is
+never taken and a pass a later red run contradicts is not either: the scripts
+run again. Each run in `preflight.json` records its `tree`, and each script
+check's pass the `scripts` it covered; a run recorded before has neither and is
+never taken.
 
 **The environment is not the code.** A script that could not start — exit 127,
 or 9009 on Windows, `pnpm` not on `PATH` — is reported as `could not run: … —

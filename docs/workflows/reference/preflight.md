@@ -5,7 +5,10 @@
 `pdkit preflight <issue>` runs twenty-four checks, and on podman-desktop it takes
 minutes, because it runs the repository's real scripts. Script names are resolved
 from the repository's own `package.json` — there is no `pnpm lint` there, and
-`pnpm test` drags in the e2e suite.
+`pnpm test` drags in the e2e suite. A tree is tested once: after a squash or a
+reworded message, tests, lint, typecheck and schemas take the pass an earlier run
+of the issue made on the same tree, and say whose it was; a failure is always run
+again.
 
 Four results, and the difference between them matters:
 
