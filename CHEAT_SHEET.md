@@ -232,7 +232,7 @@ pdkit validate supersede <Vk> --issue <n> --by <Vn> --reason <t>
                                            # set aside for one that showed the change
 pdkit drift <n>                            # what landed upstream under this work
 pdkit audit <n> --base main                # facts, no verdict
-pdkit self-review target --issue <n> --audit   # the whole branch for the review axes, with the plan and each task's ## Tests
+pdkit self-review target --issue <n> --audit   # the whole branch for the review axes, with the plan and each task's ## Tests; refused while maintainer-rules fails
 pdkit self-review record --issue <n> --audit --findings <f.json>
                                            # no body; names the task that owns each open finding's file
 ```
@@ -360,7 +360,7 @@ pull request body, so on the first pass the ones that need it judge nothing.
 Draft the body, run the self-review on it, then:
 
 ```bash
-pdkit self-review target --issue <n> [--slice <i>]  # what the axes read: diff, commit, triage record; starts a round
+pdkit self-review target --issue <n> [--slice <i>]  # what the axes read: diff, commit, triage record; refused while maintainer-rules fails, else starts a round
 pdkit self-review record --issue <n> [--slice <i>] --findings <f.json> --body <file>
 pdkit self-review continue --issue <n> --reason "<why>"  # past review.self_review_rounds: your sentence
 pdkit preflight <n> --body-only --body <file>

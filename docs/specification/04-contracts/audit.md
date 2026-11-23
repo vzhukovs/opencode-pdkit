@@ -33,12 +33,13 @@ greppable.
 ## The review of the whole branch
 
 What the maintainer's rules say about the added lines is the review's, not the
-auditor's. The greppable part goes first: `pdkit preflight <n> --only
-maintainer-rules`, whose failures are fixed before any model reads the code.
-Then `pdkit self-review target --issue <n> --audit` prints what the four
+auditor's. `pdkit self-review target --issue <n> --audit` prints what the four
 `pd-review-*` axes read — the diff of the whole branch against its base, the
 commit, the triage record, the plan and the `## Tests` each live task owes — and
-starts a round. `pd-review-synth` merges their reports, and
+starts a round. The greppable part goes first: it runs `maintainer-rules` on that
+commit and refuses one the grep fails, naming the task that owns each line, so a
+failure is fixed before any model reads the code; the lines of a rule with a
+condition of its own are printed for the axes. `pd-review-synth` merges their reports, and
 `pdkit self-review record --issue <n> --audit --findings <f>` keeps the result
 in `self-review.json` under its own key, with no body: bodies are written per
 pull request, and the self-review of each one reads them. Its rounds are counted
