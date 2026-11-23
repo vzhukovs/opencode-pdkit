@@ -14,6 +14,21 @@ and their links go into the repository they were released from.
 
 ## [Unreleased]
 
+### Fixed
+
+- **After `pdkit reset`, a review's decisions were taken as already in the
+  plan.** Review rounds start again at 1 after a reset, but the journal keeps
+  the `plan-revised` entries of the cycle before it, and the check for a
+  waiting revision read those too. As soon as a new round's decisions were
+  written, `pdkit next` and `pdkit state` named the step after the revision
+  instead of `/pd:plan`: another `/pd:plan-review` of the same plan when an A
+  item was accepted, and the approval, "the revision changed nothing in the
+  plan", when only B items were. `pdkit plan revised` said the round was
+  already marked applied and recorded nothing, and the critic's brief did not
+  say that the last round's decisions had not reached the plan. Only the
+  entries since the last reset count now, as they already did for
+  `pdkit plan reviewed`.
+
 ## [0.17.0] - 2026-11-23
 
 ### Upgrading

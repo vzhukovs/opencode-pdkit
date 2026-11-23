@@ -34,6 +34,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import { TASK_PARTS } from '../lib/artefacts.js';
+import { append } from '../lib/journal.js';
 import { markRevised } from '../lib/plan-review.js';
 import { nextContext } from '../lib/plan-revision.js';
 import { INTERFACE_PART, snapshot } from '../lib/plan-rounds.js';
@@ -235,6 +236,21 @@ describe('the step after a revision, read from disk', () => {
     await writeFile(join(dir(), 'plan-review.md'), review('- B1: accepted'));
     const context = await nextContext(/** @type {any} */ (record), { home });
     assert.deepEqual(context, { revision: { round: 1 } });
+  });
+
+  // An earlier cycle revised its own round 1 and was reset. Read across the
+  // reset, that entry made the new round 1 look applied, and the plan the
+  // round read, unchanged, look like a revision that changed nothing: the
+  // approval was named, with the accepted B1 in no plan.
+  test('a round revised before a reset still waits for its revision', async () => {
+    await markRevised(ISSUE, 1, { home });
+    await append({ issue: ISSUE, event: 'reset', detail: 'was plan-approved' }, { home });
+    await snapshot(ISSUE, { home });
+    await writeFile(join(dir(), 'plan-review.md'), review('- B1: accepted'));
+    assert.deepEqual(await next(), {
+      step: `/pd:plan ${ISSUE} — applies the operator decisions of review round 1 from plan-review.md; nothing to paste after it`,
+      because: null,
+    });
   });
 
   test('outside planned, nothing', async () => {

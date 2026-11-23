@@ -218,6 +218,23 @@ describe('the next step from planned', () => {
       assert.deepEqual([(await pending(ISSUE, { home })).pending, (await pending(ISSUE, { home })).round], [true, 2]);
     });
 
+    // Rounds restart at 1 after a reset, and the journal keeps the old cycle's
+    // `plan-revised round-1`. Read across the reset, it marked the new round 1
+    // applied the moment its decisions were written, and the revision that
+    // should have followed was skipped. `pdkit plan revised`, the last step of
+    // that revision, reads the same answer and said the round was already
+    // marked.
+    test("a round revised before a reset is not the new cycle's round", async () => {
+      await markRevised(ISSUE, 1, { home });
+      await append({ issue: ISSUE, event: 'reset', detail: 'was plan-approved' }, { home });
+      await writeFile(join(home, 'issues', String(ISSUE), 'plan-review.md'), '# PLAN REVIEW — round 1\n\n## Operator decisions (round 1)\n- A1: accepted\n');
+      const waiting = await pending(ISSUE, { home });
+      assert.deepEqual([waiting.pending, waiting.round], [true, 1]);
+
+      await markRevised(ISSUE, 1, { home });
+      assert.equal((await pending(ISSUE, { home })).pending, false);
+    });
+
     test('no review file, nothing pending', async () => {
       const found = await pending(ISSUE, { home });
       assert.deepEqual([found.pending, found.round], [false, null]);
