@@ -77,20 +77,23 @@ pdkit self-review target --issue <n> --audit
 ```
 
 It prints the diff of the whole branch against its base, the commit, the
-changed files, the triage record, the plan and each task's `## Tests`, and
-starts a round. First it runs what a grep sees, `maintainer-rules`, on that
-commit. A **fail** is a rule with no exception, and no round starts until it
-is fixed: `target` names the task that owns each line, and step 4 fixes it as
-it fixes a finding. A warning is a rule with a condition of its own; `target`
-prints its lines, and the axes rule on them.
+changed files, the triage record, the plan — its `## Open decisions`,
+`e2e coverage` and `## Body must disclose` quoted — and each task's
+`## Tests`, and starts a round. First it runs what a grep sees,
+`maintainer-rules`, on that commit. A **fail** is a rule with no exception,
+and no round starts until it is fixed: `target` names the task that owns
+each line, and step 4 fixes it as it fixes a finding. A warning is a rule
+with a condition of its own; `target` prints its lines, and the axes rule
+on them.
 
 - the four `pd-review-*` axes, in parallel. Each gets what `target` printed,
   as it printed it, the grep's warnings included, and is told this is our own
   branch before it is cut into pull requests: there is no title or body yet,
-  and no threads. A row of a task's `## Tests` is a test the branch owes.
+  and no threads. A row of a task's `## Tests` is a test the branch owes,
+  and a question the plan's decisions answer was answered while planning.
   Together they cover all twelve sections of the rules;
 - wait for all four axis reports, then `pd-review-synth` on the four reports
-  and the same triage record. It ends with the findings as JSON;
+  and the same output of `target`. It ends with the findings as JSON;
 - `pdkit self-review record --issue <n> --audit --findings <f.json>`. It
   prints each open finding with the task that owns its file.
 

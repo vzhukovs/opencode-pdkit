@@ -39,6 +39,7 @@ import {
   amendmentTaskValues,
   checkPlan,
   codeIn,
+  disclosuresFor,
   parseAmendment,
   parsePlan,
   parseTask,
@@ -47,6 +48,7 @@ import {
   setPlanRequirements,
   setTaskStatus,
   taskParts,
+  testsIn,
   withdrawalOf,
   withdrawnStatus,
 } from '../lib/artefacts.js';
@@ -1317,5 +1319,72 @@ describe('the tests of a task an amendment writes', () => {
     assert.ok(TASK_PARTS.includes('Tests'));
     assert.equal(TASK_PARTS.indexOf('Tests'), TASK_PARTS.indexOf('Context') + 1);
     assert.equal(taskParts(`# T1: a\n\n## Tests\n| Case | When | Asserts | Fails without the change because |\n|---|---|---|---|\n${ROW}\n`).get('Tests'), `| Case | When | Asserts | Fails without the change because |\n|---|---|---|---|\n${ROW}`);
+  });
+});
+
+// What a plan decided, as the review of the code reads it after the code is
+// written: the lines a pull request body must disclose, each naming its slice,
+// and the Open decisions and e2e coverage as the plan wrote them. The axes of
+// slice 2 of a sandbox issue asked what its plan had settled, and the person
+// answered on the pull request the same thing a second time.
+describe('what a plan decided, as the review of the code reads it', () => {
+  const DISCLOSE = [
+    '<!-- One line per item, naming its slice. -->',
+    '- S1: the pull spec stops asserting a platform it never chose',
+    '',
+    '- S2: a default pull now sends linux/<desktop arch> instead of leaving the platform to the engine',
+    '* S2 and S3: the platform list is duplicated on purpose, and Build moves onto it later',
+    'every pull request: the Build page is untouched',
+  ].join('\n');
+  const decided = (lines) => fullPlan().replace('## Body must disclose\nnone', `## Body must disclose\n${lines}`);
+
+  test('reads each line of Body must disclose, without its bullet, its comment or a blank line', () => {
+    assert.deepEqual(parsePlan(decided(DISCLOSE)).bodyMustDisclose, [
+      'S1: the pull spec stops asserting a platform it never chose',
+      'S2: a default pull now sends linux/<desktop arch> instead of leaving the platform to the engine',
+      'S2 and S3: the platform list is duplicated on purpose, and Build moves onto it later',
+      'every pull request: the Build page is untouched',
+    ]);
+  });
+
+  test('none is no line, and so is a plan written before the section', () => {
+    assert.deepEqual(parsePlan(fullPlan()).bodyMustDisclose, []);
+    assert.deepEqual(parsePlan(decided('None.')).bodyMustDisclose, []);
+    assert.deepEqual(parsePlan(plan()).bodyMustDisclose, []);
+    assert.deepEqual(parsePlan(plan()).answers, [], 'and the plan says it predates the section');
+  });
+
+  test('a slice gets the lines that name it and the lines that name none; a single pull request gets all', () => {
+    const lines = parsePlan(decided(DISCLOSE)).bodyMustDisclose;
+
+    assert.deepEqual(disclosuresFor(lines, 2), { lines: [lines[1], lines[2], lines[3]], others: 1 });
+    assert.deepEqual(disclosuresFor(lines, 3), { lines: [lines[2], lines[3]], others: 2 });
+    assert.deepEqual(disclosuresFor(lines, 1), { lines: [lines[0], lines[3]], others: 2 });
+    assert.deepEqual(disclosuresFor(lines, null), { lines, others: 0 });
+    assert.deepEqual(disclosuresFor(['S12: the twelfth'], 1), { lines: [], others: 1 }, 'S12 is not S1');
+  });
+
+  test('the Open decisions and the e2e coverage come as the plan wrote them, comments cut', () => {
+    const parsed = parsePlan(plan({ decisions: 'Asked and answered:\n- the fallback: amd64, as Build does (operator)\n<!-- not this -->' }));
+
+    assert.equal(parsed.openDecisions, 'Asked and answered:\n- the fallback: amd64, as Build does (operator)');
+    assert.equal(parsed.e2eCoverage, 'no — a one-line fix on a route where e2e is off');
+  });
+});
+
+// The quickfix route has no plan: its list of tests is the `## Tests` the
+// session writes at the end of issue.md before the fix.
+describe('the tests issue.md lists', () => {
+  const ISSUE_MD = '# ISSUE 7: a fix\n\n## Verdict\nquickfix\n';
+
+  test('a row per case under ## Tests, the heading and the rule left out', () => {
+    const listed = `${ISSUE_MD}\n## Tests\n| Case | When | Asserts | Fails without the fix because |\n|---|---|---|---|\n${ROW}\n| the error path | the engine refuses | the entry is removed | the catch never ran |\n`;
+
+    assert.deepEqual(testsIn(listed), { listed: true, cases: [ROW, '| the error path | the engine refuses | the entry is removed | the catch never ran |'] });
+  });
+
+  test('no heading is none listed, which an empty table is not', () => {
+    assert.deepEqual(testsIn(ISSUE_MD), { listed: false, cases: [] });
+    assert.deepEqual(testsIn(`${ISSUE_MD}\n## Tests\n| Case | When | Asserts | Fails without the fix because |\n|---|---|---|---|\n`), { listed: true, cases: [] });
   });
 });

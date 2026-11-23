@@ -16,6 +16,35 @@ and their links go into the repository they were released from.
 
 ### Changed
 
+- **The self-review reads what the plan decided.** `pdkit self-review target`
+  quotes, after the triage record, the plan's `## Open decisions` and `e2e
+  coverage`, the lines of `## Body must disclose` for the pull request it
+  reads — every line, for the audit's review of the branch — and counts the
+  tests each task of that pull request owes; on the quickfix route, the
+  `## Tests` of `issue.md`. The axes and the synthesis get them as printed,
+  and a question they answer is not put to you again: you answered it while
+  planning. A plan written before `## Body must disclose` and `## Tests` says
+  so in one line each. `/pd:plan` writes each answer you give it into
+  `## Open decisions`, with its question.
+- **The body says what the plan decided, and shows what changed on screen.**
+  Two preflight checks read the body. `body-must-disclose` lists, on the first
+  pass, each line of the plan's `Body must disclose` for the pull request, and
+  fails a body whose `Notes for reviewers` is empty or `n/a` while there are
+  any; whether the notes say each line is the self-review's to judge.
+  `ui-evidence` lists the components the pull request changes and the
+  screenshots the validation took, and fails a body that changes a component
+  and neither shows an image nor says `n/a` with its reason, or still holds a
+  screenshot placeholder; `n/a` with components changed is a warning.
+  `/pd:pr` asks you for the links of the screenshots — nothing in the plugin
+  can upload an image — and runs the body's checks before the axes read it.
+  Plans written before `## Body must disclose` skip the first check; an open
+  pull request whose body says `n/a` gets the warning at its next
+  `/pd:pr-sync`. `pr-body-size` no longer counts the markup of an image or a
+  video, only the words around it. The first pass prints, under each check
+  that waits for the body, what it lists for it — these two, and the areas of
+  `ci-blind-spots` and the steps `validation-evidence` has no artefact for —
+  which it used to print only with `--json`.
+
 - **`maintainer-rules` fails on a comment the branch adds**, in any code file
   of the repository: `//`, `/* */`, JSDoc, `<!-- -->` in Svelte and HTML, a
   directive such as `@ts-expect-error` or `svelte-ignore` included. It passes

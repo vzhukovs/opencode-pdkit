@@ -53,8 +53,12 @@ merged together." Closing those is `/pd:pr-sync`'s job, after this one is open.
    test, lint and typecheck scripts — minutes, not seconds, unless a run of
    this issue already passed them on the same tree: the squash of step 2 makes
    a new commit, not a new tree, and the report names the run it took. Red
-   stops everything. Note what `ci-blind-spots` reports: it decides whether
-   `Notes for reviewers` is mandatory.
+   stops everything. Note what three checks report, since step 4 writes from
+   them: `ci-blind-spots` and `body-must-disclose` decide what `Notes for
+   reviewers` has to say — the areas CI cannot judge, and each line of the
+   plan's `Body must disclose` for this pull request — and `ui-evidence` lists
+   the components this pull request changes and the screenshots the
+   validation took.
 
    `maintainer-rules` fails on a rule from
    `${CLAUDE_PLUGIN_ROOT}/knowledge/maintainer-rules.md` that has no
@@ -108,8 +112,33 @@ merged together." Closing those is `/pd:pr-sync`'s job, after this one is open.
      section to be generous with**: commands to paste, fixtures to create,
      what should come back, and the cleanup afterwards.
    - `Notes for reviewers`: mandatory when preflight flagged something CI
-     cannot judge, and then only that plus the platform you checked on. Not the
-     review history, not residual risks, not behavior nuance nobody can act on.
+     cannot judge — that, plus the platform you checked on — and when
+     `body-must-disclose` listed lines of the plan's `Body must disclose`: each
+     one, in a sentence of the reviewer's words, with no R-ID and no slice
+     number. They are what the plan decided a reviewer has to be told — a
+     behavior that changes without being asked for, a duplication kept on
+     purpose, a decision the person made — and a reviewer who is not told
+     asks, and the person answers on the pull request what was settled before
+     any code. The plan's other decisions stay in the plan; the self-review
+     gets them from `target`. Not the review history, not residual risks, not
+     behavior nuance nobody can act on.
+   - `Screenshot / video of UI`: when `ui-evidence` lists components this pull
+     request changes, show the change. The screenshots the validation took are
+     listed with their files; nothing in the plugin can upload an image, so ask
+     the person to drag each into any comment box on GitHub, copy the link it
+     writes without posting it, and give you the links. Each goes in with a
+     line of what it shows — before and after, where both exist. Until the
+     links come, a visible placeholder per file, `**[SCREENSHOT V1 — <what it
+     shows>: replace this line by dragging in V1.png]**`; never "in a comment"
+     or "in the description": a screenshot promised for later is one the
+     reviewer does not have, and preflight refuses a placeholder. If nothing
+     visible changed, `n/a — <why>`.
+
+   Then `pdkit preflight <n> --body-only --body <file>`, before step 5: every
+   check but `self-review` is green before the axes read the body — that one
+   waits for the record step 5 writes — and the links of the screenshots are
+   in. A body changed after the review is recorded is a body the axes read
+   again.
 
 5. **Self-review: upstream's review agent, run by us first.** Every pull
    request upstream is read by a review agent built from the maintainer's
@@ -121,23 +150,28 @@ merged together." Closing those is `/pd:pr-sync`'s job, after this one is open.
    pdkit self-review target --issue <n> [--slice <i>]
    ```
 
-   It prints the diff, the commit that preflight will check and the triage
-   record, and starts a round. Before the round it runs `maintainer-rules` on
-   that commit and refuses one the grep fails: what a grep sees is fixed
-   before any axis reads the code, by an implementer, as an `issue:` is below.
-   A warning is a rule with a condition of its own; `target` prints its lines
-   for the axes. Then:
+   It prints the diff, the commit that preflight will check, the triage record
+   and what the plan decided — its `## Open decisions` and `e2e coverage`,
+   quoted, the lines of `## Body must disclose` for this pull request, and the
+   tests each of its tasks owes, or on the quickfix route the `## Tests` of
+   `issue.md` — and starts a round. Before the round it runs
+   `maintainer-rules` on that commit and refuses one the grep fails: what a
+   grep sees is fixed before any axis reads the code, by an implementer, as
+   an `issue:` is below. A warning is a rule with a condition of its own;
+   `target` prints its lines for the axes. Then:
 
    - the four `pd-review-*` axes, in parallel. Each gets what `target`
      printed, as it printed it — the diff command, the changed files, the
-     grep's warnings and the triage record, `issue.md`, not the issue on
-     GitHub: its `[operator]` lines and `Not in this PR` are the scope this
-     pull request was cut to — with the title and the body file, and is told
+     grep's warnings, the triage record, `issue.md`, not the issue on GitHub:
+     its `[operator]` lines and `Not in this PR` are the scope this pull
+     request was cut to — and what the plan decided: a question it answers was
+     answered while planning, and a row of `## Tests` is a test this pull
+     request owes. With them go the title and the body file, and the word that
      this is our own pull request before publishing, so there are no threads.
      Together they cover all twelve sections of the rules;
    - wait for all four axis reports, then `pd-review-synth` on the four
-     reports and the same triage record. It calibrates as the maintainer's
-     agent does and ends with the findings as JSON;
+     reports and the same output of `target`. It calibrates as the
+     maintainer's agent does and ends with the findings as JSON;
    - `pdkit self-review record --issue <n> [--slice <i>] --findings <f.json>
      --body <file>`.
 

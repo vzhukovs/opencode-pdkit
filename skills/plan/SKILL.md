@@ -151,6 +151,10 @@ A question you do not ask becomes `[NEEDS DECISION]` in the plan, and that
 blocks approval. This is deliberate: an unasked question does not disappear,
 it becomes an assumption nobody agreed to and nobody can find later.
 
+Write each answer into `## Open decisions`, with its question: the review of
+the code reads that section, and a question answered there is not asked of
+the person again.
+
 ## Phase 3 — the plan
 
 Fill `${CLAUDE_PLUGIN_ROOT}/templates/plan.md`, and one `${CLAUDE_PLUGIN_ROOT}/templates/task.md` per task.
