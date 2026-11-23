@@ -137,12 +137,23 @@ merged together." Closing those is `/pd:pr-sync`'s job, after this one is open.
 
    Then act on what was found. **Arguing is not one of the options:**
 
-   - `issue:` on code this branch wrote: fix the code. On a single
-     pull request, fix it on the branch, squash again (step 2) and go back to
-     step 3. On a slice, fix it on the working branch the slices are cut from,
-     verify the slice again (`/pd:slice`), rebuild its branch with `pdkit slice
-     materialize --force`, and go back to step 3. Either way the commit has
-     changed, so pass one, the review and the record all run again;
+   - `issue:` on code this branch wrote: the code changes, and a
+     `pd-implementer` changes it, not this session. It reads the maintainer's
+     rules whole before it writes, and this session's context is what every
+     later turn pays for. Its brief is "A finding to fix" in
+     `${CLAUDE_PLUGIN_ROOT}/agents/pd-implementer.md`: the finding as
+     recorded, the files it may touch and the tests they answer to. On a
+     slice, the fix goes on the working branch the slices are cut from, under
+     the task that owns the file, which `pdkit self-review record` names:
+     `pdkit task start` for that task, the implementer, `pdkit receipt
+     write`, the commit, `pdkit task stop`. Then verify the slice again
+     (`/pd:slice`), rebuild its branch with `pdkit slice materialize
+     --force`, and go back to step 3. On a single pull request — the quickfix
+     route, which has no tasks — give the implementer the finding's file and
+     its spec and the `## Tests` of `issue.md`; nothing holds it to those
+     files but your look at `git status` afterwards. Then squash again
+     (step 2) and go back to step 3. Either way the commit has changed, so
+     pass one, the review and the record all run again;
    - `nit:` on code this branch wrote: it does not hold the push — upstream's
      agent accepts a pull request with nits. Fix one only in a commit an
      `issue:` makes anyway, never in a round of its own: each round reads the
@@ -152,16 +163,17 @@ merged together." Closing those is `/pd:pr-sync`'s job, after this one is open.
      record again. The body is part of what was reviewed. A `nit:` about them
      is a nit like any other;
    - `question:`: answer it in `Notes for reviewers` or by changing the code,
-     and put the answer in the finding's `answer` field when recording;
+     through an implementer as for an `issue:`, and put the answer in the
+     finding's `answer` field when recording;
    - `nit:` marked pre-existing: leave it. Fixing it here is the drive-by
      change that section 1 rejects;
    - a finding that looks wrong goes back to the axis that raised it, as a
      question with the code that answers it. If the axis keeps it, it is
      fixed.
 
-   A fix is written the way "Write it the way the maintainer reviews it" in
-   `${CLAUDE_PLUGIN_ROOT}/agents/pd-implementer.md` says, comments included:
-   a finding is answered in the code, not by a comment beside it.
+   This session writes no code. The implementer writes the fix the way it
+   writes a task, comments included: a finding is answered in the code, not
+   by a comment beside it.
 
    **Never edit the findings to make the record clean.** The record is what
    the review said. The `self-review` check in pass two fails unless that
@@ -173,6 +185,7 @@ merged together." Closing those is `/pd:pr-sync`'s job, after this one is open.
    **The rounds end.** A round starts when `pdkit self-review target` hands
    the axes a commit, recorded or not, and the rounds count until a review
    leaves nothing open. Record every round before you change anything for it.
+   The implementer's fix is the next commit, and so the next round.
    At `review.self_review_rounds` — three by default — the next round is
    refused: another one costs what the last one did, and finds fault with the
    code the last one wrote. Stop there and ask the person. Show what is still open and how the diff grew since the first

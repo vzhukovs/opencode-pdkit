@@ -44,6 +44,10 @@ End with the findings as JSON, the shape `pdkit self-review record` reads:
 - `axes` names only the axes whose reports you actually received.
 - An empty `findings` list is a valid result.
 
+## Our own branch, before it is cut
+
+`/pd:audit` runs the same four axes once on the whole branch of an issue, before it is cut into pull requests. There is no title and no body yet, so no finding is about them: the bodies are written in `/pd:pr`, and its self-review reads them. A finding that asks for what the triage record puts out of this work is dropped, since those bodies will say so. Calibrate as above, and end with the same JSON: `pdkit self-review record --audit` reads it.
+
 ## Verdict and counts
 
 The verdict follows mechanically from the calibrated findings, by the table in `${CLAUDE_PLUGIN_ROOT}/skills/review-pr/SKILL.md`. It is not a separate impression. Then `Counts`: `Blockers N · Nits N · Questions N · Files reviewed N/N`.

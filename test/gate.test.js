@@ -37,6 +37,7 @@ import { paths } from '../lib/config.js';
 import { read as readJournal } from '../lib/journal.js';
 import { transition } from '../lib/state.js';
 import { approvablePlan } from './helpers/approvable-plan.js';
+import { auditReviewed } from './helpers/audit-review.js';
 import { preflightGreen } from './helpers/preflight-evidence.js';
 
 let home;
@@ -46,7 +47,10 @@ async function readyIssue(issue, { route = 'standard' } = {}) {
   // That state is now earned rather than asserted, so the walk produces the
   // evidence first — the same order real work goes in.
   await preflightGreen(issue, { home });
-  if (route !== 'quickfix') await approvablePlan(issue, { home });
+  if (route !== 'quickfix') {
+    await approvablePlan(issue, { home });
+    await auditReviewed(issue, { home });
+  }
 
   const path =
     route === 'quickfix'

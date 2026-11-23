@@ -38,9 +38,8 @@ upstream-rules.md" at the end.
 | `/pd:quickfix` | all of them: no implementer runs on that route |
 | `/pd:plan` | 1–10 — the design a plan decides before any code exists, and the rules it can break |
 | `pd-plan-critic` | 1–10 — the same, held to the design the plan chose rather than to its syntax |
-| `pd-auditor` | all of them, on the lines the branch added (its question 4) |
 | `pd-slicer` | 1 — most of it is a rule about how to cut |
-| review axes (`/pd:review-pr`, and the self-review in `/pd:pr` and `/pd:pr-sync`) | all of them between the four axes, plus the calibration below |
+| review axes (`/pd:review-pr`, the review of the whole branch in `/pd:audit`, and the self-review in `/pd:pr` and `/pd:pr-sync`) | all of them between the four axes, plus the calibration below |
 
 ## How the reviewer calibrates
 

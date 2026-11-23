@@ -112,12 +112,14 @@ finding about the plan, like any other.
    take the report's word for it. A **fail** on a line in this task's `Owns`
    means the code breaks a rule that has no exception. Do not commit. Send
    the task back to a fresh worker with the hits as its input. A warning on
-   this task's lines needs the sentence the worker owes for it. If that
-   sentence is missing, or it does not show the rule's own condition holds,
-   send the task back too. A report without the per-section `§n:` lines is
-   incomplete, and is treated the same way. Its `added test:` lines name cases
-   the plan did not list: say them to the person in step 7, beside what is
-   done, since the plan's list was meant to be whole.
+   this task's lines needs the sentence the worker owes for it, and the
+   report needs its per-section `§n:` lines. When either is missing, do not
+   send the task back: say so to the person in step 7. The review in
+   `/pd:audit` reads the whole branch against every rule, the warnings
+   included, and a second worker here would read the same rules again for
+   one task. Its `added test:` lines name cases the plan did not list: say
+   them to the person in step 7, beside what is done, since the plan's list
+   was meant to be whole.
 6. Commit: conventional subject, one `Signed-off-by`. Squash with
    `git reset --soft <base> && git commit`, never `rebase -i`.
 7. `pdkit task stop`, then `pdkit task list --issue <n>` to the person: what is

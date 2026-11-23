@@ -16,6 +16,28 @@ and their links go into the repository they were released from.
 
 ### Changed
 
+- **`/pd:audit` reviews the whole branch once, before it is cut into pull
+  requests.** The four review axes and the synthesis read it against every
+  section of the maintainer's rules — `pdkit self-review target --audit`
+  hands them the diff, the triage record, the plan and each task's `## Tests`
+  — and `pdkit self-review record --audit` keeps what they found, naming the
+  task that owns each open finding's file. A `pd-implementer` fixes each one
+  under that task, with a fresh receipt and a commit of its own, in the same
+  session. `pd-auditor` keeps the facts of `pdkit audit` and its three
+  questions about the plan; the rules are no longer its fourth.
+  `pdkit state --to audited` is refused until the branch has been reviewed,
+  and while a review that left something open is about the commit the branch
+  still stands on. The self-review of each pull request still gates the push,
+  and after this one it confirms rather than discovers.
+- **A finding is fixed by `pd-implementer`, not by the session that found
+  it**: in `/pd:pr` step 5 under the task that owns the file (on the quickfix
+  route, with the files named), and in `/pd:pr-sync` a row of our own
+  findings goes to it rather than to `pd-thread-resolver`.
+- **`/pd:exec` no longer sends a task to a second implementer for its
+  report's form**: a report without its `§n:` lines, or a warning without the
+  sentence it owes, goes to the person, and the audit's review rules on it. A
+  rule the grep fails is still sent back.
+
 - **A plan answers in writing what its review, its implementer and the
   self-review would ask.** `plan.md` gains `## Reuse` (what exists that a task
   could reuse or would copy, each search with what it found), `## Modes` (each

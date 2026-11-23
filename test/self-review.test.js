@@ -421,3 +421,104 @@ describe('pdkit self-review, end to end', () => {
     assert.equal(status.blocked, false);
   });
 });
+
+// The audit's review: the four axes read the whole branch once, before it is
+// cut into pull requests. There is no body yet, so none is asked for, and its
+// rounds are its own — a review of the branch never counts against a pull
+// request's limit, and a pull request's rounds never stop the audit.
+describe('the review of the whole branch, in the audit', () => {
+  const reviewed = (overrides = {}) => selfReview.record({ issue: ISSUE, audit: true, sha: SHA, axes: AXES, findings: [], home, ...overrides });
+
+  test('is recorded with no body, under its own key', async () => {
+    const result = await reviewed({ findings: [{ label: 'issue', text: 'logic in the component', path: 'a.svelte', line: 4, section: 3 }] });
+    assert.equal(result.ok, true, result.error);
+    assert.equal(result.unresolved.length, 1);
+
+    const stored = await selfReview.read(ISSUE, { home });
+    const entry = selfReview.entryFor(stored, undefined, true);
+    assert.equal(entry.sha, SHA);
+    assert.equal(entry.bodyDigest, null);
+    assert.equal(selfReview.entryFor(stored, undefined), null, 'the audit is not the single pull request');
+
+    const raw = JSON.parse(await readFile(join(home, 'issues', String(ISSUE), 'self-review.json'), 'utf8'));
+    assert.deepEqual(Object.keys(raw.entries), ['audit']);
+  });
+
+  test('refuses a body, which the self-review of each pull request reads instead', async () => {
+    const result = await reviewed({ body: BODY });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /reads no body/);
+  });
+
+  test('a pull request still needs its body', async () => {
+    const result = await selfReview.record({ issue: ISSUE, sha: SHA, axes: AXES, findings: [], home });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /the PR body is empty/);
+  });
+
+  test('still needs all four axes', async () => {
+    const result = await reviewed({ axes: ['architecture'] });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /axes not run: api-compat, tests, product/);
+  });
+
+  test('writes its own events to the journal', async () => {
+    await selfReview.startRound({ issue: ISSUE, audit: true, sha: SHA, home });
+    await reviewed({ findings: [{ label: 'issue', text: 'x' }] });
+    await selfReview.continueRounds({ issue: ISSUE, audit: true, reason: 'the plan was amended', home });
+
+    const entries = await readJournal({ issue: ISSUE }, { home });
+    assert.deepEqual(
+      entries.map((entry) => [entry.event, entry.slice, entry.detail]),
+      [
+        [selfReview.AUDIT_EVENTS.started, null, SHA.slice(0, 8)],
+        [selfReview.AUDIT_EVENTS.recorded, null, `${SHA.slice(0, 8)}: 1 finding(s), 1 unresolved`],
+        [selfReview.AUDIT_EVENTS.continued, null, 'the plan was amended'],
+      ],
+    );
+    assert.deepEqual(Object.values(selfReview.AUDIT_EVENTS), ['audit-review-target', 'audit-review', 'audit-review-continued']);
+  });
+
+  test('counts its rounds apart from the pull requests, both ways', async () => {
+    for (const sha of [SHA, OTHER, THIRD]) await selfReview.startRound({ issue: ISSUE, audit: true, sha, home });
+
+    const branch = await selfReview.rounds({ issue: ISSUE, audit: true, home });
+    assert.deepEqual([branch.rounds, branch.blocked], [3, true]);
+    const single = await selfReview.rounds({ issue: ISSUE, home });
+    assert.deepEqual([single.rounds, single.blocked], [0, false], 'the audit does not stop the pull request');
+
+    for (const sha of [SHA, OTHER, THIRD]) await selfReview.startRound({ issue: ISSUE, sha, home });
+    await selfReview.continueRounds({ issue: ISSUE, audit: true, reason: 'amended', home });
+    assert.equal((await selfReview.rounds({ issue: ISSUE, audit: true, home })).rounds, 0);
+    assert.equal((await selfReview.rounds({ issue: ISSUE, home })).rounds, 3, 'a sentence for the audit does not start the pull request over');
+  });
+
+  test('stops at the limit, and says how to go on with --audit', async () => {
+    for (const sha of [SHA, OTHER, THIRD]) await reviewed({ sha, findings: [{ label: 'issue', text: 'x' }] });
+
+    const refused = await selfReview.startRound({ issue: ISSUE, audit: true, sha: FOURTH, home });
+    assert.equal(refused.ok, false);
+    assert.match(refused.error, new RegExp(`pdkit self-review continue --issue ${ISSUE} --audit --reason "`));
+
+    const recorded = await reviewed({ sha: FOURTH });
+    assert.equal(recorded.ok, false, 'a record of a fourth commit is refused as well');
+
+    assert.equal((await reviewed({ sha: THIRD, findings: [{ label: 'question', text: 'q', answer: 'plan.md:12 decides it' }] })).ok, true, 'the same commit again is the same round');
+  });
+
+  test('a file written before it existed reads as it did', async () => {
+    await record({ findings: [{ label: 'nit', text: 'old' }] });
+
+    const stored = await selfReview.read(ISSUE, { home });
+    assert.equal(selfReview.entryFor(stored, undefined, true), null);
+    assert.equal(selfReview.entryFor(stored, undefined).findings[0].text, 'old');
+  });
+
+  test('is not what the self-review check of a pull request reads', async () => {
+    await reviewed();
+
+    const result = await check(context());
+    assert.equal(result.status, 'fail');
+    assert.match(result.summary, /no self-review is recorded for this pull request/);
+  });
+});

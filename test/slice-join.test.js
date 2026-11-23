@@ -31,6 +31,7 @@ import assert from 'node:assert/strict';
 import { basename, join } from 'node:path';
 
 import { approvablePlan } from './helpers/approvable-plan.js';
+import { auditReviewed } from './helpers/audit-review.js';
 import { cleanup, commitAll, git, initRepo, packageMap, seedWorkspace, writeFiles } from './helpers/repo-fixture.js';
 import * as slice from '../lib/slice.js';
 import * as state from '../lib/state.js';
@@ -72,6 +73,7 @@ before(async () => {
   // Three slices, as the proposal below cuts it, and no requirement in the
   // record: the join is what this suite is about, not their coverage.
   await approvablePlan(ISSUE, { home, allocate: false, slices: 3 });
+  await auditReviewed(ISSUE, { home });
   for (const to of ['triaged', 'planned', 'plan-approved', 'implemented', 'validated', 'audited']) await state.transition(ISSUE, to, { home });
 
   const set = await slice.set({

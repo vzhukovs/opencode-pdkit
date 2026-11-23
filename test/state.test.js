@@ -52,7 +52,9 @@ import { read as readJournal } from '../lib/journal.js';
 import { BODY_DEPENDENT, CHECK_IDS } from '../lib/preflight/index.js';
 import { write } from '../lib/preflight/record.js';
 import { ENTRY_RULES } from '../lib/state/entry.js';
+import * as selfReview from '../lib/self-review.js';
 import { approvablePlan } from './helpers/approvable-plan.js';
+import { auditReviewed } from './helpers/audit-review.js';
 import { preflightGreen } from './helpers/preflight-evidence.js';
 
 let home;
@@ -117,10 +119,10 @@ describe('transition table integrity', () => {
 
 // The conditions for entering a state are a list, in the order their refusals
 // are reported. What each one refuses is covered where the rule is exercised;
-// this only holds the shape a seventh rule has to take.
+// this only holds the shape an eighth rule has to take.
 describe('the conditions for entering a state', () => {
-  test('are six rules, each saying when it applies and what it refuses', () => {
-    assert.equal(ENTRY_RULES.length, 6);
+  test('are seven rules, each saying when it applies and what it refuses', () => {
+    assert.equal(ENTRY_RULES.length, 7);
     for (const rule of ENTRY_RULES) {
       assert.equal(typeof rule.applies, 'function');
       assert.equal(typeof rule.refuse, 'function');
@@ -534,6 +536,83 @@ describe('adopting work that predates the plugin', () => {
   });
 });
 
+// `audited` read as whatever a session typed. The audit's reading of the code is
+// the four review axes on the whole branch now, once, before it is cut — and a
+// state the slicing starts from should not be reachable by skipping it, nor
+// straight after a review that found something nobody fixed.
+describe('audited has to be earned', () => {
+  const SHA = 'a'.repeat(40);
+  const LATER = 'b'.repeat(40);
+
+  /** Walk to `validated`, the state the audit runs in. */
+  async function atValidated(issue) {
+    await approvablePlan(issue, { home });
+    for (const to of ['triaged', 'planned', 'plan-approved', 'implemented', 'validated']) {
+      const result = await transition(issue, to, { home });
+      assert.ok(result.ok, `${to}: ${result.error}`);
+    }
+  }
+
+  const review = (issue, findings) => selfReview.record({ issue, audit: true, sha: SHA, axes: [...selfReview.AXES], findings, home });
+
+  test('typing the name of the state is refused until the branch was reviewed', async () => {
+    await atValidated(720);
+
+    const result = await transition(720, 'audited', { home, head: SHA });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /issue 720: the branch has not been reviewed/);
+    assert.match(result.error, /pdkit self-review target --issue 720 --audit/);
+    assert.match(result.error, /pdkit self-review record --issue 720 --audit --findings/);
+    assert.equal((await read(720, { home })).state, 'validated');
+  });
+
+  test('a review that left something open is refused while the branch still stands on its commit', async () => {
+    await atValidated(721);
+    await review(721, [{ label: 'issue', text: 'logic in the component', section: 3 }, { label: 'question', text: 'why amd64?' }]);
+
+    const result = await transition(721, 'audited', { home, head: SHA });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /the review of aaaaaaaa left 2 finding\(s\) open, and the branch is still at aaaaaaaa/);
+    assert.match(result.error, /\/pd:audit step 4/);
+  });
+
+  test("once the branch moved past it, the pull request's self-review is what confirms the fix", async () => {
+    await atValidated(722);
+    await review(722, [{ label: 'issue', text: 'logic in the component', section: 3 }]);
+
+    const result = await transition(722, 'audited', { home, head: LATER });
+    assert.equal(result.ok, true, result.error);
+  });
+
+  test('with nothing to say where the branch stands, an open review is refused', async () => {
+    await atValidated(723);
+    await review(723, [{ label: 'issue', text: 'x' }]);
+
+    const result = await transition(723, 'audited', { home });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /no repository here to tell whether the branch moved since/);
+  });
+
+  test('a review that left nothing open earns it, nits and answered questions included', async () => {
+    await atValidated(724);
+    await review(724, [
+      { label: 'nit', text: 'a name' },
+      { label: 'question', text: 'why amd64?', answer: 'plan.md:19, R3 decides it' },
+    ]);
+
+    assert.equal((await transition(724, 'audited', { home })).ok, true);
+  });
+
+  test("a pull request's self-review is not the audit's", async () => {
+    await atValidated(725);
+    await selfReview.record({ issue: 725, sha: SHA, body: 'x', axes: [...selfReview.AXES], findings: [], home });
+
+    const result = await transition(725, 'audited', { home, head: SHA });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /the branch has not been reviewed/);
+  });
+});
+
 // The hole under the hard rule. Section 1 says a push token is issued from
 // `preflight-green` and nowhere else, and the gate did check it — but nothing
 // checked that the state was true. `slices-approved -> preflight-green` is a
@@ -544,6 +623,7 @@ describe('preflight-green has to be earned', () => {
   /** Walk to the state just before it, without producing any evidence. */
   async function atSlicesApproved(issue) {
     await approvablePlan(issue, { home });
+    await auditReviewed(issue, { home });
     for (const to of ['triaged', 'planned', 'plan-approved', 'implemented', 'validated', 'audited', 'sliced', 'slices-approved']) {
       const result = await transition(issue, to, { home });
       assert.ok(result.ok, `${to}: ${result.error}`);
@@ -694,6 +774,7 @@ describe('the review rejected the approach', () => {
     await allocateRequirement(issue, { home });
     await freezeRequirements(issue, { home });
     await approvablePlan(issue, { home });
+    await auditReviewed(issue, { home });
     for (const to of ['plan-approved', 'implemented', 'validated', 'audited', 'sliced', 'slices-approved', 'preflight-green', 'pr-open']) {
       await transition(issue, to, { home });
     }

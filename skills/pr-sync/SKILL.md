@@ -255,11 +255,17 @@ or into nothing at all.
    touch. It implements that and nothing wider; if the fix turns out to need
    another file or another approach, it stops and reports, and the row comes
    back to the person. Resolvers draft the reply as well as the change. They
-   never publish. Wait for every resolver's report before step 7.
+   never publish. Wait for every resolver's and implementer's report before
+   step 7.
 
-   A `self` row goes to a resolver as well. Tell it there is no thread, so it
-   drafts no reply. Its fixes go in a commit of their own, apart from the
-   commits that answer reviewers. Upstream asks for review rounds to be
+   A `self` row goes to a `pd-implementer`, not to a resolver. Nobody asked
+   for it, so there is no reply to draft, and it is a rule of the
+   maintainer's, which the implementer reads whole before it writes. Brief it
+   as `/pd:pr` step 5 does — "A finding to fix" in
+   `${CLAUDE_PLUGIN_ROOT}/agents/pd-implementer.md` — under `pdkit task
+   start` for the task that owns the file when the issue has tasks, with
+   `pdkit receipt write` and `pdkit task stop` after it. Its fixes go in a
+   commit of their own, apart from the commits that answer reviewers. Upstream asks for review rounds to be
    visible as new commits, and a reviewer reading "address review" should find
    only what they asked for.
 

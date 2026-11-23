@@ -53,6 +53,7 @@ import {
 import * as gate from '../lib/gate.js';
 import { transition } from '../lib/state.js';
 import { approvablePlan } from './helpers/approvable-plan.js';
+import { auditReviewed } from './helpers/audit-review.js';
 import { preflightGreen } from './helpers/preflight-evidence.js';
 
 const CONFIG = {
@@ -85,6 +86,7 @@ before(async () => {
 
   await preflightGreen(6001, { home });
   await approvablePlan(6001, { home });
+  await auditReviewed(6001, { home });
 
   for (const to of [
     'triaged',

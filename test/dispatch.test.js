@@ -42,6 +42,7 @@ import * as journal from '../lib/journal.js';
 import * as gate from '../lib/gate.js';
 import { transition } from '../lib/state.js';
 import { approvablePlan } from './helpers/approvable-plan.js';
+import { auditReviewed } from './helpers/audit-review.js';
 import { preflightGreen } from './helpers/preflight-evidence.js';
 
 const run = promisify(execFile);
@@ -61,6 +62,7 @@ async function readyIssue(issue) {
   // fixture standing there has to have produced it like anything else.
   await preflightGreen(issue, { home });
   await approvablePlan(issue, { home });
+  await auditReviewed(issue, { home });
 
   for (const to of [
     'triaged',
