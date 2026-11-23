@@ -12,7 +12,7 @@ the contracts of the key ones.
 | [`/pd:plan`](plan.md) | the plan as the only handoff artefact |
 | [`/pd:plan-review`](plan-review.md) | reviewing the plan before any code |
 | [`/pd:validate`](validate.md) | evidence instead of claims |
-| [`/pd:audit`](audit.md) | the diff against the plan |
+| [`/pd:audit`](audit.md) | the diff against the plan, the branch against the rules |
 | [`/pd:slice`](slice.md) | the part no reference has |
 | [`/pd:pr`](pr.md) | the only place that writes to GitHub |
 | [`/pd:pr-status`](pr-status.md) | the dashboard, and how a red CI is measured here |

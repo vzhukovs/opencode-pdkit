@@ -51,7 +51,7 @@ the previous and next section, and, where they exist, to the matching part of
 | [`/pd:plan`](04-contracts/plan.md) | the plan as the only handoff artefact |
 | [`/pd:plan-review`](04-contracts/plan-review.md) | reviewing the plan before any code |
 | [`/pd:validate`](04-contracts/validate.md) | evidence instead of claims |
-| [`/pd:audit`](04-contracts/audit.md) | the diff against the plan |
+| [`/pd:audit`](04-contracts/audit.md) | the diff against the plan, the branch against the rules |
 | [`/pd:slice`](04-contracts/slice.md) | the part no reference has |
 | [`/pd:pr`](04-contracts/pr.md) | the only place that writes to GitHub |
 | [`/pd:pr-status`](04-contracts/pr-status.md) | the dashboard, and how a red CI is measured here |

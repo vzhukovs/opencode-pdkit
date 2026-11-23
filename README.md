@@ -296,7 +296,7 @@ All orchestrating skills are manual only — nothing starts on its own.
 | `/pd:plan-review <issue>` | adversarial review of the plan, before any code |
 | `/pd:exec <issue> [task]` | implement, one task per worker, receipts required |
 | `/pd:validate <issue>` | drive the built app, collect evidence, propose an e2e test |
-| `/pd:audit <issue>` | diff against plan, fresh context |
+| `/pd:audit <issue>` | diff against plan, and one review of the whole branch, fresh context |
 | `/pd:slice <issue>` | turn the change set into a verified graph of atomic PRs |
 | `/pd:preflight <issue\|slice>` | deterministic gates (tests, lint, SPDX, commits, schemas, …) |
 | `/pd:pr <issue> [slice]` | branches, PR bodies, and the only place that writes to GitHub |

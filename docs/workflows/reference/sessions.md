@@ -108,8 +108,9 @@ call.
 **The effort** is the variant, part of the same default — `#high`, `#medium`,
 `#low`, `#none` — and the command sets it with the model. `/effort`, Open
 Code's `/variants`, changes the session's, never a subagent's. The verdict of
-`/pd:audit` is `pd-auditor`'s, on `sol#high` in its own context: the session
-runs `pdkit audit` and hands the agent the diff.
+`/pd:audit` is `pd-auditor`'s, on `sol#high`, and the four review axes', each
+in its own context: the session reads neither the diff nor the code, and a fix
+is `pd-implementer`'s.
 
 ### The columns
 
@@ -163,12 +164,12 @@ restart, not a limit.
 | `/pd:exec` | new · main checkout or the issue tree; it moves itself into the tree | `sonnet#high` | `pd-implementer` · `sonnet#high`, one per task | 80 per task |
 | `/pd:quickfix` | new · the checkout that will carry the branch | `sonnet#high` | — | — |
 | `/pd:validate` | new · issue tree | `terra#medium` | `pd-validator` · `terra#medium` | 80 |
-| `/pd:audit` | new · issue tree | `opus#high` | `pd-auditor` · `sol#high` | 40 |
+| `/pd:audit` | new · issue tree | `opus#high` | `pd-auditor` · `sol#high`; the four `pd-review-*` · `sol#high` for architecture and tests, `opus#high` for api-compat, `sonnet#high` for product, `pd-review-synth` · `opus#medium`; `pd-implementer` · `sonnet#high` for a fix | 40 |
 | `/pd:slice` | new · issue tree | `opus#high` | `pd-slicer` · `opus#high` | 60 |
 | `/pd:preflight` | new · issue tree | `flash#low` | — | — |
-| `/pd:pr` | new · issue tree, one per slice | `sonnet#medium` | — | 50 |
+| `/pd:pr` | new · issue tree, one per slice | `sonnet#medium` | the four `pd-review-*` and `pd-review-synth`, for the self-review; `pd-implementer` · `sonnet#high` for a fix | 50 |
 | `/pd:pr-status` | new · anywhere in the fork | `flash#low` | — | — |
-| `/pd:pr-sync` | new · issue tree, one per review round | `opus#high` | `pd-thread-resolver` · `sonnet#high`; first round of an adopted issue: the four `pd-review-*` · `sol#high` for architecture and tests, `opus#high` for api-compat, `sonnet#high` for product, `pd-review-synth` · `opus#medium` | 60 |
+| `/pd:pr-sync` | new · issue tree, one per review round | `opus#high` | `pd-thread-resolver` · `sonnet#high`; `pd-implementer` · `sonnet#high` for our own findings; first round of an adopted issue: the four `pd-review-*` · `sol#high` for architecture and tests, `opus#high` for api-compat, `sonnet#high` for product, `pd-review-synth` · `opus#medium` | 60 |
 | `/pd:resume` | new · issue tree | `opus#high` | `pd-conflict-analyst` · `opus#high` | — |
 | `/pd:close` | new · issue tree; it leaves the tree before removing it | `flash#low` | — | — |
 | `/pd:reset` | new · main checkout | `flash#low` | — | — |

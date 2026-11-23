@@ -108,7 +108,7 @@ verdict.
 | `claude-agent/opus#high` | `pd:review-pr` | a review of someone else's pull request is outside the issue's lifecycle, and no machine checks it |
 | `claude-agent/opus#high` | `pd:resume`, `pd-conflict-analyst` | the semantic conflict, which merges cleanly: the build is green, and the code no longer does what the plan intended |
 | `claude-agent/opus#high` | `pd:slice`, `pd-slicer` | the cut into pull requests. `pdkit slice verify` accepts each slice; which change belongs with which is the model's |
-| `claude-agent/opus#high` | `pd:audit` | it runs `pdkit audit` and dispatches `pd-auditor`; the verdict is the agent's |
+| `claude-agent/opus#high` | `pd:audit` | it dispatches `pd-auditor`, the four review axes and a `pd-implementer` for each fix; the verdicts are the agents' |
 | `claude-agent/opus#medium` | `pd:knowledge` | every later issue reads the knowledge base, and nobody re-derives what it states as settled |
 | `claude-agent/sonnet#high` | `pd:exec`, `pd-implementer`, `pd:quickfix` | the code. Receipts accept a task, and preflight the push |
 | `claude-agent/sonnet#high` | `pd-scout` | the map of the code a plan is built on. Findings, not a verdict |

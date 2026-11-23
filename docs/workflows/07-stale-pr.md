@@ -76,7 +76,7 @@ pdkit gate open --issue 17221 --pr 17577 --kind reply   replies, per PR, covers 
   ❶ the decision table                        ← you answer before any edit
   │    (a row that changes the plan → an amendment, approved on its own)
   │
-  ├─ one pd-thread-resolver per accepted row (sonnet)
+  ├─ one pd-thread-resolver per accepted reviewer's row, one pd-implementer per row of our own (sonnet)
   ├─ cascade, when slices are stacked on the one fixed
   ├─ pdkit preflight, both passes
   │
@@ -115,7 +115,8 @@ refused the approach is not a row to accept: that is
 Each accepted row goes to one `pd-thread-resolver` with the row whole: the item,
 the decision, the option chosen, the files it may touch. If the fix turns out to
 need another file or another approach, it stops and reports, and the row comes
-back to you.
+back to you. A row of our own findings goes to `pd-implementer` instead: there is
+no reply to draft, and it reads the maintainer's rules whole before it writes.
 
 ### Reading `pdkit pr diff`
 
@@ -163,7 +164,7 @@ What you type, session by session — `/clear` starts the next one:
 | Step | Session | Default model | Subagents |
 |---|---|---|---|
 | `/pd:pr-status` | **new** · anywhere in the fork | `flash#low` | — |
-| `/pd:pr-sync 17577` | **new** · issue tree, **one per review round** | `opus#high` | `pd-thread-resolver` · `sonnet#high`; on the first round of an adopted issue also the four `pd-review-*` · `sol#high` for architecture and tests, `opus#high` for api-compat, `sonnet#high` for product and `pd-review-synth` · `opus#medium` |
+| `/pd:pr-sync 17577` | **new** · issue tree, **one per review round** | `opus#high` | `pd-thread-resolver` · `sonnet#high`; `pd-implementer` · `sonnet#high` for our own findings; on the first round of an adopted issue also the four `pd-review-*` · `sol#high` for architecture and tests, `opus#high` for api-compat, `sonnet#high` for product and `pd-review-synth` · `opus#medium` |
 | `pdkit gate open …` | the pr-sync session, when it asks — you confirm | — | — |
 | `pdkit pr list` / `refresh` / `ci` / `threads` / `diff` | **terminal** | — | — |
 
