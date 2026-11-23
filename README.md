@@ -212,8 +212,9 @@ OpenAI and DeepSeek:
 
 | Default | Commands | Agents |
 |---|---|---|
-| `openai/gpt-6-astra#high` | `pd:plan` | — |
-| `openai/gpt-6.1-sol#high` | `pd:triage` | `pd-archaeologist`, `pd-auditor`, `pd-review-architecture`, `pd-review-tests` |
+| `openai/gpt-6-astra#xhigh` | `pd:plan` | — |
+| `openai/gpt-6.1-sol#xhigh` | `pd:triage` | — |
+| `openai/gpt-6.1-sol#high` | — | `pd-archaeologist`, `pd-auditor`, `pd-review-architecture`, `pd-review-tests` |
 | `openai/gpt-6.1-terra#medium` | `pd:validate` | `pd-validator` |
 | `claude-agent/opus#high` | `pd:plan-review`, `pd:pr-sync`, `pd:review-pr`, `pd:audit`, `pd:slice`, `pd:resume` | `pd-plan-critic`, `pd-conflict-analyst`, `pd-slicer`, `pd-review-api-compat` |
 | `claude-agent/opus#medium` | `pd:knowledge` | `pd-review-synth` |

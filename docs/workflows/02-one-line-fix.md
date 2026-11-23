@@ -39,7 +39,7 @@ What you type, session by session — `/clear` starts the next one:
 
 | Step | Session | Default model | Subagents |
 |---|---|---|---|
-| `/pd:triage 12908` | **new** · main checkout | `sol#high` | `pd-scout` · `sonnet#high` |
+| `/pd:triage 12908` | **new** · main checkout | `sol#xhigh` | `pd-scout` · `sonnet#high` |
 | `/pd:quickfix 12908` | **new** · the checkout that will carry the branch: `pdkit branch create` checks it out there | `sonnet#high` | — |
 | `/pd:preflight 12908` | **new** · the same checkout | `flash#low` | — |
 | `/pd:pr 12908` | **new** · the same checkout | `sonnet#medium` | — |

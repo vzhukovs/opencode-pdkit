@@ -83,8 +83,8 @@ pdkit state 12345 --to slices-approved   your approval
 
 | Step | Session | Default model | Subagents |
 |---|---|---|---|
-| `/pd:triage 12345` | **new** · main checkout | `sol#high` | `pd-scout` · `sonnet#high` |
-| `/pd:plan 12345` | **new** · main checkout | `astra#high` | `pd-scout` · `sonnet#high` |
+| `/pd:triage 12345` | **new** · main checkout | `sol#xhigh` | `pd-scout` · `sonnet#high` |
+| `/pd:plan 12345` | **new** · main checkout | `astra#xhigh` | `pd-scout` · `sonnet#high` |
 | `/pd:plan-review 12345` | **new** · main checkout | `opus#high` | `pd-plan-critic` · `opus#high` |
 | approve: `pdkit ids freeze`, `pdkit state --to plan-approved` | the plan-review session, or **terminal** | — | — |
 | `/pd:exec 12345` | **new** · main checkout, then the skill moves it into `DESKTOP-12345` | `sonnet#high` | `pd-implementer` · `sonnet#high`, one per task |
@@ -96,7 +96,7 @@ pdkit state 12345 --to slices-approved   your approval
 | `/pd:pr 12345` | **new** · issue tree, one per slice | `sonnet#medium` | the four `pd-review-*` and `pd-review-synth`, for the self-review; `pd-implementer` · `sonnet#high` for a fix |
 
 No model to type on this path. Each command switches the session to its own —
-`astra#high` for the plan, `sonnet#high` for `/pd:exec`, and so on down the
+`astra#xhigh` for the plan, `sonnet#high` for `/pd:exec`, and so on down the
 table — before its instructions reach the model, and the session keeps it
 until the next command, whatever it was on before: the planning model does not
 carry over into the implementation.
