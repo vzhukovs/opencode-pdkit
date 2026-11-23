@@ -351,7 +351,7 @@ Twenty-four checks. Every one blocks except the three marked `warn`.
 | `e2e-environment` | | Notes for reviewers says what the test needs and where it will not run |
 | `validation-evidence` | | every validation step has an artefact, or the body explains |
 | `debug-leftovers` | `warn` | no `console.log`, `.only`, `.skip`, `@ts-ignore`, bare `any` in added lines |
-| `maintainer-rules` | | added lines clear of the rules upstream's review agent applies that have no exception: `vi.spyOn` in a new test, `as unknown as`, `any`, `!`, `../` imports, `export function` in `packages/main`, a hardcoded product name or color — see `knowledge/maintainer-rules.md`. A rule with its own condition (a `vi.mock` factory) only warns, and the self-review rules on it |
+| `maintainer-rules` | | added lines clear of the rules upstream's review agent applies that have no exception: `vi.spyOn` in a new test, `as unknown as`, `any`, `!`, `../` imports, `export function` in `packages/main`, a hardcoded product name or color — see `knowledge/maintainer-rules.md`, and of comments, which the plugin allows only where a rule asks for one (a new file's license header, extension-API JSDoc, the `eslint-disable` of an empty interface). A rule with its own condition (a `vi.mock` factory) only warns, and the self-review rules on it |
 | `self-review` | | the four review axes read this commit and this body, and left no `issue:` and no unanswered `question:` open (`pdkit self-review record`); a `nit:` stays in the record and does not block |
 | `ci-blind-spots` | | build, packaging or platform behavior CI cannot judge is named in the body |
 
