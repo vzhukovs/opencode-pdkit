@@ -28,7 +28,7 @@ in the order `CHECK_IDS` in `lib/preflight/index.js` runs them:
 | e2e environment | a test needing an environment CI does not have requires a `Notes for reviewers` entry | ✅ |
 | **validation evidence** | a validation step with no attached artefact is named in `Notes for reviewers`. Skipped on `quickfix` and when `validation.require_evidence: false` | ✅ |
 | debug leftovers | `console.log`, `.only`, `.skip`, `@ts-ignore`, `any` in the diff | ⚠️ warn, listing them |
-| **maintainer rules** | the greppable part of `knowledge/maintainer-rules.md` in the added lines, each pattern scoped to the files its rule covers. **Strict** patterns are rules with no exception: `vi.spyOn`, `Object.defineProperty(window)`, `vi.stubGlobal`, `clearAllMocks`, `afterEach`, a real `setTimeout` sleep, `toBeDefined()`, a typed `Mock` (`: Mock`, `: MockInstance<…>`, `as Mock`) and a cast of a value (`card as HTMLElement`; not `as const`) in unit specs; `as unknown as`, `any`, `!`, `eslint-disable` (bar the empty-interface exception section 4 names), `*Sync(`, an empty `catch`, `void` on a promise, `../` imports, built-ins without `node:`; an exported or file-scope function and `app.name` in `packages/main`; `<style>`, `$:`, `tick()` and Node types in renderer code; a hardcoded "Podman Desktop", a hex color in the color registry; a copyright year other than this one. **Judged** patterns are rules with a condition a grep cannot see: a `vi.mock` factory, `vi.hoisted`, `vi.importActual`, `mockImplementation(async () =>`, a cast of an object or array literal in a unit spec (a fixture), `sort()`, `await import()`. `pdkit self-review target` runs this check on the commit it hands the review axes and refuses one it fails, before a round starts | ✅ on a strict hit; ⚠️ warn on a judged one, which the self-review rules on |
+| **maintainer rules** | the greppable part of `knowledge/maintainer-rules.md` in the added lines, each pattern scoped to the files its rule covers. **Strict** patterns are rules with no exception: `vi.spyOn`, `Object.defineProperty(window)`, `vi.stubGlobal`, `clearAllMocks`, `afterEach`, a real `setTimeout` sleep, `toBeDefined()`, a typed `Mock` (`: Mock`, `: MockInstance<…>`, `as Mock`) and a cast of a value (`card as HTMLElement`; not `as const`) in unit specs; `as unknown as`, `any`, `!`, `eslint-disable` (bar the empty-interface exception section 4 names), `*Sync(`, an empty `catch`, `void` on a promise, `../` imports, built-ins without `node:`; an exported or file-scope function and `app.name` in `packages/main`; `<style>`, `$:`, `tick()` and Node types in renderer code; a hardcoded "Podman Desktop", a hex color in the color registry; a copyright year other than this one; **a comment the branch adds**, the plugin's own rule (below). **Judged** patterns are rules with a condition a grep cannot see: a `vi.mock` factory, `vi.hoisted`, `vi.importActual`, `mockImplementation(async () =>`, a cast of an object or array literal in a unit spec (a fixture), `sort()`, `await import()`. `pdkit self-review target` runs this check on the commit it hands the review axes and refuses one it fails, before a round starts | ✅ on a strict hit; ⚠️ warn on a judged one, which the self-review rules on |
 | **self-review** | the four review axes and the synthesis read this commit and this body (`pdkit self-review record`, keyed by slice in `self-review.json`), and nothing they found that upstream's agent rejects a pull request for is open: no `issue:`, no unanswered `question:`. A `nit:`, on new code or old, stays in the record and is counted in the summary, and does not block — upstream's agent accepts a pull request with nits. A review of another commit or another body is a `fail`. After `review.self_review_rounds` commits in a row reviewed without a clean review — a round starts at `pdkit self-review target` — the remedy is to stop and ask the person rather than to run another round. Reads the body | ✅ |
 | CI blind spots | the diff touches build, packaging, platform-specific behavior or the **dependency graph** — CI will not check it; a `Notes for reviewers` entry is required, worded per the area that fired | ✅ |
 
@@ -39,6 +39,24 @@ advisory). A skip is never a pass. Whether a check is advisory is its own
 `blocking` export — three are: `quickfix-size`, `pr-body-size`, `debug-leftovers`.
 `maintainer-rules` is blocking and still answers `warn` when every hit is a
 judged one: a warning from a blocking check does not stop a push.
+
+**A comment is the plugin's rule, not upstream's.** Section 4 of the
+maintainer's rules only asks that comments adding nothing be removed, a
+`nit:`. `agents/pd-implementer.md` allows none a rule does not ask for, and
+`maintainer-rules` holds every code file of the repository to it — `.ts`,
+`.js`, `.mjs`, `.cjs`, `.tsx`, `.jsx`, `.svelte`, `.html`. An added line fails
+when a comment the branch wrote is on it: `//`, `/* */`, JSDoc, `<!-- -->` in
+Svelte and HTML markup, at the end of a line of code, an edited one, a
+directive such as `@ts-expect-error` or `svelte-ignore`. It passes the
+comments a rule asks for — a new file's license header (its first comment,
+the house block the `spdx` check asks for, in Svelte inside `<!-- -->` too),
+JSDoc in `packages/extension-api`, the `eslint-disable` of an empty
+interface — and a comment whose text the diff removes elsewhere, which moved
+with its code rather than being written. Under `packages/` an `eslint-disable`
+is its own pattern's to report. The check reads each changed file at the ref
+(`lib/preflight/comments.js`), not the added line alone: `//` inside a string,
+a template literal or a regular expression is not a comment, and a line added
+inside a block comment opened above it is one.
 
 **There is no R-ID coverage check any more.** `r-coverage` required every R-ID to
 appear in the published body, and was removed: `requirementProblems()` in
