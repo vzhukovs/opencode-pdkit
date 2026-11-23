@@ -32,6 +32,7 @@ import { promisify } from 'node:util';
 
 import { transition } from '../../lib/state.js';
 import { approvablePlan } from './approvable-plan.js';
+import { auditReviewed } from './audit-review.js';
 import { preflightGreen } from './preflight-evidence.js';
 
 const run = promisify(execFile);
@@ -79,6 +80,7 @@ export async function readyIssue(issue, options) {
   // fixture standing there has to have produced it like anything else.
   await preflightGreen(issue, { home });
   await approvablePlan(issue, { home });
+  await auditReviewed(issue, { home });
 
   const path = [
     'triaged',

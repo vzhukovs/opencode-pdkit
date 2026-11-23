@@ -26,7 +26,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { matches, matchesAny, matching, toRegExp } from '../lib/globs.js';
+import { keysMatching, matches, matchesAny, matching, toRegExp } from '../lib/globs.js';
 
 describe('literal patterns', () => {
   test('match exactly', () => {
@@ -142,5 +142,26 @@ describe('lists', () => {
 
   test('matching reports which entries claimed the path', () => {
     assert.deepEqual(matching('lib/state.js', ['lib/*.js', 'lib/state.js', 'test/**']), ['lib/*.js', 'lib/state.js']);
+  });
+});
+
+// Which task a file belongs to: a review finding goes to the task whose Owns
+// claim its file, and a file nobody claims is a finding about the plan.
+describe('the keys whose patterns claim a path', () => {
+  const owns = {
+    T1: ['packages/renderer/src/lib/image/PullImage.spec.ts'],
+    T4: ['packages/renderer/src/lib/image/PullImage.svelte'],
+    T6: ['packages/renderer/src/lib/image/*.ts'],
+    T7: [],
+  };
+
+  test('names each key that claims it, in the order of the map', () => {
+    assert.deepEqual(keysMatching('packages/renderer/src/lib/image/PullImage.svelte', owns), ['T4']);
+    assert.deepEqual(keysMatching('packages/renderer/src/lib/image/PullImage.spec.ts', owns), ['T1', 'T6']);
+  });
+
+  test('names none when nothing claims it, and reads a missing map as an empty one', () => {
+    assert.deepEqual(keysMatching('packages/main/src/index.ts', owns), []);
+    assert.deepEqual(keysMatching('packages/main/src/index.ts', undefined), []);
   });
 });

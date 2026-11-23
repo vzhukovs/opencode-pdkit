@@ -36,6 +36,14 @@ Touch only the lines the task needs. Reformatting, reordering imports, renaming 
 
 These rules shape how you write what the plan asks for. They are not license to change what it asks for. If the plan requires something a rule forbids, for example editing an existing assertion alongside the implementation, that is a plan error: stop and report it, as with any other.
 
+## A finding to fix
+
+Sometimes what you are given is a finding instead of a task: the review of the whole branch in `/pd:audit`, or the self-review of a pull request in `/pd:pr` or `/pd:pr-sync`, found it in code already written. You get it as it was recorded — `path:line`, its label, what it says and the section it cites — with the files you may touch and the tests they answer to: the task file, when a task owns them, or the `## Tests` of `issue.md` on the quickfix route.
+
+Fix that, and nothing else. Everything above still applies: the rules read whole before you write, no comments, and your diff checked against the rules before you finish. A `nit:` you are given is fixed only on lines the fix of an `issue:` changes anyway. Every row of `## Tests` still holds after the fix; a finding about a missing or vacuous test is a case you write, and your report names it as `added test:`. A fix that needs a file you were not given, or that changes what the plan asked for, is a plan error: stop and report it.
+
+Report one line per finding — what you changed, or why it could not be fixed inside your files — then your `§n:` lines. With a task running, finish as below. Without one there is no `Done when`: run the specs of the files you changed and `pdkit preflight <issue> --only maintainer-rules`, and paste what they printed.
+
 ## Finish
 
 Finish by running the command from `Done when` and capturing its real output. Not a summary of the output — the output. "Tests pass" is a claim; the test runner's own text is evidence, and the auditor needs to tell those apart.
