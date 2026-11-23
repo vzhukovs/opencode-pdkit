@@ -179,7 +179,8 @@ merged together." Closing those is `/pd:pr-sync`'s job, after this one is open.
 
    This session writes no code. The implementer writes the fix the way it
    writes a task, comments included: a finding is answered in the code, not
-   by a comment beside it.
+   by a comment beside it, and `maintainer-rules` refuses such a comment
+   before the next round.
 
    **Never edit the findings to make the record clean.** The record is what
    the review said. The `self-review` check in pass two fails unless that

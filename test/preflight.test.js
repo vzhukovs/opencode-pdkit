@@ -1221,7 +1221,8 @@ describe('maintainer-rules', () => {
     assert.deepEqual(hits(SPEC_FILE, '  render as renderComponent,'), []);
     assert.deepEqual(hits(SPEC_FILE, 'export { helper as helperForTests };'), []);
     assert.deepEqual(hits(SPEC_FILE, "test('shows the card as selected', async () => {"), []);
-    assert.deepEqual(hits(SPEC_FILE, '// a match on one tag keeps the others, as the raw object did'), []);
+    // A comment casts nothing; it breaks a rule of its own.
+    assert.deepEqual(hits(SPEC_FILE, '// a match on one tag keeps the others, as the raw object did'), ['strict a comment']);
     assert.deepEqual(hits(SPEC_FILE, ' * renders the list as Image rows'), []);
     assert.deepEqual(hits(SPEC_FILE, 'type Getters<T> = { [K in keyof T as Capitalize<K & string>]: () => T[K] };'), []);
     assert.deepEqual(hits(SPEC_FILE, 'const onPull = vi.fn<(name: string) => void>();'), []);
